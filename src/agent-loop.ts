@@ -4,9 +4,11 @@ import { isRetryable, calculateDelay, sleep } from './retry.js'
 
 const MAX_STEPS = 15
 const MAX_RETRIES = 3
+const TOKEN_BUDGET = 15000
 
 export async function agentLoop(model: any, tools: any, messages: ModelMessage[], system: string) {
   let step = 0
+  let totalTokens = 0
   resetHistory()
 
   while (step < MAX_STEPS) {
@@ -18,6 +20,7 @@ export async function agentLoop(model: any, tools: any, messages: ModelMessage[]
     let shouldBreak = false
     let lastToolCall: { name: string; input: unknown } | null = null
     let stepResponse: Awaited<ReturnType<typeof streamText>['response']>
+    let stepUsage: Awaited<ReturnType<typeof streamText>['usage']>
 
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
@@ -69,6 +72,7 @@ export async function agentLoop(model: any, tools: any, messages: ModelMessage[]
         }
 
         stepResponse = await result.response
+        stepUsage = await result.usage
         break
       } catch (error) {
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
@@ -88,6 +92,17 @@ export async function agentLoop(model: any, tools: any, messages: ModelMessage[]
     }
 
     messages.push(...stepResponse!.messages)
+
+    // Token 预算追踪
+    const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : 0
+    const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : 0
+    totalTokens += inp + out
+    const pct = Math.round((totalTokens / TOKEN_BUDGET) * 100)
+    console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${pct}%)`)
+    if (totalTokens > TOKEN_BUDGET) {
+      console.log('\n[Token 预算耗尽，强制停止]')
+      break
+    }
 
     if (!hasToolCall) {
       if (fullText) console.log()
