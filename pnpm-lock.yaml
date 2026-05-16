@@ -8,6 +8,9 @@ dependencies:
   '@ai-sdk/openai':
     specifier: ^3.0.58
     version: 3.0.58(zod@4.4.3)
+  '@types/turndown':
+    specifier: ^5.0.6
+    version: 5.0.6
   ai:
     specifier: ^6.0.174
     version: 6.0.174(zod@4.4.3)
@@ -17,6 +20,9 @@ dependencies:
   fast-glob:
     specifier: ^3.3.3
     version: 3.3.3
+  turndown:
+    specifier: ^7.2.4
+    version: 7.2.4
 
 devDependencies:
   '@types/node':
@@ -307,6 +313,10 @@ packages:
     dev: true
     optional: true
 
+  /@mixmark-io/domino@2.2.0:
+    resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
+    dev: false
+
   /@nodelib/fs.scandir@2.1.5:
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
     engines: {node: '>= 8'}
@@ -342,6 +352,10 @@ packages:
     dependencies:
       undici-types: 7.19.2
     dev: true
+
+  /@types/turndown@5.0.6:
+    resolution: {integrity: sha512-ru00MoyeeouE5BX4gRL+6m/BsDfbRayOskWqUvh7CLGW+UXxHQItqALa38kKnOiZPqJrtzJUgAC2+F0rL1S4Pg==}
+    dev: false
 
   /@vercel/oidc@3.2.0:
     resolution: {integrity: sha512-UycprH3T6n3jH0k44NHMa7pnFHGu/N05MjojYr+Mc6I7obkoLIJujSWwin1pCvdy/eOxrI/l3uDLQsmcrOb4ug==}
@@ -532,6 +546,13 @@ packages:
     optionalDependencies:
       fsevents: 2.3.3
     dev: true
+
+  /turndown@7.2.4:
+    resolution: {integrity: sha512-I8yFsfRzmzK0WV1pNNOA4A7y4RDfFxPRxb3t+e3ui14qSGOxGtiSP6GjeX+Y6CHb7HYaFj7ECUD7VE5kQMZWGQ==}
+    engines: {node: '>=18', npm: '>=9'}
+    dependencies:
+      '@mixmark-io/domino': 2.2.0
+    dev: false
 
   /typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
