@@ -14,9 +14,9 @@ import {
   fmtContinue
 } from './utils/logger.js'
 
-const MAX_STEPS = 15
+const MAX_STEPS = 30
 const MAX_RETRIES = 3
-const TOKEN_BUDGET = 15000
+const TOKEN_BUDGET = 30000
 
 export async function agentLoop(
   model: any,
