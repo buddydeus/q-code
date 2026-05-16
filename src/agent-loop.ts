@@ -2,6 +2,17 @@ import { streamText, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js'
 import { isRetryable, calculateDelay, sleep } from './retry.js'
 import { ToolRegistry } from './tool-registry.js'
+import {
+  fmtStepHeader,
+  fmtStepFooter,
+  fmtToolCall,
+  fmtToolResult,
+  fmtLoopWarning,
+  fmtRetry,
+  fmtTokenUsage,
+  fmtStop,
+  fmtContinue
+} from './utils/logger.js'
 
 const MAX_STEPS = 15
 const MAX_RETRIES = 3
@@ -19,7 +30,7 @@ export async function agentLoop(
 
   while (step < MAX_STEPS) {
     step++
-    console.log(`\n--- Step ${step} ---`)
+    console.log(fmtStepHeader(step))
 
     let hasToolCall = false
     let fullText = ''
@@ -50,11 +61,11 @@ export async function agentLoop(
             case 'tool-call': {
               hasToolCall = true
               lastToolCall = { name: part.toolName, input: part.input }
-              console.log(`  [调用: ${part.toolName}(${JSON.stringify(part.input)})]`)
+              console.log(`  ${fmtToolCall(part.toolName, part.input)}`)
 
               const detection = detect(part.toolName, part.input)
               if (detection.stuck) {
-                console.log(`  ${detection.message}`)
+                console.log(fmtLoopWarning(detection.message, detection.level))
                 if (detection.level === 'critical') {
                   shouldBreak = true
                 } else {
@@ -69,7 +80,7 @@ export async function agentLoop(
             }
 
             case 'tool-result':
-              console.log(`  [结果: ${JSON.stringify(part.output)}]`)
+              console.log(`  ${fmtToolResult(part.output)}`)
               if (lastToolCall) {
                 recordResult(lastToolCall.name, lastToolCall.input, part.output)
               }
@@ -83,7 +94,7 @@ export async function agentLoop(
       } catch (error) {
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
         const delay = calculateDelay(attempt)
-        console.log(`  [重试] 第 ${attempt}/${MAX_RETRIES} 次失败，${delay}ms 后重试...`)
+        console.log(fmtRetry(attempt, MAX_RETRIES, delay))
         await sleep(delay)
         hasToolCall = false
         fullText = ''
@@ -93,7 +104,7 @@ export async function agentLoop(
     }
 
     if (shouldBreak) {
-      console.log('\n[循环检测触发，Agent 已停止]')
+      console.log(fmtStop('循环检测触发，Agent 已停止'))
       break
     }
 
@@ -103,10 +114,9 @@ export async function agentLoop(
     const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : 0
     const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : 0
     totalTokens += inp + out
-    const pct = Math.round((totalTokens / TOKEN_BUDGET) * 100)
-    console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${pct}%)`)
+    console.log(fmtTokenUsage(totalTokens, TOKEN_BUDGET))
     if (totalTokens > TOKEN_BUDGET) {
-      console.log('\n[Token 预算耗尽，强制停止]')
+      console.log(fmtStop('Token 预算耗尽，强制停止'))
       break
     }
 
@@ -115,10 +125,10 @@ export async function agentLoop(
       break
     }
 
-    console.log('  → 继续下一步...')
+    console.log(fmtContinue())
   }
 
   if (step >= MAX_STEPS) {
-    console.log('\n[达到最大步数限制，强制停止]')
+    console.log(fmtStop('达到最大步数限制，强制停止'))
   }
 }

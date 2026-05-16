@@ -1,4 +1,5 @@
 import { jsonSchema } from 'ai'
+import { fmtLockAcquire } from './utils/logger.js'
 
 export interface ToolDefinition {
   name: string
@@ -81,10 +82,10 @@ export class ToolRegistry {
           // 在真正执行前先按 isConcurrencySafe 获取锁
           if (isSafe) {
             await registry.acquireConcurrent()
-            console.log(`  [并发] ${name} 获取共享锁`)
+            console.log(fmtLockAcquire(name, true))
           } else {
             await registry.acquireExclusive()
-            console.log(`  [串行] ${name} 获取独占锁，等待其他工具完成`)
+            console.log(fmtLockAcquire(name, false))
           }
           try {
             const raw = await executeFn(input)

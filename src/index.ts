@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { generateText, type ModelMessage, stepCountIs, streamText } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
+import { fmtBanner, fmtToolList, fmtPrompt } from './utils/logger.js'
 import { createInterface } from 'node:readline'
 import { allTools, weatherTool } from './tools'
 import { agentLoop } from './agent-loop'
@@ -21,14 +22,7 @@ const model = openai.chat(modelName)
 const registry = new ToolRegistry()
 registry.register(...allTools)
 
-console.log(`已注册 ${registry.getAll().length} 个工具：`)
-for (const tool of registry.getAll()) {
-  const flags = [
-    tool.isConcurrencySafe ? '可并发' : '串行',
-    tool.isReadOnly ? '只读' : '读写'
-  ].join(', ')
-  console.log(`  - ${tool.name}（${flags}）`)
-}
+console.log(fmtToolList(registry.getAll()))
 
 const rl = createInterface({
   input: process.stdin,
@@ -42,7 +36,7 @@ const SYSTEM_PROMPT = `你是 q code，一个专注于软件开发的 AI 助手�
 const messages: ModelMessage[] = []
 
 function ask() {
-  rl.question('\nYou: ', async (input) => {
+  rl.question(fmtPrompt(), async (input) => {
     const trimmed = input.trim()
     if (!trimmed || trimmed === 'exit') {
       console.log('Bye!')
@@ -58,5 +52,6 @@ function ask() {
   })
 }
 
-console.log('q code v0.1 (type "exit" to quit)\n')
+console.log(fmtBanner('0.1'))
+console.log()
 ask()
