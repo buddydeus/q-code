@@ -86,6 +86,7 @@ export function resetHistory(): void {
 function getNoProgressStreak(toolName: string, argsHash: string): number {
   let streak = 0
   let lastResultHash: string | undefined
+
   for (let i = history.length - 1; i >= 0; i--) {
     const r = history[i]
     if (r.toolName !== toolName || r.argsHash !== argsHash) continue
@@ -103,6 +104,7 @@ function getNoProgressStreak(toolName: string, argsHash: string): number {
 
 function getPingPongCount(currentHash: string): number {
   if (history.length < 3) return 0
+
   const last = history[history.length - 1]
   let otherHash: string | undefined
   for (let i = history.length - 2; i >= 0; i--) {
@@ -112,12 +114,14 @@ function getPingPongCount(currentHash: string): number {
     }
   }
   if (!otherHash) return 0
+
   let count = 0
   for (let i = history.length - 1; i >= 0; i--) {
     const expected = count % 2 === 0 ? last.argsHash : otherHash
     if (history[i].argsHash !== expected) break
     count++
   }
+
   if (currentHash === otherHash && count >= 2) return count + 1
   return 0
 }
@@ -161,6 +165,7 @@ export function detect(toolName: string, params: unknown): DetectionResult {
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === argsHash
   ).length
+
   if (recentCount >= CRITICAL_THRESHOLD) {
     return {
       stuck: true,

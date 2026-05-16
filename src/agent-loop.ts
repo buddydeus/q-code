@@ -1,12 +1,18 @@
 import { streamText, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js'
 import { isRetryable, calculateDelay, sleep } from './retry.js'
+import { ToolRegistry } from './tool-registry.js'
 
 const MAX_STEPS = 15
 const MAX_RETRIES = 3
 const TOKEN_BUDGET = 15000
 
-export async function agentLoop(model: any, tools: any, messages: ModelMessage[], system: string) {
+export async function agentLoop(
+  model: any,
+  registry: ToolRegistry,
+  messages: ModelMessage[],
+  system: string
+) {
   let step = 0
   let totalTokens = 0
   resetHistory()
@@ -28,7 +34,7 @@ export async function agentLoop(model: any, tools: any, messages: ModelMessage[]
         const result = streamText({
           model,
           system,
-          tools,
+          tools: registry.toAISDKFormat(),
           messages,
           maxRetries: 0,
           onError: () => {}
