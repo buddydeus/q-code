@@ -1,4 +1,4 @@
-import { streamText, type ModelMessage } from 'ai'
+import { customProvider, streamText, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js'
 import { isRetryable, calculateDelay, sleep } from './retry.js'
 import { ToolRegistry } from './tool-registry.js'
@@ -11,7 +11,9 @@ import {
   fmtRetry,
   fmtTokenUsage,
   fmtStop,
-  fmtContinue
+  fmtContinue,
+  fmtStepPerf,
+  fmtTaskDuration
 } from './utils/logger.js'
 
 const MAX_STEPS = 30
@@ -26,6 +28,7 @@ export async function agentLoop(
 ) {
   let step = 0
   let totalTokens = 0
+  const taskStart = Date.now()
   resetHistory()
 
   while (step < MAX_STEPS) {
@@ -39,9 +42,13 @@ export async function agentLoop(
     let stepResponse: Awaited<ReturnType<typeof streamText>['response']>
     let stepUsage: Awaited<ReturnType<typeof streamText>['usage']>
 
+    let stepStart = 0
+    let firstTokenAt = 0
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
       try {
+        stepStart = Date.now()
+        firstTokenAt = 0
         const result = streamText({
           model,
           system,
@@ -54,11 +61,13 @@ export async function agentLoop(
         for await (const part of result.fullStream) {
           switch (part.type) {
             case 'text-delta':
+              if (!firstTokenAt) firstTokenAt = Date.now()
               process.stdout.write(part.text)
               fullText += part.text
               break
 
             case 'tool-call': {
+              if (!firstTokenAt) firstTokenAt = Date.now()
               hasToolCall = true
               lastToolCall = { name: part.toolName, input: part.input }
               console.log(`  ${fmtToolCall(part.toolName, part.input)}`)
@@ -114,6 +123,14 @@ export async function agentLoop(
     const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : 0
     const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : 0
     totalTokens += inp + out
+
+    if (firstTokenAt && stepStart) {
+      const ttft = firstTokenAt - stepStart
+      const elapsed = (Date.now() - stepStart) / 1000
+      const tps = elapsed > 0 ? out / elapsed : 0
+      console.log(fmtStepPerf(ttft, tps))
+    }
+
     console.log(fmtTokenUsage(totalTokens, TOKEN_BUDGET))
     if (totalTokens > TOKEN_BUDGET) {
       console.log(fmtStop('Token 预算耗尽，强制停止'))
@@ -131,4 +148,6 @@ export async function agentLoop(
   if (step >= MAX_STEPS) {
     console.log(fmtStop('达到最大步数限制，强制停止'))
   }
+
+  console.log(fmtTaskDuration(Date.now() - taskStart))
 }

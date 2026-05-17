@@ -363,6 +363,8 @@ export const startPreviewTool: ToolDefinition = {
   }
 }
 
+
+
 export const allTools: ToolDefinition[] = [
   weatherTool,
   readFileTool,

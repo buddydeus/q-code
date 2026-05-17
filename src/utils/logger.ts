@@ -15,7 +15,7 @@ export const c = {
   magenta: wrap(35),
   cyan: wrap(36),
   gray: wrap(90),
-  bgBlue: wrap(44),
+  bgBlue: wrap(44)
 }
 
 const S = {
@@ -29,7 +29,7 @@ const S = {
   cornerBL: '╰',
   cornerTR: '╮',
   cornerBR: '╯',
-  pipe: '│',
+  pipe: '│'
 }
 
 /** 绘制带圆角的标题行，如 "╭─ Step 1 ───────────────╮" */
@@ -81,6 +81,24 @@ export function fmtTokenUsage(used: number, budget: number): string {
   return `  ${c.gray('Token')} ${color(bar)} ${c.bold(`${used}`)}/${budget} ${c.dim(`(${pct}%)`)}`
 }
 
+/** 格式化首 Token 时间 (TTFT) */
+export function fmtTTFT(ms: number): string {
+  const color = ms < 500 ? c.green : ms < 1500 ? c.yellow : c.red
+  const display = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`
+  return `${c.gray('TTFT')} ${color(display)}`
+}
+
+/** 格式化每秒输出 Token 数 (TPS) */
+export function fmtTPS(tokensPerSec: number): string {
+  const color = tokensPerSec >= 50 ? c.green : tokensPerSec >= 20 ? c.yellow : c.red
+  return `${c.gray('TPS')} ${color(c.bold(tokensPerSec.toFixed(1)))}${c.dim('/s')}`
+}
+
+/** 格式化步骤性能指标（TTFT + TPS 一行输出） */
+export function fmtStepPerf(ttftMs: number, tps: number): string {
+  return `  ${fmtTTFT(ttftMs)}  ${fmtTPS(tps)}`
+}
+
 /** 格式化循环检测警告 */
 export function fmtLoopWarning(message: string, level: 'warning' | 'critical'): string {
   if (level === 'critical') {
@@ -116,13 +134,15 @@ export function fmtBanner(version: string): string {
     c.bold(c.cyan('  ╠╩╗║ ║║  ║ ║')),
     c.bold(c.cyan('  ╩ ╩╚═╝╩═╝╚═╝')),
     '',
-    `  ${c.gray('q code')} ${c.dim(`v${version}`)}  ${c.gray('·')}  ${c.dim('type "exit" to quit')}`,
+    `  ${c.gray('q code')} ${c.dim(`v${version}`)}  ${c.gray('·')}  ${c.dim('type "exit" to quit')}`
   ]
   return lines.join('\n')
 }
 
 /** 格式化工具注册表列表 */
-export function fmtToolList(tools: Array<{ name: string; isConcurrencySafe?: boolean; isReadOnly?: boolean }>): string {
+export function fmtToolList(
+  tools: Array<{ name: string; isConcurrencySafe?: boolean; isReadOnly?: boolean }>
+): string {
   const lines = tools.map((t) => {
     const flags: string[] = []
     flags.push(t.isConcurrencySafe ? c.green('并发') : c.yellow('串行'))
@@ -130,6 +150,21 @@ export function fmtToolList(tools: Array<{ name: string; isConcurrencySafe?: boo
     return `  ${c.gray(S.dot)} ${c.bold(t.name).padEnd(14)} ${c.dim(`[${flags.join(c.dim(','))}]`)}`
   })
   return `${c.gray(`已注册 ${tools.length} 个工具`)}\n${lines.join('\n')}`
+}
+
+/** 格式化任务总耗时 */
+export function fmtTaskDuration(ms: number): string {
+  let display: string
+  if (ms < 1000) {
+    display = `${ms}ms`
+  } else if (ms < 60000) {
+    display = `${(ms / 1000).toFixed(1)}s`
+  } else {
+    const min = Math.floor(ms / 60000)
+    const sec = ((ms % 60000) / 1000).toFixed(1)
+    display = `${min}m${sec}s`
+  }
+  return `\n  ${c.gray('⏱')} ${c.gray('总耗时')} ${c.bold(c.cyan(display))}`
 }
 
 /** 格式化用户提示符 */
