@@ -2,12 +2,11 @@ import 'dotenv/config'
 import { type ModelMessage } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
-import { fmtBanner, fmtToolList, fmtPrompt } from './utils/logger.js'
+import { fmtBanner, fmtToolList, fmtPrompt } from './utils/logger'
 import { createInterface } from 'node:readline'
-import { allTools } from './tools'
-import { agentLoop } from './agent-loop'
-import { ToolDefinition, ToolRegistry } from './tool-registry'
-import { MCPClient } from './mcp/mcp-client'
+import { allTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
+import { agentLoop } from './agent/loop'
+import { buildSystemPrompt } from './context/prompt-builder'
 
 const baseURL = normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL'))
 const apiKey = getRequiredEnv('OPENAI_API_KEY')
@@ -103,10 +102,7 @@ const rl = createInterface({
   output: process.stdout
 })
 
-const SYSTEM_PROMPT = `你是 q code，一个专注于软件开发的 AI 助手。
-你说话简洁直接，喜欢用代码示例来解释问题。
-如果用户的问题不够清晰，你会反问而不是瞎猜。
-deferredTool: ${registry.getDeferredToolSummary()}`
+const SYSTEM_PROMPT = buildSystemPrompt(registry)
 
 const messages: ModelMessage[] = []
 

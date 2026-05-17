@@ -1,7 +1,7 @@
-import { customProvider, streamText, type ModelMessage } from 'ai'
-import { detect, recordCall, recordResult, resetHistory } from './loop-detection.js'
-import { isRetryable, calculateDelay, sleep } from './retry.js'
-import { ToolRegistry } from './tool-registry.js'
+import { streamText, type ModelMessage } from 'ai'
+import { detect, recordCall, recordResult, resetHistory } from './loop-detection'
+import { isRetryable, calculateDelay, sleep } from './retry'
+import { ToolRegistry } from '../tools/registry'
 import {
   fmtStepHeader,
   fmtStepFooter,
@@ -14,7 +14,7 @@ import {
   fmtContinue,
   fmtStepPerf,
   fmtTaskDuration
-} from './utils/logger.js'
+} from '../utils/logger'
 
 const MAX_STEPS = 30
 const MAX_RETRIES = 3

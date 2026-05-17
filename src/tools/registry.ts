@@ -1,6 +1,6 @@
 import { jsonSchema } from 'ai'
-import { MCPClient } from './mcp/mcp-client'
-import { fmtLockAcquire } from './utils/logger.js'
+import { MCPClient } from './mcp-client'
+import { fmtLockAcquire } from '../utils/logger'
 export interface ToolDefinition {
   name: string
   description: string

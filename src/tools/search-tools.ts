@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '../tool-registry'
+import type { ToolDefinition } from './registry'
 import TurndownService from 'turndown'
 
 // ── Tavily（自动挡）──────────────────────────────
