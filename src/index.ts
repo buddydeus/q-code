@@ -39,6 +39,18 @@ const openai = createOpenAI({
 
 const model = openai.chat(modelName)
 
+// Summary 专用模型
+const summaryBaseURL = normalizeBaseURL(getRequiredEnv('SUMMARY_BASE_URL'))
+const summaryApiKey = getRequiredEnv('SUMMARY_API_KEY')
+const summaryModelName = getRequiredEnv('SUMMARY_MODEL')
+
+const summaryOpenai = createOpenAI({
+  baseURL: summaryBaseURL,
+  apiKey: summaryApiKey
+})
+
+const summaryModel = summaryOpenai.chat(summaryModelName)
+
 const registry = new ToolRegistry()
 registry.register(...allTools)
 
@@ -131,13 +143,13 @@ async function main() {
   console.log(`[Layer 1: Microcompact] 清理了 ${mc.cleared} 个工具结果, ~${afterMCTokens} tokens`)
 
   // Layer 2: LLM Summarization
-  const compResult = await summarize(model, messages, summary)
+  const compResult = await summarize(summaryModel, messages, summary)
   messages = compResult.messages
   summary = compResult.summary
   const afterSumTokens = estimateTokens(messages)
   if (compResult.compressedCount > 0) {
     console.log(
-      `[Layer 2: Summarization] 压缩了 ${compResult.compressedCount} 条消息, ~${afterSumTokens} tokens`
+      `[Layer 2: Summarization] 压缩了 ${compResult.compressedCount} 条消息, ~${afterSumTokens} tokens (使用 ${summaryModelName})`
     )
     console.log(`[摘要预览] ${summary.slice(0, 150)}...`)
   } else {
@@ -200,12 +212,12 @@ async function main() {
         messages = mc2.messages
         if (mc2.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc2.cleared} 个工具结果`)
 
-        const comp2 = await summarize(model, messages, summary)
+        const comp2 = await summarize(summaryModel, messages, summary)
         if (comp2.compressedCount > 0) {
           messages = comp2.messages
           summary = comp2.summary
           console.log(
-            `  [Summarization] 压缩了 ${comp2.compressedCount} 条消息, ~${estimateTokens(messages)} tokens`
+            `  [Summarization] 压缩了 ${comp2.compressedCount} 条消息, ~${estimateTokens(messages)} tokens (使用 ${summaryModelName})`
           )
         }
       }
