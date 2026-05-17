@@ -1,43 +1,67 @@
+import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 
-export interface Session {
-  id: string
-  messages: ModelMessage[]
-  createdAt: number
-  updatedAt: number
+const SESSION_DIR = '.sessions'
+
+export interface SessionEntry {
+  type: 'message'
+  timestamp: string
+  message: ModelMessage
 }
 
 export class SessionStore {
-  private sessions = new Map<string, Session>()
+  private dir: string
+  private sessionId: string
 
-  create(): Session {
-    const id = crypto.randomUUID()
-    const session: Session = {
-      id,
-      messages: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
+  constructor(sessionId: string = 'default') {
+    this.sessionId = sessionId
+    this.dir = SESSION_DIR
+    if (!existsSync(this.dir)) {
+      mkdirSync(this.dir, { recursive: true })
     }
-    this.sessions.set(id, session)
-    return session
   }
 
-  get(id: string): Session | undefined {
-    return this.sessions.get(id)
+  private get filePath(): string {
+    return join(this.dir, `${this.sessionId}.jsonl`)
   }
 
-  update(id: string, messages: ModelMessage[]): void {
-    const session = this.sessions.get(id)
-    if (!session) return
-    session.messages = messages
-    session.updatedAt = Date.now()
+  append(message: ModelMessage): void {
+    const entry: SessionEntry = {
+      type: 'message',
+      timestamp: new Date().toISOString(),
+      message
+    }
+    appendFileSync(this.filePath, JSON.stringify(entry) + '\n', 'utf-8')
   }
 
-  list(): Session[] {
-    return Array.from(this.sessions.values()).sort((a, b) => b.updatedAt - a.updatedAt)
+  appendAll(messages: ModelMessage[]): void {
+    for (const msg of messages) {
+      this.append(msg)
+    }
   }
 
-  delete(id: string): boolean {
-    return this.sessions.delete(id)
+  load(): ModelMessage[] {
+    if (!existsSync(this.filePath)) return []
+    const content = readFileSync(this.filePath, 'utf-8').trim()
+    if (!content) return []
+
+    const messages: ModelMessage[] = []
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const entry: SessionEntry = JSON.parse(line)
+        if (entry.type === 'message') {
+          messages.push(entry.message)
+        }
+      } catch {
+        /* skip malformed lines */
+      }
+    }
+    return messages
+  }
+
+  exists(): boolean {
+    return existsSync(this.filePath)
   }
 }

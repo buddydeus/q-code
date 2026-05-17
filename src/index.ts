@@ -6,7 +6,15 @@ import { fmtBanner, fmtToolList, fmtPrompt } from './utils/logger'
 import { createInterface } from 'node:readline'
 import { allTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
 import { agentLoop } from './agent/loop'
-import { buildSystemPrompt } from './context/prompt-builder'
+import {
+  coreRules,
+  deferredTools,
+  PromptBuilder,
+  PromptContext,
+  sessionContext,
+  toolGuide
+} from './context/prompt-builder'
+import { SessionStore } from './session/store'
 
 const baseURL = normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL'))
 const apiKey = getRequiredEnv('OPENAI_API_KEY')
@@ -93,36 +101,73 @@ async function connectMCP() {
   }
 }
 
-await connectMCP()
+async function main() {
+  console.log(fmtBanner('1.0.0'))
+  await connectMCP()
+  // Session 持久化
+  const isContinue = process.argv.includes('--continue')
+  const sessionId = 'default'
+  const store = new SessionStore(sessionId)
 
-console.log(fmtToolList(registry.getAll()))
+  let messages: ModelMessage[] = []
+  if (isContinue && store.exists()) {
+    messages = store.load()
+    console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条历史消息`)
+  } else {
+    console.log(`\n[Session] 新会话 "${sessionId}"`)
+  }
 
-const rl = createInterface({
-  input: process.stdin,
-  output: process.stdout
-})
+  // Prompt Pipe 组装 system prompt
+  const builder = new PromptBuilder()
+    .pipe('coreRules', coreRules())
+    .pipe('toolGuide', toolGuide())
+    .pipe('deferredTools', deferredTools())
+    .pipe('sessionContext', sessionContext())
 
-const SYSTEM_PROMPT = buildSystemPrompt(registry)
+  const promptCtx: PromptContext = {
+    toolCount: registry.getActiveTools().length,
+    deferredToolSummary: registry.getDeferredToolSummary(),
+    sessionMessageCount: messages.length,
+    sessionId
+  }
 
-const messages: ModelMessage[] = []
+  const SYSTEM = builder.build(promptCtx)
 
-function ask() {
-  rl.question(fmtPrompt(), async (input) => {
-    const trimmed = input.trim()
-    if (!trimmed || trimmed === 'exit') {
-      console.log('Bye!')
-      rl.close()
-      return
-    }
+  // Debug: 显示 Prompt Pipe 各模块状态
+  builder.debug(promptCtx)
 
-    messages.push({ role: 'user', content: trimmed })
+  const activeTools = registry.getActiveTools()
+  console.log(`活跃工具: ${activeTools.length} 个`)
 
-    await agentLoop(model, registry, messages, SYSTEM_PROMPT)
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
 
-    ask()
-  })
+  function ask() {
+    rl.question('\nYou: ', async (input) => {
+      const trimmed = input.trim()
+      if (!trimmed || trimmed === 'exit') {
+        console.log('Bye!')
+        await registry.closeAllMCP()
+        rl.close()
+        return
+      }
+
+      const userMsg: ModelMessage = { role: 'user', content: trimmed }
+      messages.push(userMsg)
+      store.append(userMsg)
+
+      const beforeLen = messages.length
+      await agentLoop(model, registry, messages, SYSTEM)
+
+      // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
+      const newMessages = messages.slice(beforeLen)
+      store.appendAll(newMessages)
+
+      ask()
+    })
+  }
+
+  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话。\n')
+  ask()
 }
 
-console.log(fmtBanner('0.1'))
-console.log()
-ask()
+main().catch(console.error)

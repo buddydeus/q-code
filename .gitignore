@@ -11,6 +11,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.sessions
 
 # Logs
 *.log
