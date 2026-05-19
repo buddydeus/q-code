@@ -16,7 +16,7 @@ import {
   fmtTaskDuration
 } from '../utils/logger'
 
-const MAX_STEPS = 30
+const MAX_STEPS = 50
 const MAX_RETRIES = 3
 const TOKEN_BUDGET = 100000
 
