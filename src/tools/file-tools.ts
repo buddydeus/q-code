@@ -15,7 +15,7 @@ export const readFileTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
-  maxResultChars: 500, // 演示用，生产环境通常 50000+
+  maxResultChars: 20000, // 演示用，生产环境通常 50000+
   execute: async ({ path }: { path: string }) => {
     return readFileSync(resolve(path), 'utf-8')
   }

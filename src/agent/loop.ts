@@ -18,7 +18,7 @@ import {
 
 const MAX_STEPS = 30
 const MAX_RETRIES = 3
-const TOKEN_BUDGET = 30000
+const TOKEN_BUDGET = 100000
 
 export async function agentLoop(
   model: any,
