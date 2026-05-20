@@ -1,18 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import {
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  clearAllAsyncAgents,
-  getAllAsyncAgents
-} from '../agents/async-agent-store'
+import { clearAllAsyncAgents, getAllAsyncAgents } from '../agents/async-agent-store'
 import {
   clearPendingNotifications,
   drainPendingNotifications,
@@ -22,11 +12,7 @@ import {
 } from '../agents/notification-store'
 import type { RunAsyncAgentLifecycleParams } from '../agents/run-async-agent'
 import { appendTaskOutput, ensureTaskOutputFile } from '../agents/task-output'
-import {
-  createAgentWorktree,
-  hasWorktreeChanges,
-  removeAgentWorktree
-} from '../agents/worktree'
+import { createAgentWorktree, hasWorktreeChanges, removeAgentWorktree } from '../agents/worktree'
 import { bootstrapAgents } from '../agents/bootstrap'
 import { clearAgents } from '../agents/registry'
 import { createAgentTool } from '../tools/agent-tools'
@@ -44,7 +30,7 @@ mkdirSync(cwd, { recursive: true })
 mkdirSync(home, { recursive: true })
 
 function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(`Assertion failed: ${message}`)
+  if (!condition) throw new Error(`断言失败: ${message}`)
   console.log(`✓ ${message}`)
 }
 
@@ -58,12 +44,12 @@ const noopTool: ToolDefinition = {
 }
 
 try {
-  console.log('\n[1] ToolRegistry cwd context')
+  console.log('\n[1] ToolRegistry 的 cwd 上下文透传')
   const registry = new ToolRegistry({ cwd })
   let seenCwd = ''
   registry.register({
     name: 'ctx_probe',
-    description: 'probe',
+    description: '探针',
     parameters: { type: 'object', properties: {} },
     isReadOnly: true,
     isConcurrencySafe: true,
@@ -73,8 +59,8 @@ try {
     }
   })
   const probeOutput = await registry.toAISDKFormat().ctx_probe.execute({})
-  assert(probeOutput === 'context-ok', 'registry executes a tool through AI SDK adapter')
-  assert(seenCwd === cwd, 'registry passes scoped cwd to tools')
+  assert(probeOutput === 'context-ok', '注册表能通过 AI SDK 适配器执行工具')
+  assert(seenCwd === cwd, '注册表将作用域 cwd 透传到工具')
 
   const fileRegistry = new ToolRegistry({ cwd })
   fileRegistry.register(writeFileTool, readFileTool)
@@ -82,11 +68,11 @@ try {
     path: 'worktree-scope.txt',
     content: 'scoped'
   })
-  assert(existsSync(join(cwd, 'worktree-scope.txt')), 'file tools resolve relative paths from registry cwd')
+  assert(existsSync(join(cwd, 'worktree-scope.txt')), '文件工具从注册表 cwd 解析相对路径')
 
-  console.log('\n[2] async Agent launch path')
+  console.log('\n[2] 异步 Agent 启动路径')
   const boot = await bootstrapAgents(cwd)
-  assert(boot.agentCount >= 1, 'loads built-in agents for async dispatch')
+  assert(boot.agentCount >= 1, '加载内置 Agent 以供异步调度使用')
 
   let capturedAsync: RunAsyncAgentLifecycleParams | undefined
   const foregroundRunner = async (params: RunChildAgentParams): Promise<AgentRunResult> => ({
@@ -117,19 +103,22 @@ try {
   )
   const launch = await agentTool.execute(
     {
-      prompt: 'Run in background.',
-      description: 'async',
+      prompt: '后台运行。',
+      description: '异步',
       run_in_background: true
     },
     { cwd }
   )
   const asyncEntries = getAllAsyncAgents()
-  assert(String(launch).includes('<async_launched>'), 'Agent tool returns async_launched block')
-  assert(asyncEntries.length === 1, 'async launch registers one background agent')
-  assert(existsSync(asyncEntries[0].outputFile), 'async launch creates output file immediately')
-  assert(capturedAsync?.entry.agentId === asyncEntries[0].agentId, 'async runner receives registered entry')
+  assert(String(launch).includes('<async_launched>'), 'Agent 工具返回 <async_launched> 块')
+  assert(asyncEntries.length === 1, '异步启动注册一个后台 Agent')
+  assert(existsSync(asyncEntries[0].outputFile), '异步启动立刻创建输出文件')
+  assert(
+    capturedAsync?.entry.agentId === asyncEntries[0].agentId,
+    '异步 runner 接收到已注册的 entry'
+  )
 
-  console.log('\n[3] task output and notifications')
+  console.log('\n[3] 任务输出与通知')
   const outputFile = await ensureTaskOutputFile({
     cwd,
     sessionId: 'async-session',
@@ -138,11 +127,11 @@ try {
   await appendTaskOutput(outputFile, {
     type: 'started',
     agentType: 'general-purpose',
-    description: 'output',
-    prompt: 'hello'
+    description: '输出测试',
+    prompt: '你好'
   })
   const firstLine = readFileSync(outputFile, 'utf-8').trim().split('\n')[0]
-  assert(JSON.parse(firstLine).type === 'started', 'task output writes JSONL events')
+  assert(JSON.parse(firstLine).type === 'started', '任务输出以 JSONL 写入事件')
 
   const notification = formatTaskNotification({
     agentId: 'agent-output-test',
@@ -152,10 +141,10 @@ try {
     finalText: 'done'
   })
   enqueuePendingNotification({ mode: 'task-notification', text: notification })
-  assert(pendingNotificationCount() === 1, 'pending notification queue increments')
-  assert(drainPendingNotifications()[0].text.includes('<task-notification>'), 'notifications drain as XML text')
+  assert(pendingNotificationCount() === 1, '待注入通知队列增计')
+  assert(drainPendingNotifications()[0].text.includes('<task-notification>'), '通知以 XML 文本出队')
 
-  console.log('\n[4] git worktree isolation helpers')
+  console.log('\n[4] git worktree 隔离辅助函数')
   if (gitAvailable()) {
     const repo = join(root, 'repo')
     mkdirSync(repo, { recursive: true })
@@ -167,17 +156,23 @@ try {
     runGit(['commit', '-m', 'init'], repo)
 
     const worktree = await createAgentWorktree('agent-test', repo)
-    assert(existsSync(worktree.worktreePath), 'creates a dedicated git worktree')
-    assert((await hasWorktreeChanges(worktree.worktreePath, worktree.headCommit)) === false, 'clean worktree reports no changes')
+    assert(existsSync(worktree.worktreePath), '创建专用的 git worktree')
+    assert(
+      (await hasWorktreeChanges(worktree.worktreePath, worktree.headCommit)) === false,
+      '干净 worktree 报告无变更'
+    )
     writeFileSync(join(worktree.worktreePath, 'agent.txt'), 'dirty\n', 'utf-8')
-    assert(await hasWorktreeChanges(worktree.worktreePath, worktree.headCommit), 'dirty worktree is detected')
+    assert(
+      await hasWorktreeChanges(worktree.worktreePath, worktree.headCommit),
+      '能检测出脏 worktree'
+    )
     const removed = await removeAgentWorktree(worktree)
-    assert(removed.ok, 'worktree removal succeeds')
+    assert(removed.ok, 'worktree 删除成功')
   } else {
-    console.log('  git not available; skipping worktree helper check')
+    console.log('  未安装 git，跳过 worktree 辅助检查')
   }
 
-  console.log('\nAll async agent checks passed.\n')
+  console.log('\n所有异步 Agent 检查均通过。\n')
 } finally {
   clearAllAsyncAgents()
   clearPendingNotifications()

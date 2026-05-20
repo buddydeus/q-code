@@ -267,7 +267,7 @@ src/
 | Shell    | `bash`                                                      | Shell 命令执行                                          |
 | 搜索     | `glob` / `grep` / `pick_search`                             | 文件搜索 / 内容搜索 / 代码库语义搜索                    |
 | 网络     | `fetch_url` / `web_fetch`                                   | 网页抓取                                                |
-| 实用     | `start_preview`                                             | 本地预览服务                                             |
+| 实用     | `start_preview`                                             | 本地预览服务                                            |
 | 记忆     | `memory_write`                                              | 跨对话项目记忆写入                                      |
 | 技能     | `Skill`                                                     | 按需加载并执行 SKILL.md 工作流                          |
 | 子代理   | `Agent`                                                     | 同步或后台启动独立上下文的 SubAgent，支持 worktree 隔离 |
@@ -670,6 +670,84 @@ type: project
 - 使用记忆前应先验证当前状态，记忆与实际冲突时以验证为准
 
 **忽略记忆**：用户输入包含 "忽略记忆" / "ignore memory" 等关键词时，本轮对话不应用任何已保存记忆。
+
+## 测试体系
+
+q-code 把测试拆成两层：**Vitest 单元/集成测试**（生产可用、覆盖率友好）+ **Legacy 端到端脚本**（单文件 `tsx` 直跑、面向真实模块联调）。
+
+### 目录结构
+
+```text
+tests/
+├── _helpers/                 # 共享测试基础设施
+│   ├── mock-model.ts         # 基于 MockLanguageModelV3 的脚本化模型
+│   ├── mock-tool.ts          # makeMockTool / makeRecordingTool / makeFlakeyTool
+│   └── temp-home.ts          # 隔离 Q_CODE_HOME 的 fixture
+├── unit/                     # 纯函数 + 模块级单元测试
+│   ├── atomic-write.test.ts
+│   ├── retry.test.ts
+│   ├── loop-detection.test.ts
+│   ├── tool-registry.test.ts
+│   └── prompt-builder.test.ts
+└── integration/              # 跨模块集成 + 真实文件系统
+    ├── agent-loop.test.ts    # mock model 驱动 ReAct 循环
+    ├── session-recovery.test.ts
+    ├── task-graph.test.ts
+    └── team-flow.test.ts
+```
+
+### 命令
+
+| 命令                    | 用途                                          |
+| ----------------------- | --------------------------------------------- |
+| `pnpm test`             | 跑所有 vitest 单元 + 集成测试（默认 CI 入口） |
+| `pnpm test:watch`       | watch 模式开发                                |
+| `pnpm test:coverage`    | 生成 v8 覆盖率报告（HTML + lcov）             |
+| `pnpm test:unit`        | 仅跑 `tests/unit`                             |
+| `pnpm test:integration` | 仅跑 `tests/integration`                      |
+| `pnpm test:legacy`      | 跑 `src/scripts/test-*.ts` 全套端到端脚本     |
+| `pnpm test:all`         | vitest + legacy 全部                          |
+| `pnpm typecheck`        | `tsc --noEmit` 全项目类型检查                 |
+
+### 关键覆盖点
+
+| 主题             | 测试位置                                                                       |
+| ---------------- | ------------------------------------------------------------------------------ |
+| 文件原子性       | `unit/atomic-write.test.ts` — 100 次顺序 + 50 次并发零 tmp 残留                |
+| 重试退避         | `unit/retry.test.ts` — 指数退避边界 + 错误分类                                 |
+| 死循环防护       | `unit/loop-detection.test.ts` — 三种检测器三档阈值                             |
+| 并发锁           | `unit/tool-registry.test.ts` — 独占/共享锁、cwd/abort/identity 透传            |
+| Prompt 管道      | `unit/prompt-builder.test.ts` — pipe 顺序、空跳过、各内置 pipe 字段透传        |
+| Agent ReAct 循环 | `integration/agent-loop.test.ts` — mock 模型 + mock 工具的多步 ReAct + abort   |
+| 会话恢复         | `integration/session-recovery.test.ts` — 损坏 JSONL 行被静默跳过、压缩快照分界 |
+| 任务图           | `integration/task-graph.test.ts` — CRUD + 双向依赖 + reset 不复用 id           |
+| Agent Teams      | `integration/team-flow.test.ts` — 完整流程 + reconcile + 并发邮箱 + 大小限制   |
+
+### Mock 基础设施
+
+写新集成测试时，引入 `tests/_helpers/`：
+
+```typescript
+import { agentLoop } from '../../src/agent/loop'
+import { ToolRegistry } from '../../src/tools/registry'
+import { createMockModel } from '../_helpers/mock-model'
+import { makeRecordingTool } from '../_helpers/mock-tool'
+
+const { tool, calls } = makeRecordingTool('probe', '工具结果')
+const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
+registry.register(tool)
+
+const { model } = createMockModel([
+  { tools: [{ name: 'probe', input: { foo: 1 } }] },
+  { text: '完成', finishReason: 'stop' }
+])
+
+await agentLoop(model, registry, [{ role: 'user', content: 'go' }], 'sys', {
+  quiet: true
+})
+```
+
+`createMockModel(turns)` 接收一个脚本数组，每一项描述一次 `streamText` 调用应该输出什么；如果脚本耗尽，会自动产生一个空 stop 轮让循环优雅退出。
 
 ## 辅助系统
 

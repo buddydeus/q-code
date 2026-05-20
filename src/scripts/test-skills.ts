@@ -17,7 +17,7 @@ function writeSkill(base: string, name: string, content: string): void {
 }
 
 function assert(condition: unknown, message: string): void {
-  if (!condition) throw new Error(`Assertion failed: ${message}`)
+  if (!condition) throw new Error(`断言失败: ${message}`)
   console.log(`✓ ${message}`)
 }
 
@@ -81,76 +81,85 @@ try {
     ].join('\n')
   )
 
-  const [
-    { bootstrapSkills },
-    registry,
-    budget,
-    conditional,
-    invocation,
-    { createSkillTool }
-  ] = await Promise.all([
-    import('../skills/bootstrap'),
-    import('../skills/registry'),
-    import('../skills/budget'),
-    import('../skills/conditional'),
-    import('../skills/invocation'),
-    import('../tools/skill-tools')
-  ])
+  const [{ bootstrapSkills }, registry, budget, conditional, invocation, { createSkillTool }] =
+    await Promise.all([
+      import('../skills/bootstrap'),
+      import('../skills/registry'),
+      import('../skills/budget'),
+      import('../skills/conditional'),
+      import('../skills/invocation'),
+      import('../tools/skill-tools')
+    ])
 
-  console.log('\n[1] bootstrap')
+  console.log('\n[1] 启动加载')
   const result = await bootstrapSkills(cwd)
-  assert(result.skillCount === 1, 'loads one model-visible skill')
-  assert(result.conditionalCount === 1, 'loads one conditional skill')
-  assert(result.warnings.length === 0, 'has no warnings for valid fixtures')
+  assert(result.skillCount === 1, '加载 1 个模型可见的 Skill')
+  assert(result.conditionalCount === 1, '加载 1 个条件激活 Skill')
+  assert(result.warnings.length === 0, '合法 fixture 下不产生告警')
 
   const all = registry.getAllUserInvocableSkills()
   const visible = registry.getModelVisibleSkills()
-  assert(all.length === 3, 'all user-invocable skills include hidden and conditional')
-  assert(visible.some((skill) => skill.name === 'hello-world'), 'hello-world is model-visible')
-  assert(!visible.some((skill) => skill.name === 'test-reviewer'), 'conditional skill is initially hidden')
-  assert(!visible.some((skill) => skill.name === 'secret-handshake'), 'disable-model-invocation is hidden from model')
-  assert(registry.findSkill('hello-world')?.source === 'project', 'project skill overrides user skill')
+  assert(all.length === 3, '用户可触发的 Skill 列表包含隐藏与条件激活的项')
+  assert(
+    visible.some((skill) => skill.name === 'hello-world'),
+    'hello-world 对模型可见'
+  )
+  assert(!visible.some((skill) => skill.name === 'test-reviewer'), '条件激活 Skill 默认隐藏')
+  assert(
+    !visible.some((skill) => skill.name === 'secret-handshake'),
+    'disable-model-invocation 的 Skill 对模型隐藏'
+  )
+  assert(
+    registry.findSkill('hello-world')?.source === 'project',
+    '项目级 Skill 覆盖用户级同名 Skill'
+  )
 
-  console.log('\n[2] progressive disclosure reminder')
+  console.log('\n[2] 渐进式披露 system-reminder')
   const reminder = budget.formatSkillsSystemReminder(visible)
-  assert(reminder.includes('<system-reminder>'), 'renders system-reminder wrapper')
-  assert(reminder.includes('- hello-world:'), 'lists visible skill name and description')
-  assert(!reminder.includes('Hello $ARGUMENTS'), 'does not disclose SKILL.md body during discovery')
-  assert(!reminder.includes('test-reviewer'), 'does not list conditional skill before activation')
+  assert(reminder.includes('<system-reminder>'), '渲染出 <system-reminder> 包裹')
+  assert(reminder.includes('- hello-world:'), '列出可见 Skill 的名称与描述')
+  assert(!reminder.includes('Hello $ARGUMENTS'), 'discovery 阶段不披露 SKILL.md 正文')
+  assert(!reminder.includes('test-reviewer'), '条件 Skill 未激活前不出现在列表中')
 
-  console.log('\n[3] conditional activation')
+  console.log('\n[3] 路径命中条件激活')
   const activated = conditional.activateConditionalSkillsForPaths(['src/foo.test.ts'], cwd)
-  assert(activated.includes('test-reviewer'), 'activates path-matched conditional skill')
+  assert(activated.includes('test-reviewer'), '路径匹配的条件 Skill 被激活')
   assert(
     registry.getModelVisibleSkills().some((skill) => skill.name === 'test-reviewer'),
-    'activated skill becomes model-visible'
+    '激活后该 Skill 对模型可见'
   )
 
-  console.log('\n[4] Skill tool execution')
+  console.log('\n[4] Skill 工具执行')
   const skillTool = createSkillTool({ getSessionId: () => 'session-123' })
-  const toolResult = await skillTool.execute(
-    { skill: 'hello-world', args: 'Ada' },
-    { cwd }
+  const toolResult = await skillTool.execute({ skill: 'hello-world', args: 'Ada' }, { cwd })
+  assert(typeof toolResult === 'string', 'Skill 工具返回文本')
+  assert(
+    String(toolResult).includes('Follow the instructions below'),
+    'Skill 工具以“按下面指引执行”包裹正文'
   )
-  assert(typeof toolResult === 'string', 'Skill tool returns text')
-  assert(String(toolResult).includes('Follow the instructions below'), 'Skill tool marks body as instructions')
-  assert(String(toolResult).includes('Hello Ada'), 'Skill tool substitutes $ARGUMENTS')
-  assert(String(toolResult).includes('session-123'), 'Skill tool substitutes session id')
-  assert(!String(toolResult).includes('Global hello'), 'Skill tool uses project override body')
+  assert(String(toolResult).includes('Hello Ada'), 'Skill 工具替换 $ARGUMENTS')
+  assert(String(toolResult).includes('session-123'), 'Skill 工具替换 session id')
+  assert(!String(toolResult).includes('Global hello'), 'Skill 工具使用项目级覆盖后的正文')
 
   const hiddenResult = await skillTool.execute({ skill: 'secret-handshake' }, { cwd })
   assert(
     String(hiddenResult).includes('disable-model-invocation'),
-    'Skill tool rejects model invocation for hidden skill'
+    'Skill 工具拒绝对隐藏 Skill 的模型调用'
   )
 
-  console.log('\n[5] slash command expansion')
+  console.log('\n[5] 斜杠命令展开')
   const expansion = invocation.expandSkillSlashCommand('/hello-world Grace', 'session-456')
-  assert(expansion?.markerContent.includes('<command-name>/hello-world</command-name>'), 'slash command emits marker')
-  assert(expansion?.bodyText.startsWith('[skill_invocation:hello-world]'), 'slash command emits internal body sentinel')
-  assert(expansion?.bodyText.includes('Hello Grace'), 'slash command substitutes args')
+  assert(
+    expansion?.markerContent.includes('<command-name>/hello-world</command-name>'),
+    '斜杠命令输出 marker 块'
+  )
+  assert(
+    expansion?.bodyText.startsWith('[skill_invocation:hello-world]'),
+    '斜杠命令输出内部 sentinel 标记'
+  )
+  assert(expansion?.bodyText.includes('Hello Grace'), '斜杠命令替换参数')
 
-  console.log('\nAll skills checks passed.\n')
+  console.log('\n所有 Skills 检查均通过。\n')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

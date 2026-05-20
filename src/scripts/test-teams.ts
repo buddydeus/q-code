@@ -57,7 +57,7 @@ process.env.Q_CODE_HOME = home
 process.env.Q_CODE_TEAMS = '1'
 
 function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(`Assertion failed: ${message}`)
+  if (!condition) throw new Error(`断言失败: ${message}`)
   console.log(`  ✓ ${message}`)
 }
 
@@ -71,19 +71,19 @@ const noopTool: ToolDefinition = {
 }
 
 try {
-  console.log('\n[1] feature flag')
-  assert(isAgentTeamsEnabled(), 'Q_CODE_TEAMS=1 turns the feature flag on')
+  console.log('\n[1] 特性开关')
+  assert(isAgentTeamsEnabled(), 'Q_CODE_TEAMS=1 打开特性开关')
   const prevEnv = process.env.Q_CODE_TEAMS
   process.env.Q_CODE_TEAMS = '0'
-  assert(!isAgentTeamsEnabled(), 'Q_CODE_TEAMS=0 keeps the feature flag off')
+  assert(!isAgentTeamsEnabled(), 'Q_CODE_TEAMS=0 保持特性开关关闭')
   process.env.Q_CODE_TEAMS = prevEnv
 
   console.log('\n[2] sanitizeName')
-  assert(sanitizeName('My Team!') === 'my-team', 'sanitizeName collapses junk to single hyphen')
-  assert(sanitizeName('FooBar') === 'foobar', 'sanitizeName lowercases')
-  assert(formatAgentId('Back End', 'My Team') === 'back-end@my-team', 'formatAgentId sanitizes')
+  assert(sanitizeName('My Team!') === 'my-team', 'sanitizeName 将非法字符压缩为单个连字符')
+  assert(sanitizeName('FooBar') === 'foobar', 'sanitizeName 转为小写')
+  assert(formatAgentId('Back End', 'My Team') === 'back-end@my-team', 'formatAgentId 会 sanitize')
 
-  console.log('\n[3] teamHelpers CRUD')
+  console.log('\n[3] teamHelpers 增删改查')
   const initial: TeamFile = {
     name: 'demo',
     createdAt: Date.now(),
@@ -98,7 +98,7 @@ try {
     ]
   }
   await writeTeamFileAsync('demo', initial)
-  assert(existsSync(getTeamFilePath('demo')), 'writeTeamFileAsync persists team.json')
+  assert(existsSync(getTeamFilePath('demo')), 'writeTeamFileAsync 持久化 team.json')
 
   const member: TeamMember = {
     agentId: formatAgentId('backend', 'demo'),
@@ -110,44 +110,43 @@ try {
   let file = await readTeamFileAsync('demo')
   assert(
     file?.members.some((m) => m.name === 'backend' && m.isActive),
-    'addTeamMember appends the member as active'
+    'addTeamMember 追加成员为 active'
   )
 
-  // Idempotency: same-name re-add replaces in place.
+  // 幂等性：同名重复加入会就地覆盖。
   await addTeamMember('demo', { ...member, agentType: 'general-purpose' })
   file = await readTeamFileAsync('demo')
   const backendCount = file?.members.filter((m) => m.name === 'backend').length ?? 0
-  assert(backendCount === 1, 'addTeamMember is idempotent on duplicate name')
+  assert(backendCount === 1, 'addTeamMember 同名重复加入保持幂等')
 
   await setMemberActive('demo', 'backend', false)
   file = await readTeamFileAsync('demo')
   assert(
     file?.members.find((m) => m.name === 'backend')?.isActive === false,
-    'setMemberActive flips isActive to false'
+    'setMemberActive 将 isActive 翻为 false'
   )
 
   await removeTeamMember('demo', 'backend')
   file = await readTeamFileAsync('demo')
   assert(
     file?.members.every((m) => m.name !== 'backend'),
-    'removeTeamMember removes the entry'
+    'removeTeamMember 移除该成员条目'
   )
 
-  // P0/D4: addTeamMember must throw (not silently return null) when the
-  // file is gone. Without this, the AgentTool launch path can't tell a
-  // successful registration from a no-op.
+  // P0/D4: team.json 丢失时 addTeamMember 必须抛错而不是静默返回 null。
+  // 不这样 AgentTool 启动路径无法区分 “成功注册” 与 “什么也没发生”。
   let threw = false
   try {
     await addTeamMember('does-not-exist', member)
   } catch (e) {
     threw = e instanceof Error && e.name === 'TeamFileMissingError'
   }
-  assert(threw, 'addTeamMember throws TeamFileMissingError on missing team.json')
+  assert(threw, 'team.json 丢失时 addTeamMember 抛 TeamFileMissingError')
 
   await cleanupTeamDirectory('demo')
-  assert(!existsSync(getTeamDir('demo')), 'cleanupTeamDirectory deletes the team folder')
+  assert(!existsSync(getTeamDir('demo')), 'cleanupTeamDirectory 删除整个团队目录')
 
-  console.log('\n[3b] schemaVersion + atomic write')
+  console.log('\n[3b] schemaVersion + 原子写')
   await writeTeamFileAsync('versioned', {
     name: 'versioned',
     createdAt: Date.now(),
@@ -155,19 +154,18 @@ try {
     members: []
   })
   const versionedFile = await readTeamFileAsync('versioned')
-  assert(versionedFile?.schemaVersion === 1, 'writeTeamFileAsync stamps schemaVersion=1')
+  assert(versionedFile?.schemaVersion === 1, 'writeTeamFileAsync 自动写入 schemaVersion=1')
 
-  // Atomic-write: after a successful write the file must NOT have a
-  // sibling `.tmp-*` file (rename consumed it).
+  // 原子写：成功后不会留下 .tmp-* 辅助文件（rename 已消费掉）。
   const versionedDir = getTeamDir('versioned')
   const versionedSiblings = readdirSync(versionedDir)
   assert(
     versionedSiblings.every((f) => !f.includes('.tmp-')),
-    'atomic write leaves no .tmp- residue on success'
+    '原子写成功后不留下 .tmp- 残留'
   )
   await cleanupTeamDirectory('versioned')
 
-  console.log('\n[3c] reconcileStaleActiveMembers (B3 startup recovery)')
+  console.log('\n[3c] reconcileStaleActiveMembers（B3 启动恢复）')
   const ghostInitial: TeamFile = {
     name: 'ghost',
     createdAt: Date.now(),
@@ -195,18 +193,18 @@ try {
   }
   await writeTeamFileAsync('ghost', ghostInitial)
   const touched = await reconcileStaleActiveMembers()
-  assert(touched.includes('ghost'), 'reconcileStaleActiveMembers reports the team it touched')
+  assert(touched.includes('ghost'), 'reconcileStaleActiveMembers 报告被处理过的团队')
   const reconciledFile = await readTeamFileAsync('ghost')
   assert(
     reconciledFile?.members.every((m) => (m.name === TEAM_LEAD_NAME ? m.isActive : !m.isActive)),
-    'reconcile leaves lead active and flips every teammate to idle'
+    'reconcile 保留 lead active 并将所有 teammate 翻为 idle'
   )
-  // Idempotent: a second run with no stale members reports nothing.
+  // 幂等：再跑一次不会出现重复报告。
   const touchedAgain = await reconcileStaleActiveMembers()
-  assert(!touchedAgain.includes('ghost'), 'reconcile is idempotent after the sweep')
+  assert(!touchedAgain.includes('ghost'), 'reconcile 在清扫后具备幂等性')
   await cleanupTeamDirectory('ghost')
 
-  console.log('\n[4] teammate mailbox (concurrent writes safe)')
+  console.log('\n[4] teammate 邮箱（并发写入安全）')
   await writeTeamFileAsync('demo2', { ...initial, name: 'demo2' })
   await Promise.all(
     Array.from({ length: 8 }, (_, i) =>
@@ -218,12 +216,12 @@ try {
     )
   )
   const all = await readMailbox('backend', 'demo2')
-  assert(all.length === 8, 'mailbox keeps all 8 concurrent writes')
+  assert(all.length === 8, '邮箱保留全部 8 条并发写入')
 
   const unread = await drainUnreadMessages('backend', 'demo2')
-  assert(unread.length === 8, 'drainUnreadMessages returns all unread')
+  assert(unread.length === 8, 'drainUnreadMessages 返回全部未读')
   const again = await drainUnreadMessages('backend', 'demo2')
-  assert(again.length === 0, 'second drain returns empty (atomic mark-read)')
+  assert(again.length === 0, '二次抽取返回空（原子标读）')
 
   console.log('\n[5] formatMailboxAttachment')
   const formatted = formatMailboxAttachment([
@@ -236,27 +234,21 @@ try {
       summary: 'ping'
     }
   ])
-  assert(formatted.includes('<teammate-messages>'), 'attachment opens with <teammate-messages>')
-  assert(formatted.includes('from="frontend"'), 'attachment surfaces from attr')
-  assert(formatted.includes('summary="ping"'), 'attachment surfaces summary attr when provided')
+  assert(formatted.includes('<teammate-messages>'), '附件以 <teammate-messages> 开头')
+  assert(formatted.includes('from="frontend"'), '附件输出 from 属性')
+  assert(formatted.includes('summary="ping"'), '提供 summary 时附件输出其属性')
 
-  console.log('\n[6] TeamCreate tool')
+  console.log('\n[6] TeamCreate 工具')
   const teamCreate = createTeamCreateTool()
   const noActiveOk = await teamCreate.execute(
     { team_name: 'reviewers', description: 'parallel review' },
     { cwd }
   )
-  assert(
-    String(noActiveOk).includes('Team "reviewers" created'),
-    'TeamCreate succeeds when no team is active'
-  )
-  assert(getActiveTeam()?.teamName === 'reviewers', 'TeamCreate sets active team context')
+  assert(String(noActiveOk).includes('Team "reviewers" created'), '无活跃团队时 TeamCreate 成功')
+  assert(getActiveTeam()?.teamName === 'reviewers', 'TeamCreate 设置活跃团队上下文')
 
   const dupActive = await teamCreate.execute({ team_name: 'others' }, { cwd })
-  assert(
-    String(dupActive).startsWith('Error:'),
-    'TeamCreate refuses a second team while one is active'
-  )
+  assert(String(dupActive).startsWith('Error:'), '已有活跃团队时 TeamCreate 拒绝创建第二个团队')
 
   console.log('\n[7] SendMessage tool')
   const sendMessage = createSendMessageTool()
@@ -274,71 +266,65 @@ try {
   })
 
   const leadSend = await sendMessage.execute({ to: 'security', message: 'check sql.ts' }, { cwd })
-  assert(String(leadSend).includes('Message delivered'), 'lead -> teammate send succeeds')
+  assert(String(leadSend).includes('Message delivered'), 'lead → teammate 发送成功')
   const securityInbox = await readMailbox('security', 'reviewers')
-  assert(securityInbox[0]?.from === TEAM_LEAD_NAME, 'inbox records team-lead as sender by default')
+  assert(securityInbox[0]?.from === TEAM_LEAD_NAME, '默认发件人记录为 team-lead')
 
   const broadcast = await sendMessage.execute({ to: '*', message: 'wrap up please' }, { cwd })
-  assert(String(broadcast).includes('Broadcast delivered'), 'broadcast to active teammates works')
+  assert(String(broadcast).includes('Broadcast delivered'), '广播到所有活跃 teammate 成功')
 
   const selfSend = await sendMessage.execute(
     { to: 'security', message: 'self talk' },
     { cwd, teammateIdentity: { agentName: 'security', teamName: 'reviewers' } }
   )
-  assert(String(selfSend).includes('cannot SendMessage to yourself'), 'self-send is rejected')
+  assert(String(selfSend).includes('cannot SendMessage to yourself'), '拒绝自发自收')
 
   const teammateSend = await sendMessage.execute(
     { to: 'performance', message: 'sync up' },
     { cwd, teammateIdentity: { agentName: 'security', teamName: 'reviewers' } }
   )
-  assert(String(teammateSend).includes('Message delivered'), 'teammate -> teammate send succeeds')
+  assert(String(teammateSend).includes('Message delivered'), 'teammate → teammate 发送成功')
   const perfInbox = await readMailbox('performance', 'reviewers')
   assert(
     perfInbox.some((m) => m.from === 'security'),
-    'inbox shows the teammate identity as sender'
+    '收件箱记录发件 teammate 身份'
   )
 
   const unknownRecipient = await sendMessage.execute(
     { to: 'ghost', message: 'where are you' },
     { cwd }
   )
-  assert(
-    String(unknownRecipient).includes('no teammate named "ghost"'),
-    'unknown recipient rejected'
-  )
+  assert(String(unknownRecipient).includes('no teammate named "ghost"'), '未知收件人被拒绝')
 
-  // P1/D1: a 12KB message must be rejected before it touches the inbox.
+  // P1/D1: 超过 8KB 上限的消息在进到邮箱之前就应被拒绝。
   const oversize = 'X'.repeat(12 * 1024)
   const oversizeResult = await sendMessage.execute({ to: 'security', message: oversize }, { cwd })
-  assert(
-    String(oversizeResult).includes('exceeding the'),
-    'oversize message body is rejected with byte count'
-  )
-  // And the inbox must not have been polluted.
+  assert(String(oversizeResult).includes('exceeding the'), '超限消息体被拒绝且返回字节数')
+  // 且邮箱不应被污染。
   const securityAfter = await readMailbox('security', 'reviewers')
   assert(
     securityAfter.every((m) => !m.text.includes('XX')),
-    'oversize body never reaches the inbox'
+    '超限消息体不进入邮箱'
   )
 
-  console.log('\n[8] TeamDelete refuses while members are active')
+  console.log('\n[8] TeamDelete 在有 active teammate 时拒绝清理')
   const teamDelete = createTeamDeleteTool()
   const refused = await teamDelete.execute({}, { cwd })
   assert(
     String(refused).includes('teammate(s) still active'),
-    'TeamDelete refuses while members are active'
+    '仍有 active teammate 时 TeamDelete 拒绝执行'
   )
 
-  // Flip everyone idle, then succeed.
+  // 全部翻为 idle 后，TeamDelete 应成功。
   await setMemberActive('reviewers', 'security', false)
   await setMemberActive('reviewers', 'performance', false)
   const okDelete = await teamDelete.execute({}, { cwd })
-  assert(String(okDelete).includes('disbanded'), 'TeamDelete succeeds once every teammate is idle')
-  assert(getActiveTeam() === null, 'TeamDelete clears the in-process active team')
-  assert(!existsSync(getTeamDir('reviewers')), 'TeamDelete removes the team directory')
+  assert(String(okDelete).includes('disbanded'), '所有 teammate idle 后 TeamDelete 成功')
+  assert(getActiveTeam() === null, 'TeamDelete 清理进程内活跃团队上下文')
+  assert(!existsSync(getTeamDir('reviewers')), 'TeamDelete 删除团队目录')
 
-  console.log('\n[9] Agent tool teammate validation')
-  // Reset to a fresh team so the AgentTool path has a target.
+  console.log('\n[9] Agent 工具的 teammate 校验')
+  // 重建一个新团队，为后续 AgentTool 路径提供目标。
   await teamCreate.execute({ team_name: 'val-team' }, { cwd })
 
   await bootstrapAgents(cwd)
@@ -378,7 +364,7 @@ try {
     },
     { cwd }
   )
-  assert(String(mismatch).includes('does not match the active team'), 'team_name mismatch rejected')
+  assert(String(mismatch).includes('does not match the active team'), 'team_name 不匹配被拒绝')
 
   const missingPair = await agentTool.execute(
     { prompt: 'p', description: 'd', name: 'only-name', run_in_background: true },
@@ -386,7 +372,7 @@ try {
   )
   assert(
     String(missingPair).includes("'name' and 'team_name' must be used together"),
-    'unpaired name rejected'
+    '只传 name 不传 team_name 被拒绝'
   )
 
   const reserved = await agentTool.execute(
@@ -399,7 +385,7 @@ try {
     },
     { cwd }
   )
-  assert(String(reserved).includes('reserved'), 'team-lead name reserved')
+  assert(String(reserved).includes('reserved'), 'team-lead 作为保留名被拒绝')
 
   const mustBg = await agentTool.execute(
     {
@@ -411,7 +397,7 @@ try {
     },
     { cwd }
   )
-  assert(String(mustBg).includes('must run in background'), 'named teammate must run in background')
+  assert(String(mustBg).includes('must run in background'), '命名 teammate 必须后台运行')
 
   const nested = await agentTool.execute(
     {
@@ -428,10 +414,10 @@ try {
   )
   assert(
     String(nested).includes('nested teammate spawn rejected'),
-    'nested teammate spawn rejected'
+    'teammate 不能再派出嵌套的命名子 teammate'
   )
 
-  // Happy path — should launch async and register.
+  // 快乐路径 — 应该异步启动并成功注册。
   const launched = await agentTool.execute(
     {
       prompt: 'do code review',
@@ -442,26 +428,22 @@ try {
     },
     { cwd }
   )
-  assert(String(launched).includes('<async_launched>'), 'named teammate launches via async path')
+  assert(String(launched).includes('<async_launched>'), '命名 teammate 走异步启动路径')
   assert(
     String(launched).includes('<teammate_name>reviewer</teammate_name>'),
-    'launch result tags teammate'
+    '启动结果带上 teammate 标识'
   )
-  assert(
-    capturedAsync?.teammateIdentity !== undefined,
-    'asyncRunner receives teammateIdentity in params'
-  )
+  assert(capturedAsync?.teammateIdentity !== undefined, 'asyncRunner 参数中包含 teammateIdentity')
 
   const fileAfter = await readTeamFileAsync('val-team')
   assert(
     fileAfter?.members.some((m) => m.name === 'reviewer' && m.isActive),
-    'teammate is added to team.json before the loop runs'
+    '启动之前 teammate 已被加入 team.json'
   )
 
-  // P0/B2: when controller.createModel throws synchronously the launch
-  // path must roll back the team-member it just inserted. Otherwise the
-  // teammate is permanently stuck isActive=true with no async lifecycle
-  // to ever flip it back, which would block TeamDelete forever.
+  // P0/B2: 当 controller.createModel 同步抢错时，启动路径必须回滚刚插入的
+  // teammate。否则该 teammate 会永久卡在 isActive=true，后续生命周期是走不到的，
+  // 从而让 TeamDelete 永远拒绝执行。
   const explodingTool = createAgentTool(
     {
       createModel: () => {
@@ -496,20 +478,16 @@ try {
     },
     { cwd }
   )
-  assert(
-    String(explodingResult).startsWith('Error:'),
-    'createModel throw surfaces as a tool-level error'
-  )
+  assert(String(explodingResult).startsWith('Error:'), 'createModel 抢错被包装为工具级错误')
   const fileAfterRollback = await readTeamFileAsync('val-team')
   assert(
     fileAfterRollback?.members.every((m) => m.name !== 'crashy'),
-    'failed launch rolls the teammate out of team.json (no ghost active)'
+    '失败启动将 teammate 从 team.json 中回滚（不会遗留鬼魂 active）'
   )
 
-  // P0/D4: when team.json is missing under the lead's nose, the launch
-  // path must report a clean error rather than silently launching an
-  // orphan teammate that's untracked by the lead's roster.
-  await cleanupTeamDirectory('val-team') // simulate manual disk-side rm
+  // P0/D4: 在 lead 眼皮底下 team.json 丢失时，启动路径必须报出明确错误，
+  // 而不是静默启动一个不在 lead 名册中的孤儿 teammate。
+  await cleanupTeamDirectory('val-team') // 模拟手动 rm 碍 team.json
   const orphanResult = await agentTool.execute(
     {
       prompt: 'p',
@@ -523,22 +501,22 @@ try {
   assert(
     String(orphanResult).includes('cannot register teammate') ||
       String(orphanResult).includes('does not match the active team'),
-    'missing team.json after TeamCreate is reported as a register error'
+    'TeamCreate 后 team.json 丢失被报为注册错误'
   )
-  // Recreate the team for the next section.
+  // 重建团队以供下一个区段使用。
   clearActiveTeam()
 
-  console.log('\n[10] team-prompt three-state reminder')
-  await teamDelete.execute({}, { cwd }).catch(() => undefined) // best-effort cleanup
-  // even after delete, async-agent entries from prior runs remain — clear them
+  console.log('\n[10] team-prompt 三态 reminder')
+  await teamDelete.execute({}, { cwd }).catch(() => undefined) // 尽力清理
+  // 即使 TeamDelete 之后，旧运行遗留的 async-agent 条目仍在—手动清空
   clearAllAsyncAgents()
 
   process.env.Q_CODE_TEAMS = '0'
-  assert(formatTeamsSystemReminder() === '', 'reminder is empty when feature flag off')
+  assert(formatTeamsSystemReminder() === '', '特性开关关闭时 reminder 为空')
   process.env.Q_CODE_TEAMS = '1'
   clearActiveTeam()
   const idleReminder = formatTeamsSystemReminder()
-  assert(idleReminder.includes('TeamCreate'), 'idle reminder mentions TeamCreate')
+  assert(idleReminder.includes('TeamCreate'), 'idle reminder 提及 TeamCreate')
 
   await teamCreate.execute({ team_name: 'roster' }, { cwd })
   await addTeamMember('roster', {
@@ -554,10 +532,10 @@ try {
     isActive: false
   })
   const activeReminder = formatTeamsSystemReminder()
-  assert(activeReminder.includes('frontend [active]'), 'active reminder lists active members')
-  assert(activeReminder.includes('backend [idle]'), 'active reminder marks idle members')
+  assert(activeReminder.includes('frontend [active]'), 'active reminder 列出 active 成员')
+  assert(activeReminder.includes('backend [idle]'), 'active reminder 标记 idle 成员')
 
-  console.log('\nAll Agent Teams checks passed.\n')
+  console.log('\n所有 Agent Teams 检查均通过。\n')
 } finally {
   clearAllAsyncAgents()
   clearPendingNotifications()
