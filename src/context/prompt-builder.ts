@@ -5,6 +5,7 @@ export interface PromptContext {
   sessionId: string
   runtimeContext?: string
   agentMdContext?: string
+  memoryContext?: string
 }
 
 type PipeFn = (ctx: PromptContext) => string | null
@@ -81,6 +82,13 @@ export function agentMdInstructions(): PipeFn {
       '以下内容按从全局到项目根、再到当前目录的顺序加载；发生冲突时，后出现、路径更接近当前工作目录的指令优先。',
       ctx.agentMdContext
     ].join('\n\n')
+  }
+}
+
+export function projectMemory(): PipeFn {
+  return (ctx) => {
+    if (!ctx.memoryContext) return null
+    return ['项目记忆（文件级跨对话记忆）：', ctx.memoryContext].join('\n\n')
   }
 }
 

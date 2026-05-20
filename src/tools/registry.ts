@@ -13,7 +13,10 @@ export interface ToolDefinition {
   searchHint?: string
 }
 
-const DEFAULT_MAX_RESULT_CHARS = 3000
+// Tool outputs are capped before they enter the model context. The default is
+// intentionally high enough for normal file/search work; noisy integrations
+// such as MCP tools can still opt into a smaller per-tool limit.
+const DEFAULT_MAX_RESULT_CHARS = 100000
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>()

@@ -2,7 +2,7 @@ import 'dotenv/config'
 import { type ModelMessage } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
-import { fmtBanner, fmtStop } from './utils/logger'
+import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
 import { allTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
@@ -12,6 +12,7 @@ import {
   agentMdInstructions,
   PromptBuilder,
   PromptContext,
+  projectMemory,
   runtimeEnvironment,
   sessionContext,
   toolGuide
@@ -28,10 +29,19 @@ import {
   buildTokenBudgetSnapshot,
   type UsageAnchor
 } from './context/token-budget'
+import { buildMemorySystemContext } from './context/memory/memdir'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
 const compactTriggerRatio = getRatioEnv('COMPACT_TRIGGER_RATIO', 0.85)
+const warningTriggerRatio = getRatioEnv(
+  'WARNING_TRIGGER_RATIO',
+  Math.max(0.5, compactTriggerRatio - 0.05)
+)
+const blockingTriggerRatio = getRatioEnv('BLOCKING_TRIGGER_RATIO', 0.98)
+const defaultMaxOutputTokens = getNumberEnv('DEFAULT_MAX_OUTPUT_TOKENS', 8000)
+const escalatedMaxOutputTokens = getNumberEnv('ESCALATED_MAX_OUTPUT_TOKENS', 64000)
+const compactMaxOutputTokens = getNumberEnv('COMPACT_MAX_OUTPUT_TOKENS', 20000)
 const compactTriggerTokens = Math.floor(contextLimitTokens * compactTriggerRatio)
 
 const registry = new ToolRegistry()
@@ -199,18 +209,34 @@ async function main() {
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())
     .pipe('agentMdInstructions', agentMdInstructions())
+    .pipe('projectMemory', projectMemory())
     .pipe('sessionContext', sessionContext())
 
-  const promptCtx: PromptContext = {
+  async function buildSystemPrompt(userQuery?: string): Promise<string> {
+    const memoryContext = await buildMemorySystemContext({ userQuery })
+    const promptCtx: PromptContext = {
+      toolCount: registry.getActiveTools().length,
+      deferredToolSummary: registry.getDeferredToolSummary(),
+      sessionMessageCount: messages.length,
+      sessionId,
+      runtimeContext,
+      agentMdContext,
+      memoryContext
+    }
+    return builder.build(promptCtx)
+  }
+
+  const initialPromptCtx: PromptContext = {
     toolCount: registry.getActiveTools().length,
     deferredToolSummary: registry.getDeferredToolSummary(),
     sessionMessageCount: messages.length,
     sessionId,
     runtimeContext,
-    agentMdContext
+    agentMdContext,
+    memoryContext: await buildMemorySystemContext()
   }
 
-  const SYSTEM = builder.build(promptCtx)
+  const SYSTEM = builder.build(initialPromptCtx)
 
   if (dumpSystemPrompt) {
     console.log(SYSTEM)
@@ -222,29 +248,36 @@ async function main() {
   const model = createModel()
   const { model: summaryModel, name: summaryModelName } = createSummaryModel()
 
-  function snapshotContext(currentMessages: ModelMessage[], usageAnchor?: UsageAnchor) {
+  function snapshotContext(currentMessages: ModelMessage[], systemPrompt: string, usageAnchor?: UsageAnchor) {
     return buildTokenBudgetSnapshot(currentMessages, {
-      systemPrompt: SYSTEM,
+      systemPrompt,
       activeToolSchemaTokens: registry.countTokenEstimate().active,
       contextLimitTokens,
       compactTriggerRatio,
+      warningRatio: warningTriggerRatio,
+      blockingRatio: blockingTriggerRatio,
+      reservedOutputTokens: defaultMaxOutputTokens,
       usageAnchor
     })
   }
 
   async function compactIfNeeded(
     currentMessages: ModelMessage[],
+    systemPrompt: string,
     reason: string,
-    trigger: 'preflight' | 'post-turn',
-    usageAnchor?: UsageAnchor
+    trigger: 'preflight' | 'post-turn' | 'manual',
+    usageAnchor?: UsageAnchor,
+    force = false,
+    focus?: string
   ): Promise<AgentLoopPreflightResult> {
-    const before = snapshotContext(currentMessages, usageAnchor)
-    const beforeForReduction = usageAnchor ? snapshotContext(currentMessages) : before
-    if (before.state === 'normal' || before.state === 'warning') {
+    const before = snapshotContext(currentMessages, systemPrompt, usageAnchor)
+    const beforeForReduction = usageAnchor ? snapshotContext(currentMessages, systemPrompt) : before
+    if (!force && (before.state === 'normal' || before.state === 'warning')) {
+      if (before.state === 'warning') console.log(fmtContextUsage(before.used, before.limit, before.state))
       return { messages: currentMessages, usageAnchor }
     }
 
-    if (!compactionBreaker.shouldAttempt(before)) {
+    if (!force && !compactionBreaker.shouldAttempt(before)) {
       const skipReason = `自动压缩已连续失败 ${compactionBreaker.failures} 次，本次跳过`
       console.log(`\n  [${reason}] ${skipReason}`)
       return {
@@ -257,36 +290,42 @@ async function main() {
       }
     }
 
-    console.log(
-      `\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens >= ${Math.round(
-        compactTriggerRatio * 100
-      )}%，触发压缩...`
-    )
+    const triggerText = force
+      ? '手动触发压缩'
+      : `>= ${Math.round(compactTriggerRatio * 100)}%，触发压缩`
+    console.log(`\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens ${triggerText}...`)
 
     const mc = microcompact(currentMessages)
     let nextMessages = mc.messages
     if (mc.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc.cleared} 个工具结果`)
 
-    const comp = await summarize(summaryModel, nextMessages, summary, { force: true })
+    const comp = await summarize(summaryModel, nextMessages, summary, {
+      force: true,
+      maxOutputTokens: compactMaxOutputTokens,
+      focus
+    })
     if (comp.compressedCount > 0) {
       nextMessages = comp.messages
       summary = comp.summary
       console.log(`  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`)
     }
 
-    const after = snapshotContext(nextMessages)
+    const after = snapshotContext(nextMessages, systemPrompt)
     const changed = mc.cleared > 0 || comp.compressedCount > 0
     const reduced = after.used < beforeForReduction.used
 
     if (changed && reduced) {
       compactionBreaker.recordSuccess()
+    }
+
+    if (changed && (reduced || force)) {
       activeStore.appendCompactionSnapshot({
         trigger,
         beforeTokens: before.used,
         afterTokens: after.used,
         messages: nextMessages
       })
-    } else {
+    } else if (!force) {
       compactionBreaker.recordFailure()
     }
 
@@ -302,14 +341,14 @@ async function main() {
   }
 
   // Debug: 显示 Prompt Pipe 各模块状态
-  builder.debug(promptCtx)
+  builder.debug(initialPromptCtx)
 
   const activeTools = registry.getActiveTools()
   console.log(`活跃工具: ${activeTools.length} 个`)
   console.log(
     `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
       compactTriggerRatio * 100
-    )}%)，执行预算: ${tokenBudget} tokens`
+    )}%)，执行预算: ${tokenBudget} tokens，输出预算: ${defaultMaxOutputTokens}/${escalatedMaxOutputTokens}/${compactMaxOutputTokens}`
   )
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
@@ -331,16 +370,25 @@ async function main() {
     }
 
     try {
+      if (trimmed === '/compact' || trimmed.startsWith('/compact ')) {
+        await handleCompactCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
+
       const userMsg: ModelMessage = { role: 'user', content: trimmed }
       messages.push(userMsg)
       activeStore.append(userMsg)
+      const turnSystem = await buildSystemPrompt(trimmed)
 
-      const loopResult = await agentLoop(model, registry, messages, SYSTEM, {
+      const loopResult = await agentLoop(model, registry, messages, turnSystem, {
         tokenBudget,
+        maxOutputTokens: defaultMaxOutputTokens,
+        escalatedMaxOutputTokens,
         preflight: (currentMessages, { step, usageAnchor }) =>
-          compactIfNeeded(currentMessages, `Step ${step} preflight`, 'preflight', usageAnchor),
+          compactIfNeeded(currentMessages, turnSystem, `Step ${step} preflight`, 'preflight', usageAnchor),
         contextUsage: (currentMessages, { usageAnchor }) => {
-          const snapshot = snapshotContext(currentMessages, usageAnchor)
+          const snapshot = snapshotContext(currentMessages, turnSystem, usageAnchor)
           return {
             used: snapshot.used,
             limit: snapshot.limit,
@@ -360,6 +408,7 @@ async function main() {
       // Post-turn compaction keeps the next user turn below the configured context threshold.
       const postTurn = await compactIfNeeded(
         messages,
+        turnSystem,
         'Post-turn compaction',
         'post-turn',
         loopResult.usageAnchor
@@ -371,6 +420,30 @@ async function main() {
     }
 
     if (!closed) ask()
+  }
+
+  async function handleCompactCommand(command: string): Promise<void> {
+    if (messages.length === 0) {
+      console.log('\n  [Manual compaction] 当前没有可压缩的对话历史')
+      return
+    }
+    const focus = command.slice('/compact'.length).trim()
+    if (focus) {
+      console.log('\n  [Manual compaction] 已收到压缩重点，将在摘要中优先保留')
+    }
+
+    const manualSystem = await buildSystemPrompt()
+    const result = await compactIfNeeded(
+      messages,
+      manualSystem,
+      'Manual compaction',
+      'manual',
+      undefined,
+      true,
+      focus || undefined
+    )
+    messages = result.messages
+    if (result.stopReason) console.log(fmtStop(result.stopReason))
   }
 
   function ask() {

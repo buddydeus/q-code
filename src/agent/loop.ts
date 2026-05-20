@@ -19,12 +19,15 @@ import {
   fmtStop,
   fmtContinue,
   fmtStepPerf,
-  fmtTaskDuration
+  fmtTaskDuration,
+  fmtOutputRetry
 } from '../utils/logger'
 
 const MAX_STEPS = 50
 const MAX_RETRIES = 3
 const DEFAULT_TOKEN_BUDGET = 256000
+const DEFAULT_MAX_OUTPUT_TOKENS = 8000
+const DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS = 64000
 
 export interface AgentLoopResult {
   messages: ModelMessage[]
@@ -48,6 +51,8 @@ export interface AgentToolEvent {
 
 export interface AgentLoopOptions {
   tokenBudget?: number
+  maxOutputTokens?: number
+  escalatedMaxOutputTokens?: number
   preflight?: (
     messages: ModelMessage[],
     context: { step: number; usageAnchor?: UsageAnchor }
@@ -71,6 +76,9 @@ export async function agentLoop(
   let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
   let usageAnchor: UsageAnchor | undefined
   const tokenBudget = options.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+  const escalatedMaxOutputTokens =
+    options.escalatedMaxOutputTokens ?? DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS
   const newMessages: ModelMessage[] = []
   const taskStart = Date.now()
   resetHistory()
@@ -100,16 +108,25 @@ export async function agentLoop(
     const toolCallsById = new Map<string, { name: string; input: unknown }>()
     let stepResponse: Awaited<ReturnType<typeof streamText>['response']>
     let stepUsage: LanguageModelUsage | undefined
+    let stepFinishReason: string | undefined
+    let discardedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
 
     let stepStart = 0
     let firstTokenAt = 0
     let requestMessageCount = messages.length
     let requestToolSchemaTokens = registry.countTokenEstimate().active
+    let outputTokenLimit = maxOutputTokens
+    let didEscalateOutput = false
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
       try {
         stepStart = Date.now()
         firstTokenAt = 0
+        hasToolCall = false
+        fullText = ''
+        shouldBreak = false
+        lastToolCall = null
+        toolCallsById.clear()
         requestMessageCount = messages.length
         requestToolSchemaTokens = registry.countTokenEstimate().active
         const result = streamText({
@@ -117,6 +134,7 @@ export async function agentLoop(
           system,
           tools: registry.toAISDKFormat(),
           messages,
+          maxOutputTokens: outputTokenLimit,
           maxRetries: 0,
           onError: () => {}
         })
@@ -195,6 +213,20 @@ export async function agentLoop(
 
         stepResponse = await result.response
         stepUsage = await result.usage
+        stepFinishReason = await result.finishReason
+        if (
+          stepFinishReason === 'length' &&
+          !hasToolCall &&
+          !didEscalateOutput &&
+          escalatedMaxOutputTokens > outputTokenLimit
+        ) {
+          const partialUsage = usageFromLanguageModelUsage(stepUsage)
+          discardedUsage = addUsage(discardedUsage, partialUsage)
+          didEscalateOutput = true
+          outputTokenLimit = escalatedMaxOutputTokens
+          console.log(fmtOutputRetry(maxOutputTokens, escalatedMaxOutputTokens))
+          continue
+        }
         break
       } catch (error) {
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
@@ -217,7 +249,8 @@ export async function agentLoop(
     newMessages.push(...stepResponse!.messages)
 
     // 只把执行 token 作为本轮成本/死循环硬保护；主显示使用当前上下文占用。
-    const turnUsage = usageFromLanguageModelUsage(stepUsage)
+    const anchorUsage = usageFromLanguageModelUsage(stepUsage)
+    const turnUsage = addUsage(discardedUsage, anchorUsage)
     totalUsage = {
       inputTokens: totalUsage.inputTokens + turnUsage.inputTokens,
       outputTokens: totalUsage.outputTokens + turnUsage.outputTokens,
@@ -225,7 +258,7 @@ export async function agentLoop(
     }
     usageAnchor = buildUsageAnchor({
       requestMessageCount,
-      usage: turnUsage,
+      usage: anchorUsage,
       systemPrompt: system,
       activeToolSchemaTokens: requestToolSchemaTokens
     })
@@ -234,7 +267,7 @@ export async function agentLoop(
     if (firstTokenAt && stepStart) {
       const ttft = firstTokenAt - stepStart
       const elapsed = (Date.now() - stepStart) / 1000
-      const tps = elapsed > 0 ? turnUsage.outputTokens / elapsed : 0
+      const tps = elapsed > 0 ? anchorUsage.outputTokens / elapsed : 0
       console.log(fmtStepPerf(ttft, tps))
     }
 
@@ -289,5 +322,13 @@ function measureResultLength(value: unknown): number {
     return JSON.stringify(value ?? '').length
   } catch {
     return String(value).length
+  }
+}
+
+function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    totalTokens: left.totalTokens + right.totalTokens
   }
 }

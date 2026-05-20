@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import {
   appendFileSync,
   copyFileSync,
@@ -8,12 +8,11 @@ import {
   readdirSync,
   writeFileSync
 } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
+import { PROJECTS_DIR, getProjectStorageInfo, type ProjectStorageInfo } from '../context/project-paths'
 import type { TokenUsage } from '../context/token-budget'
 
-const DEFAULT_SESSION_DIR = '.sessions'
-const PROJECTS_DIR = 'projects'
 const LATEST_FILE = 'latest'
 const LEGACY_DEFAULT_SESSION_ID = 'default'
 
@@ -92,24 +91,24 @@ export class SessionStore {
 
   constructor(options: SessionStoreOptions | string = {}) {
     const normalizedOptions = normalizeOptions(options)
-    this.cwd = resolve(normalizedOptions.cwd ?? process.cwd())
-    this.projectKey = createProjectKey(this.cwd)
+    const storage = getProjectStorageInfo(normalizedOptions.cwd ?? process.cwd(), normalizedOptions.sessionDir)
 
-    const rootDir = resolveSessionRoot(this.cwd, normalizedOptions.sessionDir)
+    this.cwd = storage.cwd
+    this.projectKey = storage.projectKey
     const requestedSessionId = normalizeSessionId(normalizedOptions.sessionId)
     const latestSessionId = normalizedOptions.continueLatest
-      ? readLatestSessionId(rootDir, this.projectKey)
+      ? readLatestSessionId(storage.rootDir, this.projectKey)
       : null
     const fallbackSessionId =
-      normalizedOptions.continueLatest && hasLegacyDefaultSession(rootDir)
+      normalizedOptions.continueLatest && hasLegacyDefaultSession(storage.rootDir)
         ? LEGACY_DEFAULT_SESSION_ID
         : null
 
     this.sessionId = requestedSessionId ?? latestSessionId ?? fallbackSessionId ?? createSessionId()
-    this.paths = getSessionPaths(rootDir, this.projectKey, this.sessionId)
+    this.paths = getSessionPaths(storage, this.sessionId)
 
     ensureProjectDir(this.paths)
-    migrateLegacyDefaultSession(rootDir, this.paths, this.sessionId)
+    migrateLegacyDefaultSession(storage.rootDir, this.paths, this.sessionId)
 
     this.existedBeforeInit = existsSync(this.paths.transcriptPath)
     if (!this.existedBeforeInit) {
@@ -240,10 +239,10 @@ export function createSessionId(): string {
 }
 
 export function listProjectSessions(options: Pick<SessionStoreOptions, 'cwd' | 'sessionDir'> = {}): SessionSummary[] {
-  const cwd = resolve(options.cwd ?? process.cwd())
-  const projectKey = createProjectKey(cwd)
-  const rootDir = resolveSessionRoot(cwd, options.sessionDir)
-  const projectDir = join(rootDir, PROJECTS_DIR, projectKey)
+  const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
+  const cwd = storage.cwd
+  const projectKey = storage.projectKey
+  const projectDir = storage.projectDir
   if (!existsSync(projectDir)) return []
 
   return readdirSync(projectDir, { withFileTypes: true })
@@ -266,35 +265,18 @@ function normalizeOptions(options: SessionStoreOptions | string): SessionStoreOp
   return typeof options === 'string' ? { sessionId: options } : options
 }
 
-function resolveSessionRoot(cwd: string, sessionDir?: string): string {
-  const configured = sessionDir ?? process.env.Q_CODE_SESSION_DIR ?? DEFAULT_SESSION_DIR
-  return resolve(cwd, configured)
-}
-
-function getSessionPaths(rootDir: string, projectKey: string, sessionId: string): SessionPaths {
-  const projectDir = join(rootDir, PROJECTS_DIR, projectKey)
+function getSessionPaths(storage: ProjectStorageInfo, sessionId: string): SessionPaths {
   return {
-    rootDir,
-    projectDir,
-    latestPath: join(projectDir, LATEST_FILE),
-    transcriptPath: join(projectDir, `${sessionId}.jsonl`),
-    legacyTranscriptPath: join(rootDir, `${LEGACY_DEFAULT_SESSION_ID}.jsonl`)
+    rootDir: storage.rootDir,
+    projectDir: storage.projectDir,
+    latestPath: join(storage.projectDir, LATEST_FILE),
+    transcriptPath: join(storage.projectDir, `${sessionId}.jsonl`),
+    legacyTranscriptPath: join(storage.rootDir, `${LEGACY_DEFAULT_SESSION_ID}.jsonl`)
   }
 }
 
 function ensureProjectDir(paths: SessionPaths): void {
   mkdirSync(paths.projectDir, { recursive: true })
-}
-
-function createProjectKey(cwd: string): string {
-  const normalized = process.platform === 'win32' ? cwd.toLowerCase() : cwd
-  const hash = createHash('sha256').update(normalized).digest('hex').slice(0, 12)
-  const name = sanitizePathSegment(basename(cwd)) || 'project'
-  return `${name}-${hash}`
-}
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 48)
 }
 
 function normalizeSessionId(sessionId: string | undefined): string | undefined {

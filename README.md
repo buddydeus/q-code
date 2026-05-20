@@ -1,6 +1,6 @@
 # q-code
 
-基于 AI SDK 的命令行 Agent 框架，支持工具调用、上下文自动压缩、会话持久化和 MCP 扩展。
+基于 AI SDK 的命令行 Agent 框架，支持工具调用、上下文自动压缩、会话持久化、跨对话项目记忆和 MCP 扩展。
 
 ## 快速开始
 
@@ -34,6 +34,11 @@ cp .env.example .env
 | `TOKEN_BUDGET` | ❌ | 单轮执行 token 预算，默认 256000 |
 | `CONTEXT_LIMIT_TOKENS` | ❌ | 上下文窗口上限，默认 256000 |
 | `COMPACT_TRIGGER_RATIO` | ❌ | 压缩触发比例，默认 0.85 |
+| `WARNING_TRIGGER_RATIO` | ❌ | 上下文预警比例，默认 0.80 |
+| `BLOCKING_TRIGGER_RATIO` | ❌ | 强制停止比例，默认 0.98，会预留普通输出预算 |
+| `DEFAULT_MAX_OUTPUT_TOKENS` | ❌ | 普通回答输出上限，默认 8000 |
+| `ESCALATED_MAX_OUTPUT_TOKENS` | ❌ | 输出触顶后的升级重试上限，默认 64000 |
+| `COMPACT_MAX_OUTPUT_TOKENS` | ❌ | 压缩摘要输出上限，默认 20000 |
 | `Q_CODE_SESSION_DIR` | ❌ | 会话存储目录，默认 .sessions |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | GitHub MCP 扩展 Token |
 | `TAVILY_API_KEY` | ❌ | Tavily 搜索 API Key |
@@ -61,7 +66,11 @@ src/
 │   ├── token-budget.ts   # Token 预算估算与状态追踪
 │   ├── auto-compact.ts   # 压缩熔断器
 │   ├── agent-md.ts       # AGENT.md 项目指令加载
-│   └── runtime-context.ts# 运行环境信息采集
+│   ├── project-paths.ts  # 项目存储路径计算
+│   ├── runtime-context.ts# 运行环境信息采集
+│   └── memory/
+│       ├── memdir.ts     # 项目记忆文件读写与索引管理
+│       └── memory-types.ts# 记忆类型定义与引导指令
 ├── session/
 │   └── store.ts          # JSONL 会话持久化
 ├── tools/
@@ -70,6 +79,7 @@ src/
 │   ├── file-tools.ts     # 文件读写编辑
 │   ├── shell-tools.ts    # Shell 命令执行
 │   ├── search-tools.ts   # 网络搜索 / 网页抓取
+│   ├── memory-tools.ts   # 项目记忆写入工具
 │   ├── utility-tools.ts  # glob / grep / URL 抓取 / 预览
 │   └── mcp-client.ts     # MCP 协议客户端
 └── utils/
@@ -83,12 +93,13 @@ src/
 
 采用 ReAct（推理-行动交替）模式，单轮最多 50 步：
 
-1. **Preflight** — 检查上下文占用，超阈值则压缩
-2. **LLM 推理** — 流式调用模型
-3. **工具执行** — 根据模型输出执行对应工具
-4. **循环检测** — 识别重复调用并干预
-5. **预算检查** — 累计 token 超预算则强制停止
-6. 无工具调用时退出循环
+1. **构建 System Prompt** — 根据用户输入动态构建 `buildSystemPrompt(userQuery)`，使记忆上下文响应当前意图
+2. **Preflight** — 检查上下文占用，超阈值则压缩
+3. **LLM 推理** — 流式调用模型
+4. **工具执行** — 根据模型输出执行对应工具
+5. **循环检测** — 识别重复调用并干预
+6. **预算检查** — 累计 token 超预算则强制停止
+7. 无工具调用时退出循环
 
 ### 上下文压缩
 
@@ -104,7 +115,11 @@ src/
 | Preflight | Agent Loop 每一步调用 LLM 前 |
 | Post-turn | 每轮对话结束后，为下一轮腾出空间 |
 
-压缩熔断器：连续 3 次压缩未能减少上下文时，停止尝试。
+手动输入 `/compact` 可立即压缩当前会话；压缩熔断器会在连续 3 次自动压缩未能减少上下文时停止尝试，手动压缩不受熔断器拦截。
+
+预算状态分三级：`warning` 提醒上下文吃紧，`error` 触发自动压缩，`blocking` 停止下一次模型请求。`blocking` 阈值会同时参考 `BLOCKING_TRIGGER_RATIO` 和普通输出预算，避免输入已经贴近窗口上限时还发起请求。
+
+模型输出分三档：普通回答默认 8000 token；如果模型因为 `length` 触顶且本步没有工具调用，会用 64000 token 重试一次；压缩摘要默认 20000 token，避免长会话摘要被截断。
 
 ### 死循环检测
 
@@ -128,6 +143,7 @@ src/
 | `fetch_url` / `web_fetch` | 网页抓取 |
 | `weather` / `start_preview` | 天气查询 / 本地预览服务 |
 | `pick_search` | 代码库搜索 |
+| `memory_write` | 跨对话项目记忆写入 |
 | `tool_search` | 延迟工具动态发现 |
 
 #### MCP 扩展
@@ -156,6 +172,91 @@ src/
 1. `~/.q-code/AGENT.md` — 全局指令
 2. 项目根目录到当前目录的链式加载
 3. 冲突时，路径越接近当前目录的优先级越高
+
+### 项目记忆系统
+
+q-code 内置跨对话持久化的项目记忆，让 Agent 能在多次对话间保留和检索关键信息。
+
+#### 存储结构
+
+记忆文件存储在 `.sessions/projects/<projectKey>/memory/` 目录下：
+
+```
+memory/
+├── MEMORY.md           # 索引文件（自动维护）
+├── deploy-rules.md     # 主题记忆文件
+└── api-conventions.md  # 主题记忆文件
+```
+
+每个记忆文件使用 YAML frontmatter 格式：
+
+```markdown
+---
+name: 部署规则
+description: 生产环境部署注意事项
+type: project
+---
+
+正文内容...
+```
+
+#### 索引文件
+
+`MEMORY.md` 是自动维护的索引，不保存完整正文，只包含指向各主题文件的链接：
+
+```markdown
+# Project Memory
+
+- [部署规则](deploy-rules.md) — 生产环境部署注意事项
+- [API 约定](api-conventions.md) — REST API 命名与版本规范
+```
+
+索引上限：200 行 / 25000 bytes，超出自动截断。
+
+#### 记忆类型
+
+| 类型 | 说明 |
+|------|------|
+| `user` | 用户长期偏好、协作方式、目标或角色信息 |
+| `feedback` | 用户对执行方式、质量标准、注意事项的长期反馈 |
+| `project` | 不能直接从仓库推导的项目约束、背景、决策 |
+| `reference` | 外部系统、仪表盘、文档、工单或数据源位置 |
+
+#### 写入记忆
+
+Agent 通过 `memory_write` 工具写入记忆，支持新建和更新已有文件（按 name/description 匹配）。
+
+#### 读取记忆
+
+Agent 启动时，记忆索引自动注入 System Prompt。当用户提到历史约定或相关主题时，Agent 会主动 `read_file` 读取对应记忆文件。
+
+#### 记忆边界
+
+- 会话历史保存一次对话过程；项目记忆只沉淀跨对话仍然成立的信息
+- 不保存能从仓库直接读取的内容（代码结构、文件内容等）
+- 不保存 git 已能表达的信息（提交历史、diff 等）
+- 不保存一次性调试过程或临时计划
+- 使用记忆前应先验证当前状态，记忆与实际冲突时以验证为准
+
+#### 忽略记忆
+
+用户输入包含 "忽略记忆" / "ignore memory" 等关键词时，本轮对话不应用任何已保存记忆。
+
+### System Prompt 管道
+
+System Prompt 由 `PromptBuilder` 按管道顺序拼接，每个 Pipe 可根据上下文动态开关：
+
+| Pipe | 说明 |
+|------|------|
+| `coreRules` | 核心行为准则 |
+| `toolGuide` | 工具使用引导 |
+| `deferredTools` | 延迟加载工具摘要 |
+| `runtimeEnvironment` | 运行环境信息（OS、Git 分支等） |
+| `agentMdInstructions` | AGENT.md 项目指令 |
+| `projectMemory` | 项目记忆上下文与索引 |
+| `sessionContext` | 会话信息 |
+
+每轮用户输入时，`buildSystemPrompt(userQuery)` 会根据用户查询动态重建 System Prompt，使记忆上下文可以响应当前意图（如用户要求忽略记忆时，对应内容会被清空）。
 
 ## 命令行参数
 

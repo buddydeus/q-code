@@ -71,6 +71,11 @@ export function fmtRetry(attempt: number, max: number, delay: number): string {
   return `  ${c.yellow(S.arrow)} 重试 ${c.bold(`${attempt}/${max}`)} ${c.dim(`${delay}ms 后`)}`
 }
 
+/** 格式化模型输出触顶后的升级重试提示 */
+export function fmtOutputRetry(fromTokens: number, toTokens: number): string {
+  return `\n  ${c.yellow(S.arrow)} 输出达到 ${fromTokens} tokens 上限，升级到 ${toTokens} tokens 重试`
+}
+
 /** 格式化上下文占用 */
 export function fmtContextUsage(used: number, limit: number, state = 'normal'): string {
   const pct = Math.round((used / limit) * 100)

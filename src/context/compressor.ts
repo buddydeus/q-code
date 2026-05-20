@@ -85,7 +85,12 @@ export async function summarize(
   model: any,
   messages: ModelMessage[],
   existingSummary?: string,
-  options: { force?: boolean; keepRecentMessages?: number } = {}
+  options: {
+    force?: boolean
+    keepRecentMessages?: number
+    maxOutputTokens?: number
+    focus?: string
+  } = {}
 ): Promise<CompactionResult> {
   const keepRecentMessages = options.keepRecentMessages ?? KEEP_RECENT_MESSAGES
   if (!options.force && messages.length <= keepRecentMessages) {
@@ -104,15 +109,20 @@ export async function summarize(
     return { messages, summary: existingSummary || '', compressedCount: 0 }
   }
 
+  const focusPrompt = options.focus
+    ? `\n\n## 压缩重点\n\n用户要求压缩时重点保留：${options.focus}`
+    : ''
   const userPrompt = existingSummary
     ? `## 已有摘要（上一次压缩的结果）\n\n${existingSummary}\n\n## 需要压缩的新对话\n\n${conversationText}`
     : conversationText
+  const focusedPrompt = `${userPrompt}${focusPrompt}`
 
   try {
     const { text: summary } = await generateText({
       model,
       system: COMPRESS_PROMPT,
-      prompt: userPrompt
+      prompt: focusedPrompt,
+      maxOutputTokens: options.maxOutputTokens
     })
 
     const summaryMessage: ModelMessage = {

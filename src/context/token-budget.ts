@@ -28,6 +28,7 @@ export interface UsageAnchor {
 export interface TokenBudgetSnapshot {
   used: number
   limit: number
+  effectiveLimit: number
   compactThreshold: number
   warningThreshold: number
   blockingThreshold: number
@@ -42,6 +43,7 @@ export interface TokenBudgetOptions {
   compactTriggerRatio: number
   warningRatio?: number
   blockingRatio?: number
+  reservedOutputTokens?: number
   usageAnchor?: UsageAnchor
 }
 
@@ -165,9 +167,26 @@ export function buildTokenBudgetSnapshot(
   const used = estimatePromptTokens(messages, options)
   const warningRatio = options.warningRatio ?? Math.max(0.5, options.compactTriggerRatio - 0.05)
   const blockingRatio = options.blockingRatio ?? 0.98
-  const compactThreshold = Math.floor(options.contextLimitTokens * options.compactTriggerRatio)
-  const warningThreshold = Math.floor(options.contextLimitTokens * warningRatio)
-  const blockingThreshold = Math.floor(options.contextLimitTokens * blockingRatio)
+  const reservedOutputTokens = Math.min(
+    options.reservedOutputTokens ?? 0,
+    Math.floor(options.contextLimitTokens * 0.2)
+  )
+  const effectiveLimit = Math.max(1, options.contextLimitTokens - reservedOutputTokens)
+
+  // Keep the user-configured trigger ratio tied to CONTEXT_LIMIT_TOKENS as requested,
+  // but never allow an automatic call to run past the space reserved for the reply.
+  const blockingThreshold = Math.min(
+    Math.floor(options.contextLimitTokens * blockingRatio),
+    effectiveLimit
+  )
+  const compactThreshold = Math.min(
+    Math.floor(options.contextLimitTokens * options.compactTriggerRatio),
+    blockingThreshold
+  )
+  const warningThreshold = Math.min(
+    Math.floor(options.contextLimitTokens * warningRatio),
+    compactThreshold
+  )
 
   let state: ContextWarningState = 'normal'
   if (used >= blockingThreshold) {
@@ -181,6 +200,7 @@ export function buildTokenBudgetSnapshot(
   return {
     used,
     limit: options.contextLimitTokens,
+    effectiveLimit,
     compactThreshold,
     warningThreshold,
     blockingThreshold,
