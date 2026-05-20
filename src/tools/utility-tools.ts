@@ -17,6 +17,9 @@ export const fetchUrlTool: ToolDefinition = {
   },
   isConcurrencySafe: true, // 只读、可并发——抓多个 URL 时直接并行
   isReadOnly: true,
+  contextCost: 'high',
+  resultShape: 'web',
+  jitHint: '先搜索/确认 URL，再抓正文',
   maxResultChars: 1500, // 网页通常很长，截断兜底
   execute: async ({ url }: { url: string }) => {
     try {
@@ -55,6 +58,9 @@ export const globTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'low',
+  resultShape: 'paths',
+  jitHint: '先用它缩小候选文件集',
   execute: async (
     { pattern, path = '.' }: { pattern: string; path?: string },
     context: ToolExecutionContext
@@ -85,6 +91,9 @@ export const grepTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'medium',
+  resultShape: 'lines',
+  jitHint: '用匹配行定位后再读文件',
   maxResultChars: 3000,
   execute: async (
     { pattern, path = '.' }: { pattern: string; path?: string },
@@ -175,6 +184,9 @@ export const startPreviewTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
+  contextCost: 'medium',
+  resultShape: 'state',
+  jitHint: '只在生成应用文件后启动预览',
   execute: async (
     { port = 8080 }: { port?: number } = {},
     context: ToolExecutionContext

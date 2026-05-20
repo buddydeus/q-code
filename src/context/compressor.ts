@@ -1,4 +1,5 @@
 import { generateText, type ModelMessage } from 'ai'
+import { isOffloadMarkerText } from './offload'
 import { estimateMessagesTokens } from './token-budget'
 
 const TOOL_RESULT_PLACEHOLDER = '[old tool result content cleared]'
@@ -192,18 +193,22 @@ function isClearableToolResultPart(
 
 function compactToolResultPart(part: unknown): unknown {
   if (!isClearableToolResultPart(part)) return part
+  const output = compactToolOutput(part.output)
+  if (output === part.output) return part
   return {
     ...part,
-    output: compactToolOutput(part.output)
+    output
   }
 }
 
 function compactToolOutput(output: unknown): unknown {
+  if (typeof output === 'string' && isOffloadMarkerText(output)) return output
   if (!isRecord(output)) return { type: 'text', value: TOOL_RESULT_PLACEHOLDER }
 
   switch (output.type) {
     case 'text':
     case 'error-text':
+      if (typeof output.value === 'string' && isOffloadMarkerText(output.value)) return output
       return { ...output, value: TOOL_RESULT_PLACEHOLDER }
     case 'json':
     case 'error-json':

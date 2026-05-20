@@ -60,6 +60,9 @@ export function createTeamCreateTool(): ToolDefinition {
     },
     isReadOnly: false,
     isConcurrencySafe: false,
+    contextCost: 'medium',
+    resultShape: 'state',
+    jitHint: '只在任务自然需要长期并行角色时创建',
     isEnabled: () => isAgentTeamsEnabled(),
     execute: async (rawInput: TeamCreateInput) => {
       const teamName = typeof rawInput.team_name === 'string' ? rawInput.team_name.trim() : ''
@@ -154,6 +157,9 @@ export function createTeamDeleteTool(): ToolDefinition {
     },
     isReadOnly: false,
     isConcurrencySafe: false,
+    contextCost: 'medium',
+    resultShape: 'state',
+    jitHint: '团队收尾时调用',
     isEnabled: () => isAgentTeamsEnabled(),
     execute: async () => {
       const active = getActiveTeam()
@@ -257,6 +263,9 @@ export function createSendMessageTool(): ToolDefinition {
     },
     isReadOnly: false,
     isConcurrencySafe: true,
+    contextCost: 'low',
+    resultShape: 'state',
+    jitHint: '传递短协调消息，避免粘贴大内容',
     isEnabled: () => isAgentTeamsEnabled(),
     execute: async (rawInput: SendMessageInput, context: ToolExecutionContext) => {
       const to = typeof rawInput.to === 'string' ? rawInput.to.trim() : ''

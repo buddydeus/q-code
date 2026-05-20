@@ -52,6 +52,9 @@ export function createTodoWriteTool(controller: TodoToolController): ToolDefinit
     isConcurrencySafe: false,
     isReadOnly: false,
     allowInPlanMode: true,
+    contextCost: 'low',
+    resultShape: 'state',
+    jitHint: '维护轻量会话清单',
     isEnabled: () => controller.isEnabled?.() ?? true,
     execute: async ({ todos }: { todos: unknown }) => {
       const parsed = parseTodoItems(todos)

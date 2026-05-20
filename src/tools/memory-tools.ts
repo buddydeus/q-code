@@ -32,6 +32,9 @@ export const memoryWriteTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
+  contextCost: 'medium',
+  resultShape: 'mutation',
+  jitHint: '只记录未来仍有用的信息',
   execute: async (input: MemoryWriteInput, context: ToolExecutionContext) => {
     const name = typeof input.name === 'string' ? input.name.trim() : ''
     const description = typeof input.description === 'string' ? input.description.trim() : ''

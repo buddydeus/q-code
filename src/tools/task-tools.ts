@@ -70,6 +70,9 @@ function createTaskCreateTool(controller: TaskToolController): ToolDefinition {
     isConcurrencySafe: false,
     isReadOnly: false,
     allowInPlanMode: true,
+    contextCost: 'low',
+    resultShape: 'state',
+    jitHint: '任务图只返回轻量状态',
     isEnabled: () => controller.getTaskMode() === 'task',
     execute: async (input: Record<string, unknown>) => {
       const subject = pickTrimmedString(input, 'subject')
@@ -132,6 +135,9 @@ function createTaskUpdateTool(controller: TaskToolController): ToolDefinition {
     isConcurrencySafe: false,
     isReadOnly: false,
     allowInPlanMode: true,
+    contextCost: 'low',
+    resultShape: 'state',
+    jitHint: '更新任务状态，不展开代码上下文',
     isEnabled: () => controller.getTaskMode() === 'task',
     execute: async (input: Record<string, unknown>) => {
       const taskId = pickTrimmedString(input, 'taskId')
@@ -189,6 +195,9 @@ function createTaskGetTool(controller: TaskToolController): ToolDefinition {
     isConcurrencySafe: true,
     isReadOnly: true,
     allowInPlanMode: true,
+    contextCost: 'low',
+    resultShape: 'state',
+    jitHint: '按需读取单个任务详情',
     isEnabled: () => controller.getTaskMode() === 'task',
     execute: async (input: Record<string, unknown>) => {
       const taskId = pickTrimmedString(input, 'taskId')
@@ -214,6 +223,9 @@ function createTaskListTool(controller: TaskToolController): ToolDefinition {
     isConcurrencySafe: true,
     isReadOnly: true,
     allowInPlanMode: true,
+    contextCost: 'low',
+    resultShape: 'state',
+    jitHint: '开始前和完成后查看轻量任务列表',
     isEnabled: () => controller.getTaskMode() === 'task',
     execute: async () => {
       return formatTaskList(await listTasks(getTaskOptions(controller)))

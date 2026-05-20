@@ -14,6 +14,9 @@ export const bashTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
+  contextCost: 'high',
+  resultShape: 'command-output',
+  jitHint: '优先运行聚焦命令，避免一次性输出海量日志',
   maxResultChars: 3000,
   execute: async ({ command }: { command: string }, context: ToolExecutionContext) => {
     try {

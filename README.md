@@ -86,7 +86,8 @@ src/
 │   └── retry.ts          # 步骤级重试 + 指数退避
 ├── context/
 │   ├── prompt-builder.ts # System Prompt 管道组装
-│   ├── compressor.ts     # 两级上下文压缩
+│   ├── compressor.ts     # Microcompact + Summarization
+│   ├── offload.ts        # Context Offloading：大工具结果落盘
 │   ├── token-budget.ts   # Token 预算估算与状态追踪
 │   ├── auto-compact.ts   # 压缩熔断器
 │   ├── agent-md.ts       # AGENT.md 项目指令加载
@@ -217,12 +218,67 @@ src/
 
 **输出触顶升级**：普通输出 8000 token；因 `length` 触顶且无工具调用时，升级到 64000 token 重试一次。
 
-### 2. 上下文压缩系统
+### 2. JIT Context 与上下文压缩系统
 
-当上下文占用 ≥ 85%（`COMPACT_TRIGGER_RATIO`）时自动触发，分两级：
+q-code 采用 JIT Context 策略：上下文不在启动时一次性塞满，而是在任务推进到需要证据时再逐步进入模型。目标是减少 Context Rot，降低大仓库、多工具和长会话下的无效 token。
 
-- **Microcompact** — 清理旧工具结果，替换为占位符，保留最近 3 个
-- **Summarization** — 用独立的摘要模型将旧对话压缩为结构化摘要（用户意图 / 已完成操作 / 关键发现 / 当前状态 / 需保留细节），保留最近 8 条消息
+#### Prompt Discipline
+
+System Prompt 会注入固定的 JIT 纪律：
+
+- 不要一开始批量读取可能无关的大文件、网页或长命令输出
+- 代码/文件探索优先走 `list_directory/glob → grep → read_file`，先定位路径和行号，再读取精确片段
+- 只把能推进当前判断的最小证据放进主上下文
+- 宽搜索、噪音探索或可并行调查优先交给 `Agent` / `Explore`，主上下文只接收摘要
+- Skills、SubAgents、MCP 工具都按渐进式披露工作：先看名称/摘要/Schema，必要时再加载正文或执行高成本工具
+
+#### 工具成本阶梯
+
+每个工具可以声明 JIT 元数据：
+
+| 字段          | 说明                                                 |
+| ------------- | ---------------------------------------------------- |
+| `contextCost` | `low` / `medium` / `high`，表示结果进入上下文的成本  |
+| `resultShape` | 结果形态，如 `paths`、`lines`、`file`、`web`、`state` |
+| `jitHint`     | 给模型的简短使用建议                                 |
+
+`ToolRegistry.getJitToolSummary()` 会按当前 active 工具生成“工具成本阶梯”，并注入 System Prompt。典型分层：
+
+| 成本     | 典型工具                              | 使用方式                         |
+| -------- | ------------------------------------- | -------------------------------- |
+| 低成本   | `list_directory`、`glob`、`task_list` | 先看轮廓、路径、轻量状态         |
+| 中成本   | `grep`、`web_search`、`Skill`、`Agent`| 定位匹配行、拿摘要、隔离宽探索   |
+| 高成本   | `read_file`、`web_fetch`、`f`         | 只在目标明确后读取全文或长输出   |
+
+MCP 工具默认 `shouldDefer: true`，只有通过 `tool_search` 激活后才进入 active 工具列表；其元数据也会随 Schema 返回，保持外部工具的渐进式披露。
+
+#### Context Offloading
+
+当上下文占用 ≥ 85%（`COMPACT_TRIGGER_RATIO`）或手动 `/compact` 触发压缩时，q-code 会先执行 Context Offloading，再进入 microcompact 和摘要：
+
+1. **Context Offloading** — 将大工具结果的原文写入磁盘，只在消息里保留 marker、绝对路径、字符数、恢复说明和头尾预览
+2. **Microcompact** — 清理旧工具结果，替换为占位符，保留最近 3 个；已 offload 的 marker 会被保留，避免丢失恢复路径
+3. **Summarization** — 用独立的摘要模型将旧对话压缩为结构化摘要（用户意图 / 已完成操作 / 关键发现 / 当前状态 / 需保留细节），保留最近 8 条消息
+
+Offload 文件路径：
+
+```text
+.sessions/projects/<projectKey>/offloads/<sessionId>/tool-result-0001-<hash>.txt
+```
+
+marker 示例：
+
+```text
+[tool result offloaded]
+tool: read_file
+original_chars: 24000
+file: /abs/path/.sessions/projects/<projectKey>/offloads/<sessionId>/tool-result-0001-<hash>.txt
+restore: 如需完整原始工具结果，使用 read_file 读取上面的 file 路径。
+preview:
+...
+```
+
+Offloading 是无损的：摘要模型只看到短 marker 和预览，后续 Agent 如果确实需要完整结果，可以用 `read_file` 读取 marker 中的文件路径。
 
 **触发时机**：
 
@@ -280,7 +336,8 @@ src/
 
 - `isConcurrencySafe` 工具可并发执行
 - 非 safe 工具独占执行，互斥等待
-- 工具结果超过 3000 字符时自动截断（保留头 60% + 尾部）
+- 工具可声明 `contextCost` / `resultShape` / `jitHint`，System Prompt 会自动生成当前工具成本阶梯
+- 工具结果超过各自 `maxResultChars` 时自动截断（保留头 60% + 尾部）
 - 工具执行上下文带 `cwd`，子 Agent 使用 worktree 隔离时，文件、Shell、grep/glob、记忆写入等工具都会相对 worktree 执行
 
 ### 5. Plan Mode — 规划模式

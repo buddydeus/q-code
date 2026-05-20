@@ -118,6 +118,9 @@ export function createAgentTool(
     },
     isConcurrencySafe: false,
     isReadOnly: false,
+    contextCost: 'medium',
+    resultShape: 'agent-report',
+    jitHint: '把宽探索交给独立上下文，主上下文只收摘要',
     isEnabled: () => getAllAgents().length > 0,
     maxResultChars: 20000,
     execute: async (rawInput: AgentInput, context: ToolExecutionContext) => {

@@ -33,6 +33,9 @@ export function createSkillTool(controller: SkillToolController): ToolDefinition
     },
     isConcurrencySafe: false,
     isReadOnly: false,
+    contextCost: 'medium',
+    resultShape: 'meta',
+    jitHint: '命中 Skill 时才加载完整工作流',
     isEnabled: () => getModelVisibleSkills().length > 0,
     execute: async (input: SkillInput) => {
       const name = typeof input.skill === 'string' ? input.skill.trim() : ''

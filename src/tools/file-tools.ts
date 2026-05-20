@@ -64,6 +64,9 @@ export const readFileTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'high',
+  resultShape: 'file',
+  jitHint: '先定位行号或范围，再分段读取',
   maxResultChars: MAX_READ_MAX_CHARS + 2000,
   execute: async (input: ReadFileInput, context: ToolExecutionContext) => {
     try {
@@ -350,6 +353,9 @@ export const writeFileTool: ToolDefinition = {
   },
   isConcurrencySafe: false, // 写操作不能并行
   isReadOnly: false,
+  contextCost: 'high',
+  resultShape: 'mutation',
+  jitHint: '写入前确认目标路径和完整内容',
   execute: async ({ path, content }: { path: string; content: string }, context: ToolExecutionContext) => {
     writeFileSync(resolve(context.cwd, path), content, 'utf-8')
     return `已写入 ${content.length} 字符到 ${path}`
@@ -369,6 +375,9 @@ export const listDirectoryTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'low',
+  resultShape: 'paths',
+  jitHint: '用于先看目录轮廓',
   execute: async ({ path = '.' }: { path?: string }, context: ToolExecutionContext) => {
     const resolved = resolve(context.cwd, path)
     return readdirSync(resolved)
@@ -396,6 +405,9 @@ export const editFileTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
+  contextCost: 'high',
+  resultShape: 'mutation',
+  jitHint: '修改前先 read_file 获取精确上下文',
   execute: async ({ path, old_string, new_string }, context: ToolExecutionContext) => {
     const resolved = resolve(context.cwd, path)
     if (!existsSync(resolved)) return `文件不存在: ${path}`

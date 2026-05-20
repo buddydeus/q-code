@@ -16,6 +16,9 @@ export const tavilySearchTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'medium',
+  resultShape: 'summary',
+  jitHint: '先拿摘要和链接',
   maxResultChars: 3000,
   execute: async ({ query, max_results = 5 }: { query: string; max_results?: number }) => {
     const apiKey = process.env.TAVILY_API_KEY
@@ -67,6 +70,9 @@ export const serperSearchTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'medium',
+  resultShape: 'summary',
+  jitHint: '先拿摘要和链接',
   maxResultChars: 3000,
   execute: async ({ query, max_results = 5 }: { query: string; max_results?: number }) => {
     const apiKey = process.env.SERPER_API_KEY
@@ -121,6 +127,9 @@ export const webFetchTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
+  contextCost: 'high',
+  resultShape: 'web',
+  jitHint: '只读取已确认相关的页面',
   maxResultChars: 3000,
   execute: async ({ url }: { url: string }) => {
     try {

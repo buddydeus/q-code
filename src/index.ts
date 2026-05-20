@@ -39,6 +39,7 @@ import {
 } from './context/prompt-builder'
 import { SessionStore } from './session/store'
 import { microcompact, summarize } from './context/compressor'
+import { offloadLargeToolResults } from './context/offload'
 import { CompactionCircuitBreaker } from './context/auto-compact'
 import { loadAgentMdContext } from './context/agent-md'
 import {
@@ -359,6 +360,7 @@ async function main() {
     const promptCtx: PromptContext = {
       toolCount: registry.getActiveTools().length,
       deferredToolSummary: registry.getDeferredToolSummary(),
+      jitToolSummary: registry.getJitToolSummary(),
       sessionMessageCount: messages.length,
       sessionId,
       agentMode,
@@ -379,6 +381,7 @@ async function main() {
   const initialPromptCtx: PromptContext = {
     toolCount: registry.getActiveTools().length,
     deferredToolSummary: registry.getDeferredToolSummary(),
+    jitToolSummary: registry.getJitToolSummary(),
     sessionMessageCount: messages.length,
     sessionId,
     agentMode,
@@ -461,7 +464,19 @@ async function main() {
       `\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens ${triggerText}...`
     )
 
-    const mc = microcompact(currentMessages)
+    const offload = await offloadLargeToolResults(currentMessages, {
+      cwd: activeStore.cwd,
+      sessionId
+    })
+    let messagesForCompaction = offload.messages
+    if (offload.offloaded > 0) {
+      const totalChars = offload.entries.reduce((sum, entry) => sum + entry.originalChars, 0)
+      console.log(
+        `  [Context offload] 卸载了 ${offload.offloaded} 个大工具结果 (${totalChars} chars)`
+      )
+    }
+
+    const mc = microcompact(messagesForCompaction)
     let nextMessages = mc.messages
     if (mc.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc.cleared} 个工具结果`)
 
@@ -479,7 +494,7 @@ async function main() {
     }
 
     const after = snapshotContext(nextMessages, systemPrompt)
-    const changed = mc.cleared > 0 || comp.compressedCount > 0
+    const changed = offload.offloaded > 0 || mc.cleared > 0 || comp.compressedCount > 0
     const reduced = after.used < beforeForReduction.used
 
     if (changed && reduced) {

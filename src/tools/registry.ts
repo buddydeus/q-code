@@ -1,5 +1,21 @@
 import { jsonSchema } from 'ai'
 import { fmtLockAcquire } from '../utils/logger'
+
+export type ToolContextCost = 'low' | 'medium' | 'high'
+
+export type ToolResultShape =
+  | 'paths'
+  | 'lines'
+  | 'file'
+  | 'command-output'
+  | 'web'
+  | 'state'
+  | 'meta'
+  | 'summary'
+  | 'mutation'
+  | 'agent-report'
+  | 'unknown'
+
 export interface ToolDefinition {
   name: string
   description: string
@@ -12,6 +28,9 @@ export interface ToolDefinition {
   execute: (input: any, context: ToolExecutionContext) => Promise<unknown>
   shouldDefer?: boolean
   searchHint?: string
+  contextCost?: ToolContextCost
+  resultShape?: ToolResultShape
+  jitHint?: string
 }
 
 export interface TeammateIdentity {
@@ -43,6 +62,29 @@ export type ToolVisibilityMode = 'normal' | 'plan'
 // intentionally high enough for normal file/search work; noisy integrations
 // such as MCP tools can still opt into a smaller per-tool limit.
 const DEFAULT_MAX_RESULT_CHARS = 100000
+
+const COST_ORDER: ToolContextCost[] = ['low', 'medium', 'high']
+const COST_LABELS: Record<ToolContextCost, string> = {
+  low: '低成本',
+  medium: '中成本',
+  high: '高成本'
+}
+
+const RESULT_SHAPE_LABELS: Record<ToolResultShape, string> = {
+  paths: '路径列表',
+  lines: '匹配行',
+  file: '文件内容',
+  'command-output': '命令输出',
+  web: '网页/外部内容',
+  state: '状态',
+  meta: '元信息',
+  summary: '摘要',
+  mutation: '写入/变更结果',
+  'agent-report': '子 Agent 报告',
+  unknown: '未知形态'
+}
+
+const COST_SUMMARY_MAX_TOOLS_PER_BUCKET = 10
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>()
@@ -184,6 +226,32 @@ export class ToolRegistry {
     return { active, deferred, total: active + deferred }
   }
 
+  getJitToolSummary(): string {
+    const buckets = new Map<ToolContextCost, ToolDefinition[]>()
+    for (const cost of COST_ORDER) buckets.set(cost, [])
+
+    for (const tool of this.getActiveTools()) {
+      const cost = getToolContextCost(tool)
+      buckets.get(cost)?.push(tool)
+    }
+
+    const lines: string[] = []
+    for (const cost of COST_ORDER) {
+      const tools = buckets
+        .get(cost)!
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+      if (tools.length === 0) continue
+
+      const shown = tools.slice(0, COST_SUMMARY_MAX_TOOLS_PER_BUCKET).map(formatToolForJitSummary)
+      const omitted = tools.length - shown.length
+      const suffix = omitted > 0 ? `，另 ${omitted} 个` : ''
+      lines.push(`${COST_LABELS[cost]}: ${shown.join('；')}${suffix}`)
+    }
+
+    return lines.join('\n')
+  }
+
   private async acquireConcurrent(): Promise<void> {
     while (this.exclusiveLock) {
       await new Promise<void>((r) => this.waitQueue.push(r))
@@ -254,6 +322,17 @@ export class ToolRegistry {
     }
     return result
   }
+}
+
+function getToolContextCost(tool: ToolDefinition): ToolContextCost {
+  if (tool.contextCost) return tool.contextCost
+  return tool.isReadOnly ? 'medium' : 'high'
+}
+
+function formatToolForJitSummary(tool: ToolDefinition): string {
+  const shape = RESULT_SHAPE_LABELS[tool.resultShape ?? 'unknown']
+  const hint = tool.jitHint ? `，${tool.jitHint}` : ''
+  return `${tool.name}(${shape}${hint})`
 }
 
 export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESULT_CHARS): string {

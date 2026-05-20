@@ -18,12 +18,18 @@ export function createToolSearchTool(registry: ToolRegistry): ToolDefinition {
     },
     isConcurrencySafe: true,
     isReadOnly: true,
+    contextCost: 'low',
+    resultShape: 'meta',
+    jitHint: '只在需要延迟工具时展开定义',
     execute: async ({ query }: { query: string }) => {
       const results = registry.searchTools(query)
       if (results.length === 0) return `没有找到匹配 "${query}" 的工具`
       return results.map((tool) => ({
         name: tool.name,
         description: tool.description,
+        contextCost: tool.contextCost,
+        resultShape: tool.resultShape,
+        jitHint: tool.jitHint,
         parameters: tool.parameters
       }))
     }

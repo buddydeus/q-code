@@ -1,6 +1,7 @@
 export interface PromptContext {
   toolCount: number
   deferredToolSummary: string
+  jitToolSummary?: string
   sessionMessageCount: number
   sessionId: string
   agentMode?: string
@@ -64,7 +65,18 @@ export function coreRules(): PipeFn {
 export function toolGuide(): PipeFn {
   return (ctx) => {
     if (ctx.toolCount === 0) return null
-    return `你有 ${ctx.toolCount} 个工具可用。需要操作本地文件时使用内置工具，需要访问外部服务时使用 MCP 工具。`
+    return [
+      `你有 ${ctx.toolCount} 个工具可用。需要操作本地文件时使用内置工具，需要访问外部服务时使用 MCP 工具。`,
+      '',
+      '[JIT Context Discipline]',
+      '- 上下文应在需要时进入，不要在一开始批量读取可能无关的大文件、网页或长命令输出。',
+      '- 代码/文件探索优先使用低成本到高成本阶梯：list_directory/glob → grep → read_file 的精确行段。',
+      '- 只把能推进当前判断的最小证据放进主上下文；宽搜索、噪音探索或可并行调查优先交给 Agent/Explore。',
+      '- Skill、SubAgent、MCP 工具都遵循渐进式披露：先看名称/摘要/Schema，必要时再加载正文或执行高成本工具。',
+      ctx.jitToolSummary ? ['', '当前工具成本阶梯：', ctx.jitToolSummary].join('\n') : null
+    ]
+      .filter((line): line is string => line !== null)
+      .join('\n')
   }
 }
 
