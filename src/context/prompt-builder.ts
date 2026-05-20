@@ -9,6 +9,7 @@ export interface PromptContext {
   taskContext?: string
   todoContext?: string
   skillsContext?: string
+  agentsContext?: string
   runtimeContext?: string
   agentMdContext?: string
   memoryContext?: string
@@ -77,6 +78,13 @@ export function skillsContext(): PipeFn {
   return (ctx) => {
     if (!ctx.skillsContext) return null
     return ctx.skillsContext
+  }
+}
+
+export function agentsContext(): PipeFn {
+  return (ctx) => {
+    if (!ctx.agentsContext) return null
+    return ctx.agentsContext
   }
 }
 

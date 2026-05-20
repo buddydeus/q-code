@@ -7,7 +7,8 @@
     "start": "tsx src/index.ts",
     "continue": "tsx src/index.ts --continue",
     "test:mcp": "tsx src/scripts/test-mcp.ts",
-    "test:skills": "tsx src/scripts/test-skills.ts"
+    "test:skills": "tsx src/scripts/test-skills.ts",
+    "test:agents": "tsx src/scripts/test-agents.ts"
   },
   "keywords": [],
   "author": "Bryce",

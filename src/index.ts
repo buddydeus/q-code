@@ -6,17 +6,19 @@ import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
 import {
   allTools,
+  createAgentTool,
   createSkillTool,
   createPlanTools,
   createTaskTools,
   createTodoWriteTool,
-  ToolRegistry,
-  type ToolDefinition
+  createToolSearchTool,
+  ToolRegistry
 } from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
 import {
   coreRules,
   deferredTools,
+  agentsContext,
   agentMdInstructions,
   modeContext,
   PromptBuilder,
@@ -79,6 +81,10 @@ import { formatSkillsSystemReminder } from './skills/budget'
 import { activateConditionalSkillsForPaths, extractToolFilePaths } from './skills/conditional'
 import { expandSkillSlashCommand } from './skills/invocation'
 import { getAllUserInvocableSkills, getModelVisibleSkills } from './skills/registry'
+import { bootstrapAgents } from './agents/bootstrap'
+import { formatAgentsSystemReminder } from './agents/prompt-injection'
+import { getAllAgents } from './agents/registry'
+import { getProjectAgentsDir, getUserAgentsDir } from './agents/load-agents-dir'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -95,36 +101,7 @@ const compactTriggerTokens = Math.floor(contextLimitTokens * compactTriggerRatio
 
 const registry = new ToolRegistry()
 registry.register(...allTools)
-
-const toolSearchTool: ToolDefinition = {
-  name: 'tool_search',
-  description:
-    '获取延迟工具的完整定义。传入工具名（从系统提示的延迟工具列表中选取），返回该工具的完整参数 Schema',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description: '工具名，如 "mcp__github__list_issues"。支持逗号分隔多个工具名'
-      }
-    },
-    required: ['query'],
-    additionalProperties: false
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  execute: async ({ query }: { query: string }) => {
-    const results = registry.searchTools(query)
-    if (results.length === 0) return `没有找到匹配 "${query}" 的工具`
-    return results.map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters
-    }))
-  }
-}
-
-registry.register(toolSearchTool)
+registry.register(createToolSearchTool(registry))
 
 async function connectMCP(options: { quiet?: boolean; cwd?: string } = {}) {
   const quiet = options.quiet === true
@@ -183,13 +160,13 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function createModel() {
+function createModel(modelName?: string) {
   const openai = createOpenAI({
     baseURL: normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL')),
     apiKey: getRequiredEnv('OPENAI_API_KEY')
   })
 
-  return openai.chat(getRequiredEnv('OPENAI_MODEL'))
+  return openai.chat(modelName || getRequiredEnv('OPENAI_MODEL'))
 }
 
 function createSummaryModel() {
@@ -230,6 +207,13 @@ async function main() {
   })
   if (!dumpSystemPrompt) {
     for (const warning of skillsBootstrap.warnings) console.log(`  ${warning}`)
+  }
+  const agentsBootstrap = await bootstrapAgents(store?.cwd ?? process.cwd()).catch((error) => {
+    if (!dumpSystemPrompt) console.log(`  [Agents] 启动失败: ${formatErrorMessage(error)}`)
+    return { agentCount: 0, customCount: 0, warnings: [] }
+  })
+  if (!dumpSystemPrompt) {
+    for (const warning of agentsBootstrap.warnings) console.log(`  ${warning}`)
   }
   const planOptions: PlanFileOptions = {
     cwd: store?.cwd ?? process.cwd(),
@@ -305,6 +289,18 @@ async function main() {
     getRuntimeEnvironmentContext().then(formatRuntimeEnvironmentContext),
     loadAgentMdContext()
   ])
+  registry.register(
+    createAgentTool({
+      createModel,
+      getDefaultModelName: () => getRequiredEnv('OPENAI_MODEL'),
+      getAvailableTools: () => registry.getVisibleTools(),
+      getRuntimeContext: () => runtimeContext,
+      getAgentMdContext: () => agentMdContext,
+      getTokenBudget: () => tokenBudget,
+      getMaxOutputTokens: () => defaultMaxOutputTokens,
+      getEscalatedMaxOutputTokens: () => escalatedMaxOutputTokens
+    })
+  )
 
   // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()
@@ -316,6 +312,7 @@ async function main() {
     .pipe('todoGuide', todoGuide())
     .pipe('todoContext', todoContext())
     .pipe('skillsContext', skillsContext())
+    .pipe('agentsContext', agentsContext())
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())
     .pipe('agentMdInstructions', agentMdInstructions())
@@ -335,6 +332,7 @@ async function main() {
       taskContext: await getCurrentTaskContext(),
       todoContext: getCurrentTodoContext(),
       skillsContext: formatSkillsSystemReminder(getModelVisibleSkills()),
+      agentsContext: formatAgentsSystemReminder(getAllAgents()),
       runtimeContext,
       agentMdContext,
       memoryContext
@@ -353,6 +351,7 @@ async function main() {
     taskContext: await getCurrentTaskContext(),
     todoContext: getCurrentTodoContext(),
     skillsContext: formatSkillsSystemReminder(getModelVisibleSkills()),
+    agentsContext: formatAgentsSystemReminder(getAllAgents()),
     runtimeContext,
     agentMdContext,
     memoryContext: await buildMemorySystemContext()
@@ -468,6 +467,7 @@ async function main() {
   const activeTools = registry.getActiveTools()
   console.log(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
   console.log(`Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`)
+  console.log(`SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`)
   console.log(`任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`)
   if (agentMode === 'plan') console.log(`Plan 文件: ${planFilePath}`)
   console.log(
@@ -522,6 +522,11 @@ async function main() {
       }
       if (trimmed === '/mcp' || trimmed.startsWith('/mcp ')) {
         await handleMcpCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
+      if (trimmed === '/agents' || trimmed.startsWith('/agents ')) {
+        handleAgentsCommand(trimmed)
         if (!closed) ask()
         return
       }
@@ -827,6 +832,45 @@ async function main() {
     console.log('\n' + lines.join('\n'))
   }
 
+  function handleAgentsCommand(command: string): void {
+    const arg = command.slice('/agents'.length).trim()
+    if (arg) {
+      console.log('\n  [Agents] 用法: /agents')
+      return
+    }
+
+    const agents = getAllAgents()
+    if (agents.length === 0) {
+      console.log('\nSubAgents (0 loaded)')
+      console.log('  没有找到 SubAgents。可添加到:')
+      console.log(`  ${getUserAgentsDir()}/<name>.md`)
+      console.log(`  ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`)
+      return
+    }
+
+    const lines = [`SubAgents (${agents.length} loaded)`, '']
+    for (const agent of agents) {
+      const traits = [
+        agent.source,
+        agent.readOnlyOnly ? 'read-only' : null,
+        agent.model ? `model=${agent.model}` : null,
+        agent.maxTurns ? `maxTurns=${agent.maxTurns}` : null
+      ].filter((item): item is string => item !== null)
+      const tools = agent.tools?.length ? agent.tools.join(',') : '*'
+      const disallowed = agent.disallowedTools?.length
+        ? ` disallowed=${agent.disallowedTools.join(',')}`
+        : ''
+      lines.push(`- ${agent.agentType} [${traits.join(', ')}] tools=${tools}${disallowed}`)
+      lines.push(`  ${agent.whenToUse}`)
+    }
+    lines.push('')
+    lines.push('自定义 SubAgent 文件:')
+    lines.push(`  用户级: ${getUserAgentsDir()}/<name>.md`)
+    lines.push(`  项目级: ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`)
+    lines.push('修改 agent 文件后需要重启 q-code。')
+    console.log('\n' + lines.join('\n'))
+  }
+
   async function handleApprovePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
     if (!content?.trim()) {
@@ -923,7 +967,7 @@ async function main() {
     })
   }
 
-  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills。\n')
+  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents。\n')
   ask()
 }
 

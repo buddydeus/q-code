@@ -60,6 +60,7 @@ export interface AgentLoopOptions {
   tokenBudget?: number
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
+  maxSteps?: number
   preflight?: (
     messages: ModelMessage[],
     context: { step: number; usageAnchor?: UsageAnchor }
@@ -86,13 +87,14 @@ export async function agentLoop(
   let usageAnchor: UsageAnchor | undefined
   const tokenBudget = options.tokenBudget ?? DEFAULT_TOKEN_BUDGET
   const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
+  const maxSteps = options.maxSteps ?? MAX_STEPS
   const escalatedMaxOutputTokens =
     options.escalatedMaxOutputTokens ?? DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS
   const newMessages: ModelMessage[] = []
   const taskStart = Date.now()
   resetHistory()
 
-  while (step < MAX_STEPS) {
+  while (step < maxSteps) {
     step++
     console.log(fmtStepHeader(step))
     if (options.preflight) {
@@ -314,7 +316,7 @@ export async function agentLoop(
     console.log(fmtContinue())
   }
 
-  if (step >= MAX_STEPS) {
+  if (step >= maxSteps) {
     console.log(fmtStop('达到最大步数限制，强制停止'))
   }
 
