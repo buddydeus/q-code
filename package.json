@@ -12,6 +12,7 @@
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/openai": "^3.0.58",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/turndown": "^5.0.6",
     "ai": "^6.0.174",
     "dotenv": "^17.4.2",

@@ -1,5 +1,4 @@
 import { jsonSchema } from 'ai'
-import { MCPClient } from './mcp-client'
 import { fmtLockAcquire } from '../utils/logger'
 export interface ToolDefinition {
   name: string
@@ -24,7 +23,6 @@ const DEFAULT_MAX_RESULT_CHARS = 100000
 
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>()
-  private mcpClients: Array<MCPClient> = []
   private visibilityMode: ToolVisibilityMode = 'normal'
 
   private exclusiveLock = false
@@ -39,6 +37,17 @@ export class ToolRegistry {
     }
   }
 
+  unregisterByPrefix(prefix: string): number {
+    let removed = 0
+    for (const name of Array.from(this.tools.keys())) {
+      if (!name.startsWith(prefix)) continue
+      this.tools.delete(name)
+      this.discoveredTools.delete(name)
+      removed++
+    }
+    return removed
+  }
+
   setMode(mode: ToolVisibilityMode): void {
     this.visibilityMode = mode
   }
@@ -47,45 +56,9 @@ export class ToolRegistry {
     return this.visibilityMode
   }
 
-  async registerMCPServer(serverName: string, client: MCPClient): Promise<string[]> {
-    await client.connect()
-    this.mcpClients.push(client)
-
-    const tools = await client.listTools()
-    const registered: string[] = []
-
-    for (const tool of tools) {
-      const prefixedName = `mcp__${serverName}__${tool.name}`
-      if (this.tools.has(prefixedName)) continue
-
-      const toolClient = client
-      const originalName = tool.name
-
-      this.register({
-        name: prefixedName,
-        description: `[MCP:${serverName}] ${tool.description}`,
-        parameters: tool.inputSchema as Record<string, unknown>,
-        isConcurrencySafe: true,
-        isReadOnly: inferMCPToolReadOnly(tool.name, tool.description),
-        maxResultChars: 3000,
-        shouldDefer: true,
-        searchHint: `${serverName} ${tool.name} ${tool.description}`,
-        execute: async (input: any) => {
-          return toolClient.callTool(originalName, input)
-        }
-      })
-
-      registered.push(prefixedName)
-    }
-
-    return registered
-  }
-
   async closeAllMCP(): Promise<void> {
-    for (const client of this.mcpClients) {
-      await client.close()
-    }
-    this.mcpClients = []
+    // MCP connections are owned by src/mcp/client.ts. This method remains as
+    // a compatibility no-op for older call sites.
   }
 
   get(name: string): ToolDefinition | undefined {
@@ -261,43 +234,4 @@ function isToolVisibleInMode(tool: ToolDefinition, mode: ToolVisibilityMode): bo
   }
 
   return tool.name !== 'plan_write' && tool.name !== 'exit_plan_mode'
-}
-
-function inferMCPToolReadOnly(name: string, description: unknown): boolean {
-  const text = `${name} ${typeof description === 'string' ? description : ''}`.toLowerCase()
-  const writeSignals = [
-    'add',
-    'approve',
-    'assign',
-    'close',
-    'commit',
-    'create',
-    'delete',
-    'edit',
-    'fork',
-    'merge',
-    'mutate',
-    'open pull',
-    'patch',
-    'post',
-    'publish',
-    'put',
-    'remove',
-    'reopen',
-    'request review',
-    'set',
-    'submit',
-    'unassign',
-    'update',
-    'write'
-  ]
-  if (writeSignals.some((signal) => hasWordSignal(text, signal))) return false
-
-  const readSignals = ['fetch', 'find', 'get', 'list', 'query', 'read', 'search', 'show']
-  return readSignals.some((signal) => hasWordSignal(text, signal))
-}
-
-function hasWordSignal(text: string, signal: string): boolean {
-  const escaped = signal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(text)
 }
