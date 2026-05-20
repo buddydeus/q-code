@@ -6,6 +6,7 @@ import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
 import {
   allTools,
+  createSkillTool,
   createPlanTools,
   createTaskTools,
   createTodoWriteTool,
@@ -23,6 +24,7 @@ import {
   projectMemory,
   runtimeEnvironment,
   sessionContext,
+  skillsContext,
   taskContext,
   taskGuide,
   todoContext,
@@ -72,6 +74,11 @@ import {
 } from './mcp/bootstrap'
 import { getMcpSettingsPaths } from './mcp/config'
 import { getMcpRegistry, getMcpRegistryEntry, resolveMcpRegistryName } from './mcp/registry'
+import { bootstrapSkills } from './skills/bootstrap'
+import { formatSkillsSystemReminder } from './skills/budget'
+import { activateConditionalSkillsForPaths, extractToolFilePaths } from './skills/conditional'
+import { expandSkillSlashCommand } from './skills/invocation'
+import { getAllUserInvocableSkills, getModelVisibleSkills } from './skills/registry'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -217,6 +224,13 @@ async function main() {
     ? null
     : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
   const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
+  const skillsBootstrap = await bootstrapSkills(store?.cwd ?? process.cwd()).catch((error) => {
+    if (!dumpSystemPrompt) console.log(`  [Skills] 启动失败: ${formatErrorMessage(error)}`)
+    return { skillCount: 0, conditionalCount: 0, warnings: [] }
+  })
+  if (!dumpSystemPrompt) {
+    for (const warning of skillsBootstrap.warnings) console.log(`  ${warning}`)
+  }
   const planOptions: PlanFileOptions = {
     cwd: store?.cwd ?? process.cwd(),
     sessionId
@@ -264,6 +278,7 @@ async function main() {
       isEnabled: () => taskMode === 'todo'
     })
   )
+  registry.register(createSkillTool({ getSessionId: () => sessionId }))
   registry.setMode(agentMode)
 
   let messages: ModelMessage[] = []
@@ -300,6 +315,7 @@ async function main() {
     .pipe('taskContext', taskContext())
     .pipe('todoGuide', todoGuide())
     .pipe('todoContext', todoContext())
+    .pipe('skillsContext', skillsContext())
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())
     .pipe('agentMdInstructions', agentMdInstructions())
@@ -318,6 +334,7 @@ async function main() {
       planFilePath,
       taskContext: await getCurrentTaskContext(),
       todoContext: getCurrentTodoContext(),
+      skillsContext: formatSkillsSystemReminder(getModelVisibleSkills()),
       runtimeContext,
       agentMdContext,
       memoryContext
@@ -335,6 +352,7 @@ async function main() {
     planFilePath,
     taskContext: await getCurrentTaskContext(),
     todoContext: getCurrentTodoContext(),
+    skillsContext: formatSkillsSystemReminder(getModelVisibleSkills()),
     runtimeContext,
     agentMdContext,
     memoryContext: await buildMemorySystemContext()
@@ -449,6 +467,7 @@ async function main() {
 
   const activeTools = registry.getActiveTools()
   console.log(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
+  console.log(`Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`)
   console.log(`任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`)
   if (agentMode === 'plan') console.log(`Plan 文件: ${planFilePath}`)
   console.log(
@@ -506,6 +525,11 @@ async function main() {
         if (!closed) ask()
         return
       }
+      if (trimmed === '/skills' || trimmed.startsWith('/skills ')) {
+        handleSkillsCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
       if (trimmed === '/approve-plan') {
         await handleApprovePlanCommand()
         if (!closed) ask()
@@ -522,6 +546,13 @@ async function main() {
         return
       }
 
+      const skillExpansion = expandSkillSlashCommand(trimmed, sessionId)
+      if (skillExpansion) {
+        console.log(`\n  [Skill] /${skillExpansion.skill.name}`)
+        await runAgentTurnWithMessages(skillExpansion.messages, trimmed)
+        return
+      }
+
       await runAgentTurn(trimmed)
     } catch (error) {
       console.log(fmtStop(`本轮执行失败: ${formatErrorMessage(error)}`))
@@ -531,12 +562,16 @@ async function main() {
   }
 
   async function runAgentTurn(userContent: string): Promise<void> {
+    const userMsg: ModelMessage = { role: 'user', content: userContent }
+    await runAgentTurnWithMessages([userMsg], userContent)
+  }
+
+  async function runAgentTurnWithMessages(userMessages: ModelMessage[], userQuery: string): Promise<void> {
     await injectPlanModeMessages()
 
-    const userMsg: ModelMessage = { role: 'user', content: userContent }
-    messages.push(userMsg)
-    activeStore.append(userMsg)
-    const turnSystem = await buildSystemPrompt(userContent)
+    messages.push(...userMessages)
+    activeStore.appendAll(userMessages)
+    const turnSystem = await buildSystemPrompt(userQuery)
 
     const loopResult = await agentLoop(model, registry, messages, turnSystem, {
       tokenBudget,
@@ -565,6 +600,11 @@ async function main() {
         }
         if (event.name.startsWith('task_') && typeof event.output === 'string') {
           console.log(`\n${event.output}`)
+        }
+        const filePaths = extractToolFilePaths(event.name, event.input)
+        const activated = activateConditionalSkillsForPaths(filePaths, activeStore.cwd)
+        if (activated.length > 0) {
+          console.log(`\n  [Skills] 条件激活: ${activated.join(', ')}`)
         }
       }
     })
@@ -755,6 +795,38 @@ async function main() {
     console.log('\n  [MCP] 用法: /mcp、/mcp tools <serverName>、/mcp reconnect <serverName>')
   }
 
+  function handleSkillsCommand(command: string): void {
+    const arg = command.slice('/skills'.length).trim()
+    if (arg) {
+      console.log('\n  [Skills] 用法: /skills')
+      return
+    }
+
+    const skills = getAllUserInvocableSkills()
+    if (skills.length === 0) {
+      console.log('\nSkills (0 loaded)')
+      console.log('  没有找到 Skills。可添加到:')
+      console.log(`  ${process.env.Q_CODE_HOME?.trim() || '~/.q-code'}/skills/<name>/SKILL.md`)
+      console.log('  .q-code/skills/<name>/SKILL.md')
+      return
+    }
+
+    const visibleNames = new Set(getModelVisibleSkills().map((skill) => skill.name))
+    const lines = [`Skills (${skills.length} loaded)`, '']
+    for (const skill of skills) {
+      const state = visibleNames.has(skill.name)
+        ? 'visible'
+        : skill.frontmatter.disableModelInvocation
+          ? 'user-only'
+          : 'conditional'
+      const desc = skill.whenToUse ? `${skill.description} - ${skill.whenToUse}` : skill.description
+      const hint = skill.frontmatter.argumentHint ? ` ${skill.frontmatter.argumentHint}` : ''
+      lines.push(`- /${skill.name}${hint} [${skill.source}, ${state}] ${desc}`)
+    }
+    lines.push('', '模型只会在 system-reminder 里看到 visible skills；正文会在调用 Skill 工具或 /<skill-name> 时才加载。')
+    console.log('\n' + lines.join('\n'))
+  }
+
   async function handleApprovePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
     if (!content?.trim()) {
@@ -851,7 +923,7 @@ async function main() {
     })
   }
 
-  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP。\n')
+  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills。\n')
   ask()
 }
 

@@ -41,6 +41,7 @@ cp .env.example .env
 | `COMPACT_MAX_OUTPUT_TOKENS` | ❌ | 压缩摘要输出上限，默认 20000 |
 | `Q_CODE_SESSION_DIR` | ❌ | 会话存储目录，默认 .sessions |
 | `Q_CODE_HOME` | ❌ | q-code 全局配置目录，默认 `~/.q-code` |
+| `Q_CODE_SKILL_CHAR_BUDGET` | ❌ | Skills discovery 注入字符预算，默认 8000 |
 | `MCP_CONNECT_TIMEOUT_MS` | ❌ | MCP server 连接超时，默认 30000 |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | 旧版 GitHub MCP 兼容入口；新配置建议使用 `mcpServers` |
 | `TAVILY_API_KEY` | ❌ | Tavily 搜索 API Key |
@@ -79,6 +80,7 @@ src/
 │       └── memory-types.ts# 记忆类型定义与引导指令
 ├── session/
 │   └── store.ts          # JSONL 会话持久化
+├── skills/               # SKILL.md 加载、渐进式披露、条件激活
 ├── tools/
 │   ├── index.ts          # 工具注册入口
 │   ├── registry.ts       # 工具注册表（并发控制、延迟加载）
@@ -160,6 +162,7 @@ src/
 | `weather` / `start_preview` | 天气查询 / 本地预览服务 |
 | `pick_search` | 代码库搜索 |
 | `memory_write` | 跨对话项目记忆写入 |
+| `Skill` | 按需加载并执行 SKILL.md 工作流 |
 | `enter_plan_mode` / `plan_write` / `exit_plan_mode` | Plan Mode 切换、计划写入与提交 |
 | `task_create` / `task_update` / `task_get` / `task_list` | Task V2 持久化任务图 |
 | `todo_write` | TodoWrite V1 会话级任务清单，全量替换，全部完成自动清空 |
@@ -226,6 +229,38 @@ CLI 命令：
 | `/tasks task` | 切回 Task V2 持久化任务图 |
 | `/tasks todo` | 切到 TodoWrite V1 兼容模式 |
 | `/tasks reset` | 清空当前 session 的任务图，保留 `.highwatermark` |
+
+### Skills 渐进式披露
+
+Skills 用 Markdown 描述可复用工作流，适合代码审查、提交辅助、排障流程等“多步套路”。q-code 启动时只把每个可见 Skill 的 `name + description` 注入 `<system-reminder>`，不会把完整 `SKILL.md` 正文塞进 system prompt；模型调用 `Skill` 工具或用户输入 `/<skill-name> args` 时，才按需读取正文并继续本轮推理。
+
+目录：
+
+```text
+~/.q-code/skills/<name>/SKILL.md      # 用户级，跨项目共享
+<cwd>/.q-code/skills/<name>/SKILL.md  # 项目级，仅当前仓库；同名覆盖用户级
+```
+
+支持的 frontmatter：
+
+| 字段 | 说明 |
+|------|------|
+| `name` | Skill 名称，默认目录名 |
+| `description` | discovery 列表中的一行简介；缺失时取正文第一段 |
+| `when_to_use` | 何时使用该 Skill 的提示，会追加到简介 |
+| `allowed-tools` | 兼容字段，当前 q-code 无权限系统，仅解析保留 |
+| `argument-hint` | `/skills` 展示的参数提示 |
+| `disable-model-invocation` | 为 `true` 时不出现在模型可见列表，只能用户用 `/<name>` 触发 |
+| `paths` | gitignore 风格路径；命中 `read_file` / `write_file` / `edit_file` / `glob` 后条件激活 |
+
+正文变量会在调用时替换：`$ARGUMENTS`、`${Q_CODE_SKILL_DIR}`、`${Q_CODE_SESSION_ID}`；同时兼容 Claude Code 风格的 `${CLAUDE_SKILL_DIR}`、`${CLAUDE_SESSION_ID}`。
+
+常用命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/skills` | 查看已加载 Skills、来源和状态 |
+| `/<skill-name> args` | 用户直接触发 Skill |
 
 ### TodoWrite V1
 

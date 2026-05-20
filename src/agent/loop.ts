@@ -52,6 +52,7 @@ export interface AgentToolEvent {
 export interface AgentToolResultEvent {
   name: string
   toolCallId?: string
+  input?: unknown
   output: unknown
 }
 
@@ -207,6 +208,7 @@ export async function agentLoop(
                   options.onToolResult?.({
                     name: matched.name,
                     toolCallId: part.toolCallId,
+                    input: matched.input,
                     output: part.output
                   })
                   if (options.stopAfterToolNames?.includes(matched.name)) {

@@ -8,6 +8,7 @@ export interface PromptContext {
   planFilePath?: string
   taskContext?: string
   todoContext?: string
+  skillsContext?: string
   runtimeContext?: string
   agentMdContext?: string
   memoryContext?: string
@@ -69,6 +70,13 @@ export function deferredTools(): PipeFn {
   return (ctx) => {
     if (!ctx.deferredToolSummary) return null
     return `如果你需要的工具不在当前列表中，使用 tool_search 工具搜索。${ctx.deferredToolSummary}`
+  }
+}
+
+export function skillsContext(): PipeFn {
+  return (ctx) => {
+    if (!ctx.skillsContext) return null
+    return ctx.skillsContext
   }
 }
 

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "continue": "tsx src/index.ts --continue",
-    "test:mcp": "tsx src/scripts/test-mcp.ts"
+    "test:mcp": "tsx src/scripts/test-mcp.ts",
+    "test:skills": "tsx src/scripts/test-skills.ts"
   },
   "keywords": [],
   "author": "Bryce",
@@ -18,7 +19,9 @@
     "ai": "^6.0.174",
     "dotenv": "^17.4.2",
     "fast-glob": "^3.3.3",
-    "turndown": "^7.2.4"
+    "ignore": "^7.0.5",
+    "turndown": "^7.2.4",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
