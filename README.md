@@ -43,6 +43,7 @@ cp .env.example .env
 | `SUMMARY_MODEL`                | ✅   | 摘要模型名称（可用更廉价的模型）                              |
 | `TOKEN_BUDGET`                 | ❌   | 单轮执行 token 预算，默认 256000                              |
 | `CONTEXT_LIMIT_TOKENS`         | ❌   | 上下文窗口上限，默认 256000                                   |
+| `MAX_STEPS`                    | ❌   | 单轮 Agent 最大步数，默认 88                                 |
 | `COMPACT_TRIGGER_RATIO`        | ❌   | 压缩触发比例，默认 0.85                                       |
 | `WARNING_TRIGGER_RATIO`        | ❌   | 上下文预警比例，默认 0.80                                     |
 | `BLOCKING_TRIGGER_RATIO`       | ❌   | 强制停止比例，默认 0.98，会预留普通输出预算                   |

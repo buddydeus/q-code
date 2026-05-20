@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ModelMessage } from 'ai'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { microcompact } from '../../src/context/compressor'
 import {
+  buildOffloadManifest,
+  injectOffloadManifest,
   OFFLOAD_MARKER,
   offloadLargeToolResults
 } from '../../src/context/offload'
@@ -124,6 +127,7 @@ describe('Context Offloading', () => {
     })
 
     expect(result.offloaded).toBe(1)
+    expect(result.warnings).toEqual([])
     expect(result.entries[0]?.originalChars).toBe(largeOutput.length)
     expect(result.entries[0]?.filePath).toContain('/.sessions/projects/')
     expect(result.entries[0]?.filePath).toContain('/offloads/jit-session/')
@@ -147,6 +151,120 @@ describe('Context Offloading', () => {
     })
     expect(secondPass.offloaded).toBe(0)
     expect(secondPass.messages).toBe(result.messages)
+  })
+
+  it('offload 使用原子写，不留下临时文件', async () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'atomic-call',
+            toolName: 'read_file',
+            output: { type: 'text', value: 'a'.repeat(2_000) }
+          }
+        ]
+      }
+    ]
+
+    const result = await offloadLargeToolResults(messages, {
+      cwd: home.cwd,
+      sessionId: 'atomic-session',
+      minChars: 1000
+    })
+
+    expect(result.offloaded).toBe(1)
+    const offloadDir = join(
+      home.cwd,
+      '.sessions',
+      'projects',
+      result.entries[0]!.filePath.split('/.sessions/projects/')[1]!.split('/offloads/')[0]!,
+      'offloads',
+      'atomic-session'
+    )
+    expect(readdirSync(offloadDir).some((name) => name.includes('.tmp-'))).toBe(false)
+  })
+
+  it('offload 写盘失败时保留原工具结果并返回 warning', async () => {
+    const storageAsFile = join(home.root, 'not-a-directory')
+    writeFileSync(storageAsFile, 'block mkdir', 'utf-8')
+    const largeOutput = 'z'.repeat(2_000)
+    const messages: ModelMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'failing-call',
+            toolName: 'read_file',
+            output: { type: 'text', value: largeOutput }
+          }
+        ]
+      }
+    ]
+
+    const result = await offloadLargeToolResults(messages, {
+      cwd: home.cwd,
+      sessionId: 'fail-session',
+      storageDir: storageAsFile,
+      minChars: 1000
+    })
+
+    expect(result.offloaded).toBe(0)
+    expect(result.warnings[0]).toContain('failed to offload read_file')
+    expect(result.messages).toBe(messages)
+  })
+
+  it('只把完整内部 marker 识别为已 offload，普通同前缀输出仍会卸载', async () => {
+    const markerLikeOutput = `${OFFLOAD_MARKER}\nthis is ordinary tool output\n${'x'.repeat(2_000)}`
+    const messages: ModelMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'marker-like',
+            toolName: 'read_file',
+            output: { type: 'text', value: markerLikeOutput }
+          }
+        ]
+      }
+    ]
+
+    const result = await offloadLargeToolResults(messages, {
+      cwd: home.cwd,
+      sessionId: 'marker-like-session',
+      minChars: 1000
+    })
+
+    expect(result.offloaded).toBe(1)
+    expect(readFileSync(result.entries[0]!.filePath, 'utf-8')).toBe(markerLikeOutput)
+  })
+
+  it('摘要后会确定性注入 offload index，避免路径依赖 LLM 摘要保留', async () => {
+    const entries = [
+      {
+        filePath: '/tmp/offloads/tool-result-0001.txt',
+        originalChars: 24000,
+        toolName: 'read_file',
+        toolCallId: 'call-1'
+      }
+    ]
+    const summarized: ModelMessage[] = [
+      {
+        role: 'user',
+        content: '[以下是之前对话的压缩摘要]\n\n摘要没有提到 offload 文件。\n\n[摘要结束，以下是最近的对话]'
+      },
+      { role: 'user', content: '继续' }
+    ]
+
+    const injected = injectOffloadManifest(summarized, entries)
+    expect(injected.injected).toBe(true)
+    expect(injected.messages).toHaveLength(3)
+    expect(injected.messages[1]?.content).toContain('[context offload index]')
+    expect(injected.messages[1]?.content).toContain('/tmp/offloads/tool-result-0001.txt')
+    expect(buildOffloadManifest(entries)).toContain('original_chars: 24000')
   })
 
   it('microcompact 不会清理已经 offload 的恢复路径', () => {

@@ -39,7 +39,7 @@ import {
 } from './context/prompt-builder'
 import { SessionStore } from './session/store'
 import { microcompact, summarize } from './context/compressor'
-import { offloadLargeToolResults } from './context/offload'
+import { injectOffloadManifest, offloadLargeToolResults } from './context/offload'
 import { CompactionCircuitBreaker } from './context/auto-compact'
 import { loadAgentMdContext } from './context/agent-md'
 import {
@@ -99,6 +99,7 @@ import { isAgentTeamsEnabled } from './utils/agent-teams-enabled'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
+const maxSteps = getNumberEnv('MAX_STEPS', 88)
 const compactTriggerRatio = getRatioEnv('COMPACT_TRIGGER_RATIO', 0.85)
 const warningTriggerRatio = getRatioEnv(
   'WARNING_TRIGGER_RATIO',
@@ -475,6 +476,9 @@ async function main() {
         `  [Context offload] 卸载了 ${offload.offloaded} 个大工具结果 (${totalChars} chars)`
       )
     }
+    for (const warning of offload.warnings) {
+      console.log(`  [Context offload] 跳过卸载: ${warning}`)
+    }
 
     const mc = microcompact(messagesForCompaction)
     let nextMessages = mc.messages
@@ -491,6 +495,11 @@ async function main() {
       console.log(
         `  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`
       )
+    }
+
+    if (offload.entries.length > 0) {
+      const manifest = injectOffloadManifest(nextMessages, offload.entries)
+      nextMessages = manifest.messages
     }
 
     const after = snapshotContext(nextMessages, systemPrompt)
@@ -661,6 +670,7 @@ async function main() {
       tokenBudget,
       maxOutputTokens: defaultMaxOutputTokens,
       escalatedMaxOutputTokens,
+      maxSteps,
       stopAfterToolNames: ['exit_plan_mode'],
       preflight: (currentMessages, { step, usageAnchor }) =>
         compactIfNeeded(

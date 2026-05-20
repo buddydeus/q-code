@@ -23,7 +23,7 @@ import {
   fmtOutputRetry
 } from '../utils/logger'
 
-const MAX_STEPS = 50
+const DEFAULT_MAX_STEPS = 88
 const MAX_RETRIES = 3
 const DEFAULT_TOKEN_BUDGET = 256000
 const DEFAULT_MAX_OUTPUT_TOKENS = 8000
@@ -96,7 +96,8 @@ export async function agentLoop(
   let usageAnchor: UsageAnchor | undefined
   const tokenBudget = options.tokenBudget ?? DEFAULT_TOKEN_BUDGET
   const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
-  const maxSteps = options.maxSteps ?? MAX_STEPS
+  const maxSteps =
+    options.maxSteps ?? (Number(process.env.MAX_STEPS?.trim() || '') || DEFAULT_MAX_STEPS)
   const escalatedMaxOutputTokens =
     options.escalatedMaxOutputTokens ?? DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS
   const newMessages: ModelMessage[] = []
