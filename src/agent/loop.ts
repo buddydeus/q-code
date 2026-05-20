@@ -18,22 +18,38 @@ import {
 
 const MAX_STEPS = 50
 const MAX_RETRIES = 3
-const TOKEN_BUDGET = 100000
+const DEFAULT_TOKEN_BUDGET = 256000
+
+export interface AgentLoopResult {
+  messages: ModelMessage[]
+  newMessages: ModelMessage[]
+}
+
+export interface AgentLoopOptions {
+  tokenBudget?: number
+  preflight?: (messages: ModelMessage[], context: { step: number }) => Promise<ModelMessage[]>
+}
 
 export async function agentLoop(
   model: any,
   registry: ToolRegistry,
   messages: ModelMessage[],
-  system: string
-) {
+  system: string,
+  options: AgentLoopOptions = {}
+): Promise<AgentLoopResult> {
   let step = 0
   let totalTokens = 0
+  const tokenBudget = options.tokenBudget ?? DEFAULT_TOKEN_BUDGET
+  const newMessages: ModelMessage[] = []
   const taskStart = Date.now()
   resetHistory()
 
   while (step < MAX_STEPS) {
     step++
     console.log(fmtStepHeader(step))
+    if (options.preflight) {
+      messages = await options.preflight(messages, { step })
+    }
 
     let hasToolCall = false
     let fullText = ''
@@ -78,10 +94,12 @@ export async function agentLoop(
                 if (detection.level === 'critical') {
                   shouldBreak = true
                 } else {
-                  messages.push({
+                  const reminder: ModelMessage = {
                     role: 'user' as const,
                     content: `[系统提醒] ${detection.message}。请换一个思路解决问题，不要重复同样的操作。`
-                  })
+                  }
+                  messages.push(reminder)
+                  newMessages.push(reminder)
                 }
               }
               recordCall(part.toolName, part.input)
@@ -118,6 +136,7 @@ export async function agentLoop(
     }
 
     messages.push(...stepResponse!.messages)
+    newMessages.push(...stepResponse!.messages)
 
     // Token 预算追踪
     const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : 0
@@ -131,8 +150,8 @@ export async function agentLoop(
       console.log(fmtStepPerf(ttft, tps))
     }
 
-    console.log(fmtTokenUsage(totalTokens, TOKEN_BUDGET))
-    if (totalTokens > TOKEN_BUDGET) {
+    console.log(fmtTokenUsage(totalTokens, tokenBudget))
+    if (totalTokens > tokenBudget) {
       console.log(fmtStop('Token 预算耗尽，强制停止'))
       break
     }
@@ -150,4 +169,5 @@ export async function agentLoop(
   }
 
   console.log(fmtTaskDuration(Date.now() - taskStart))
+  return { messages, newMessages }
 }

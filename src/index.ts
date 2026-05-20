@@ -51,6 +51,11 @@ const summaryOpenai = createOpenAI({
 
 const summaryModel = summaryOpenai.chat(summaryModelName)
 
+const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
+const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
+const compactTriggerRatio = getRatioEnv('COMPACT_TRIGGER_RATIO', 0.85)
+const compactTriggerTokens = Math.floor(contextLimitTokens * compactTriggerRatio)
+
 const registry = new ToolRegistry()
 registry.register(...allTools)
 
@@ -112,6 +117,30 @@ async function connectMCP() {
   if (!githubToken) {
     console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN')
   }
+}
+
+function getNumberEnv(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim()
+  if (!raw) return fallback
+
+  const value = Number(raw.replace(/_/g, ''))
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`)
+  }
+  return value
+}
+
+function getRatioEnv(name: string, fallback: number): number {
+  const value = getNumberEnv(name, fallback)
+  const ratio = value > 1 && value <= 100 ? value / 100 : value
+  if (ratio <= 0 || ratio >= 1) {
+    throw new Error(`${name} must be a ratio like 0.85 or a percent like 85`)
+  }
+  return ratio
+}
+
+function estimateTextTokens(text: string): number {
+  return Math.ceil(text.length / 4)
 }
 
 async function main() {
@@ -176,11 +205,50 @@ async function main() {
 
   const SYSTEM = builder.build(promptCtx)
 
+  function estimatePromptTokens(currentMessages: ModelMessage[]): number {
+    return (
+      estimateTextTokens(SYSTEM) +
+      registry.countTokenEstimate().active +
+      estimateTokens(currentMessages)
+    )
+  }
+
+  async function compactIfNeeded(currentMessages: ModelMessage[], reason: string): Promise<ModelMessage[]> {
+    const beforeTokens = estimatePromptTokens(currentMessages)
+    if (beforeTokens < compactTriggerTokens) return currentMessages
+
+    console.log(
+      `\n  [${reason}] ~${beforeTokens}/${contextLimitTokens} tokens >= ${Math.round(
+        compactTriggerRatio * 100
+      )}%，触发压缩...`
+    )
+
+    const mc = microcompact(currentMessages)
+    let nextMessages = mc.messages
+    if (mc.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc.cleared} 个工具结果`)
+
+    const comp = await summarize(summaryModel, nextMessages, summary)
+    if (comp.compressedCount > 0) {
+      nextMessages = comp.messages
+      summary = comp.summary
+      console.log(`  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`)
+    }
+
+    const afterTokens = estimatePromptTokens(nextMessages)
+    console.log(`  [压缩结果] ~${afterTokens}/${contextLimitTokens} tokens`)
+    return nextMessages
+  }
+
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(promptCtx)
 
   const activeTools = registry.getActiveTools()
   console.log(`活跃工具: ${activeTools.length} 个`)
+  console.log(
+    `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
+      compactTriggerRatio * 100
+    )}%)，执行预算: ${tokenBudget} tokens`
+  )
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
 
@@ -198,29 +266,15 @@ async function main() {
       messages.push(userMsg)
       store.append(userMsg)
 
-      const beforeLen = messages.length
-      await agentLoop(model, registry, messages, SYSTEM)
+      const loopResult = await agentLoop(model, registry, messages, SYSTEM, {
+        tokenBudget,
+        preflight: (currentMessages, { step }) => compactIfNeeded(currentMessages, `Step ${step} preflight`)
+      })
+      messages = loopResult.messages
+      store.appendAll(loopResult.newMessages)
 
-      const newMessages = messages.slice(beforeLen)
-      store.appendAll(newMessages)
-
-      // Check if compaction needed after each turn
-      const currentTokens = estimateTokens(messages)
-      if (currentTokens > 4000) {
-        console.log(`\n  [压缩检查] ~${currentTokens} tokens, 触发压缩...`)
-        const mc2 = microcompact(messages)
-        messages = mc2.messages
-        if (mc2.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc2.cleared} 个工具结果`)
-
-        const comp2 = await summarize(summaryModel, messages, summary)
-        if (comp2.compressedCount > 0) {
-          messages = comp2.messages
-          summary = comp2.summary
-          console.log(
-            `  [Summarization] 压缩了 ${comp2.compressedCount} 条消息, ~${estimateTokens(messages)} tokens (使用 ${summaryModelName})`
-          )
-        }
-      }
+      // Post-turn compaction keeps the next user turn below the configured context threshold.
+      messages = await compactIfNeeded(messages, 'Post-turn compaction')
 
       ask()
     })
