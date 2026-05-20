@@ -12,7 +12,8 @@ coverage/
 .env.*
 !.env.example
 .sessions
-
+.playground
+.playwright-mcp
 # Logs
 *.log
 npm-debug.log*
