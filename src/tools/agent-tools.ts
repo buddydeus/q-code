@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { registerAsyncAgent } from '../agents/async-agent-store'
+import { failAsyncAgent, registerAsyncAgent } from '../agents/async-agent-store'
 import { findAgent, getAllAgents } from '../agents/registry'
 import {
   runAsyncAgentLifecycle,
@@ -11,8 +11,10 @@ import { getActiveTeam } from '../agents/team-context'
 import {
   addTeamMember,
   formatAgentId,
+  removeTeamMember,
   sanitizeName,
   TEAM_LEAD_NAME,
+  TeamFileMissingError,
   type TeamMember
 } from '../agents/team-helpers'
 import type { AgentIsolation, AgentRunResult } from '../agents/types'
@@ -167,30 +169,54 @@ export function createAgentTool(
         // next turn, the recipient must already be on the roster — and
         // the lead's next system-prompt render must list it as active.
         if (teamValidation.identity) {
-          await registerTeammate({
-            identity: teamValidation.identity,
-            agentId,
-            agentType,
-            model: modelName,
-            outputFile,
-            worktreeInfo: isolationSetup.worktreeInfo
-          })
+          try {
+            await registerTeammate({
+              identity: teamValidation.identity,
+              agentId,
+              agentType,
+              model: modelName,
+              outputFile,
+              worktreeInfo: isolationSetup.worktreeInfo
+            })
+          } catch (error) {
+            // team.json is gone (user manually deleted, or a different
+            // process disbanded the team between TeamCreate and now).
+            // Roll the async-store entry back so /agents listing is honest.
+            failAsyncAgent(agentId, formatError(error), 0)
+            const message =
+              error instanceof TeamFileMissingError
+                ? `Error: cannot register teammate "${teamValidation.identity.agentName}" — ${error.message}. Run TeamDelete to clear the in-process state, then TeamCreate again.`
+                : `Error: failed to register teammate: ${formatError(error)}`
+            return message
+          }
         }
 
-        void asyncRunner({
-          entry,
-          agentDefinition: definition,
-          prompt: input.prompt,
-          availableTools,
-          model: controller.createModel(modelName),
-          runtimeContext: controller.getRuntimeContext?.(),
-          agentMdContext: controller.getAgentMdContext?.(),
-          tokenBudget: controller.getTokenBudget?.(),
-          maxOutputTokens: controller.getMaxOutputTokens?.(),
-          escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
-          ...(isolationSetup.worktreeInfo ? { worktreeInfo: isolationSetup.worktreeInfo } : {}),
-          ...(teamValidation.identity ? { teammateIdentity: teamValidation.identity } : {})
-        }).catch(() => {
+        // Build the asyncRunner params first; if `controller.createModel`
+        // throws synchronously we MUST roll back the bookkeeping (entry
+        // in async-store, member in team.json) so we don't leak a ghost
+        // teammate that's permanently isActive=true.
+        let runnerParams: RunAsyncAgentLifecycleParams
+        try {
+          runnerParams = {
+            entry,
+            agentDefinition: definition,
+            prompt: input.prompt,
+            availableTools,
+            model: controller.createModel(modelName),
+            runtimeContext: controller.getRuntimeContext?.(),
+            agentMdContext: controller.getAgentMdContext?.(),
+            tokenBudget: controller.getTokenBudget?.(),
+            maxOutputTokens: controller.getMaxOutputTokens?.(),
+            escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
+            ...(isolationSetup.worktreeInfo ? { worktreeInfo: isolationSetup.worktreeInfo } : {}),
+            ...(teamValidation.identity ? { teammateIdentity: teamValidation.identity } : {})
+          }
+        } catch (error) {
+          await rollbackTeammateLaunch(agentId, teamValidation.identity, error)
+          return `Error: failed to construct background agent: ${formatError(error)}`
+        }
+
+        void asyncRunner(runnerParams).catch(() => {
           /* runAsyncAgentLifecycle owns user-visible failure reporting. */
         })
 
@@ -508,4 +534,26 @@ function formatAgentToolFailure(args: {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Undo the bookkeeping done in the named-teammate launch path when the
+ * subsequent step (model construction) fails. Without this, a thrown
+ * `controller.createModel` would leave the teammate marked
+ * `isActive=true` in team.json forever (the `runAsyncAgentLifecycle`
+ * `finally` that flips the flag never runs because the lifecycle was
+ * never started).
+ *
+ * Best-effort throughout — rollback failures are logged-via-error
+ * propagation only when the original launch error has not already been
+ * surfaced to the user.
+ */
+async function rollbackTeammateLaunch(
+  agentId: string,
+  identity: TeammateIdentity | undefined,
+  cause: unknown
+): Promise<void> {
+  failAsyncAgent(agentId, formatError(cause), 0)
+  if (!identity) return
+  await removeTeamMember(identity.teamName, identity.agentName).catch(() => undefined)
 }

@@ -15,6 +15,16 @@ import { removeAgentWorktree } from '../agents/worktree'
 import { isAgentTeamsEnabled } from '../utils/agent-teams-enabled'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
 
+/**
+ * 单条 SendMessage 正文的硬性大小上限，单位字节。
+ *
+ * 收件人的首轮会通过 formatMailboxAttachment() 把所有未读消息原样
+ * 拉进 user prompt。若没有上限，lead 就可能有意或无意地一次性塞爆
+ * 队友的上下文窗口。8 KB 对自然语言协作和短片段已经很宽松，但又不至于
+ * 被当成代码大段传输通道。
+ */
+export const MAX_MESSAGE_BYTES = 8 * 1024
+
 // ─── TeamCreate ─────────────────────────────────────────────────────
 
 interface TeamCreateInput {
@@ -42,8 +52,7 @@ export function createTeamCreateTool(): ToolDefinition {
         },
         description: {
           type: 'string',
-          description:
-            '可选的 1-2 句团队目标描述，存入 team.json 供 system prompt 提示模型。'
+          description: '可选的 1-2 句团队目标描述，存入 team.json 供 system prompt 提示模型。'
         }
       },
       required: ['team_name'],
@@ -159,9 +168,7 @@ export function createTeamDeleteTool(): ToolDefinition {
         )
       }
 
-      const activeTeammates = file.members.filter(
-        (m) => m.name !== TEAM_LEAD_NAME && m.isActive
-      )
+      const activeTeammates = file.members.filter((m) => m.name !== TEAM_LEAD_NAME && m.isActive)
       if (activeTeammates.length > 0) {
         const names = activeTeammates.map((m) => m.name).join(', ')
         return (
@@ -182,9 +189,7 @@ export function createTeamDeleteTool(): ToolDefinition {
             gitRoot: member.gitRoot
           })
           if (!result.ok) {
-            preservedWorktrees.push(
-              `  - ${member.name}: ${member.worktreePath} (${result.error})`
-            )
+            preservedWorktrees.push(`  - ${member.name}: ${member.worktreePath} (${result.error})`)
           }
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error)
@@ -256,11 +261,18 @@ export function createSendMessageTool(): ToolDefinition {
     execute: async (rawInput: SendMessageInput, context: ToolExecutionContext) => {
       const to = typeof rawInput.to === 'string' ? rawInput.to.trim() : ''
       const message = typeof rawInput.message === 'string' ? rawInput.message : ''
-      const summary =
-        typeof rawInput.summary === 'string' ? rawInput.summary.trim() : undefined
+      const summary = typeof rawInput.summary === 'string' ? rawInput.summary.trim() : undefined
       if (!to) return "Error: 'to' is required (teammate name or '*')."
       if (!message || !message.trim()) {
         return "Error: 'message' is required and must be non-empty."
+      }
+      const messageBytes = Buffer.byteLength(message, 'utf-8')
+      if (messageBytes > MAX_MESSAGE_BYTES) {
+        return (
+          `Error: message body is ${messageBytes} bytes, exceeding the ${MAX_MESSAGE_BYTES}-byte ` +
+          'cap on a single SendMessage. Split the content across multiple messages, or have the ' +
+          'recipient pull large artifacts from a file you both can read.'
+        )
       }
 
       const active = getActiveTeam()
@@ -284,9 +296,7 @@ export function createSendMessageTool(): ToolDefinition {
       const summaryField = summary ? { summary } : {}
 
       if (to === '*') {
-        const recipients = teamFile.members.filter(
-          (m) => m.isActive && m.name !== senderName
-        )
+        const recipients = teamFile.members.filter((m) => m.isActive && m.name !== senderName)
         if (recipients.length === 0) {
           return 'No active teammates to broadcast to (you are the only active member).'
         }

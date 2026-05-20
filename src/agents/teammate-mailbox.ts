@@ -1,35 +1,33 @@
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { writeJsonAtomic } from '../utils/atomic-write'
 import { getTeamDir, sanitizeName } from './team-helpers'
 
 /**
- * One inbox entry, persisted as-is inside the JSON-array file.
+ * inbox 中的一条消息，按原样持久化到 JSON 数组文件中。
  */
 export interface TeammateMessage {
-  /** Sender's `name` (NOT agentId). Lead messages use TEAM_LEAD_NAME. */
+  /** 发送者的 `name`（不是 agentId）。lead 消息使用 TEAM_LEAD_NAME。 */
   from: string
-  /** Plain text body. */
+  /** 纯文本正文。 */
   text: string
-  /** ISO timestamp set at write time. */
+  /** 写入时生成的 ISO 时间戳。 */
   timestamp: string
-  /** False until the recipient consumes the message. */
+  /** 在接收方消费前为 false。 */
   read: boolean
-  /** Optional 5-10 word preview shown alongside the full message. */
+  /** 可选的 5-10 个词预览，会和完整消息一起展示。 */
   summary?: string
 }
 
 /**
- * Per-inbox in-process lock. Implemented as a Promise chain keyed by
- * inbox path: each `withInboxLock` call awaits the chain's tail then
- * tacks its own work on. Single-process q-code doesn't need OS-level
- * locks, but Node's microtask interleaving means two parallel writers
- * (e.g. two async teammates SendMessage'ing the same recipient) can
- * still trample one another between read-modify-write steps without
- * serialization.
+ * 每个 inbox 一个进程内锁。实现方式是按 inbox path 维护 Promise
+ * 链：每次 `withInboxLock` 先等待当前链尾，再把自己的工作接到链上。
+ * 单进程 q-code 不需要 OS 级锁，但 Node 的微任务交错仍可能让两个
+ * 并行写入者（例如两个异步队友同时给同一个收件人 SendMessage）在
+ * read-modify-write 之间互相覆盖，因此这里仍需串行化。
  *
- * Equivalent to source's `proper-lockfile` usage in semantics, far
- * smaller in dependencies — q-code already runs everything in one
- * Node process.
+ * 语义上等价于源码里常见的 `proper-lockfile` 用法，但依赖更小——
+ * q-code 本来就全部运行在一个 Node 进程内。
  */
 const inboxLocks = new Map<string, Promise<unknown>>()
 
@@ -62,8 +60,7 @@ async function ensureInboxFile(agentName: string, teamName: string): Promise<str
   const inboxPath = getInboxPath(agentName, teamName)
   await fs.mkdir(path.dirname(inboxPath), { recursive: true })
   try {
-    // `wx` only writes when the file does NOT exist — preserves any
-    // unread messages waiting for a respawned teammate.
+    // `wx` 只会在文件不存在时写入——这样能保留重启后队友仍未读的消息。
     await fs.writeFile(inboxPath, '[]', { encoding: 'utf-8', flag: 'wx' })
   } catch (error) {
     const code = (error as NodeJS.ErrnoException | undefined)?.code
@@ -73,14 +70,10 @@ async function ensureInboxFile(agentName: string, teamName: string): Promise<str
 }
 
 /**
- * Returns every message in the inbox (read + unread). Returns [] when
- * the inbox does not exist or contains malformed JSON — never throws,
- * because a corrupted inbox should not bring down the recipient's loop.
+ * 返回 inbox 中的全部消息（已读 + 未读）。当 inbox 不存在或 JSON
+ * 损坏时返回 []，绝不抛错——因为收件箱损坏不该直接拖垮接收方循环。
  */
-export async function readMailbox(
-  agentName: string,
-  teamName: string
-): Promise<TeammateMessage[]> {
+export async function readMailbox(agentName: string, teamName: string): Promise<TeammateMessage[]> {
   try {
     const content = await fs.readFile(getInboxPath(agentName, teamName), 'utf-8')
     const parsed = JSON.parse(content)
@@ -91,9 +84,9 @@ export async function readMailbox(
 }
 
 /**
- * Append one message to a teammate's inbox. The full read-modify-write
- * sequence runs under the per-inbox lock so concurrent writers append
- * in a deterministic order rather than overwriting each other.
+ * 向队友 inbox 追加一条消息。整个 read-modify-write 过程都在
+ * 每个 inbox 的锁内完成，这样并发写入会按确定顺序追加，而不是
+ * 互相覆盖。
  */
 export async function writeToMailbox(
   recipientName: string,
@@ -104,17 +97,18 @@ export async function writeToMailbox(
   await withInboxLock(inboxPath, async () => {
     const messages = await readMailbox(recipientName, teamName)
     messages.push({ ...message, read: false })
-    await fs.writeFile(inboxPath, JSON.stringify(messages, null, 2), 'utf-8')
+    // 原子写可以避免进程在写一半时被 SIGKILL 后留下半截 inbox JSON。
+    // 读取方要么看到写前快照，要么看到写后快照，不会读到垃圾数据。
+    await writeJsonAtomic(inboxPath, messages)
   })
 }
 
 /**
- * Atomically read every unread message AND mark them read in one
- * locked op. Equivalent to read-then-mark, but holds the lock across
- * both steps so a concurrent SendMessage cannot slip in a record we'd
- * silently mark read in step 2.
+ * 在一个加锁操作里原子地读取所有未读消息，并把它们标记为已读。
+ * 语义等价于“先读再标记”，但锁会横跨两个步骤，因此并发 SendMessage
+ * 不会在步骤之间偷偷插入一条随后被我们误标为已读的消息。
  *
- * This is the primitive runChildAgent calls when a teammate boots up.
+ * runChildAgent 在队友启动时会调用这个原语。
  */
 export async function drainUnreadMessages(
   agentName: string,
@@ -142,15 +136,14 @@ export async function drainUnreadMessages(
       }
     }
     if (changed) {
-      await fs.writeFile(inboxPath, JSON.stringify(messages, null, 2), 'utf-8')
+      await writeJsonAtomic(inboxPath, messages)
     }
     return unread
   })
 }
 
 /**
- * Format unread messages as a single user-side context block prepended
- * to the teammate's first prompt.
+ * 把未读消息格式化成一个 user 侧上下文块，追加到队友的首轮 prompt 前。
  */
 export function formatMailboxAttachment(messages: TeammateMessage[]): string {
   if (messages.length === 0) return ''

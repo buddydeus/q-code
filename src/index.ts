@@ -90,6 +90,7 @@ import {
   cleanupTeamDirectory,
   listTeamNames,
   readTeamFile,
+  reconcileStaleActiveMembers,
   TEAM_LEAD_NAME
 } from './agents/team-helpers'
 import { formatTeamsSystemReminder } from './agents/team-prompt'
@@ -226,9 +227,21 @@ async function main() {
   if (!dumpSystemPrompt) {
     for (const warning of agentsBootstrap.warnings) console.log(`  ${warning}`)
     if (isAgentTeamsEnabled()) {
+      // A previous q-code run that owned a team may have been killed
+      // before its `runAsyncAgentLifecycle` finally-block flipped each
+      // teammate's `isActive` to false. The current process is by
+      // definition not running any of those teammates, so sweep stale
+      // flags now — without this, TeamDelete in this session would
+      // refuse forever and the lead's roster would lie indefinitely.
+      const reconciled = await reconcileStaleActiveMembers().catch(() => [])
       console.log(
         '  [Teams] Agent Teams 已启用（TeamCreate / SendMessage / TeamDelete 对模型可见）'
       )
+      if (reconciled.length > 0) {
+        console.log(
+          `  [Teams] 启动时清理了 ${reconciled.length} 个团队的过期 isActive 标记: ${reconciled.join(', ')}`
+        )
+      }
     }
   }
   const planOptions: PlanFileOptions = {
@@ -1017,12 +1030,26 @@ async function main() {
       }
       const file = readTeamFile(active.teamName)
       const stillActive = file?.members.filter((m) => m.name !== TEAM_LEAD_NAME && m.isActive) ?? []
-      if (stillActive.length > 0 && args[1] !== 'force') {
+      const isForce = ['force', '-f', '--force'].includes((args[1] ?? '').toLowerCase())
+      if (stillActive.length > 0 && !isForce) {
         console.log(
           `\n  [Teams] 拒绝清理：还有 ${stillActive.length} 个 teammate 在跑 (${stillActive.map((m) => m.name).join(', ')})。`
         )
         console.log('  先 /agents kill <agent_id>，或用 /teams clear force 强制清理（不推荐）。')
         return
+      }
+      // Force path: kill any still-running async agents BEFORE we wipe
+      // team.json. Without this they would keep burning tokens with no
+      // way for their finally-block to write back state — and worse,
+      // their next SendMessage / Agent call would error obscurely.
+      if (isForce && stillActive.length > 0) {
+        const killed: string[] = []
+        for (const m of stillActive) {
+          if (killAsyncAgent(m.agentId)) killed.push(m.name)
+        }
+        if (killed.length > 0) {
+          console.log(`\n  [Teams] 已请求终止 ${killed.length} 个 teammate: ${killed.join(', ')}`)
+        }
       }
       await cleanupTeamDirectory(active.teamName)
       clearActiveTeam()

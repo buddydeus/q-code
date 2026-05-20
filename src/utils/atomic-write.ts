@@ -1,0 +1,73 @@
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeSync
+} from 'node:fs'
+import { open, rename, unlink } from 'node:fs/promises'
+
+/**
+ * 原子写入 JSON：即使在写入过程中崩溃，也尽量保证文件可恢复。
+ *
+ * 朴素的 `fs.writeFile(path, JSON.stringify(value))` 对稍大一点的
+ * 内容会拆成多次 `write(2)` 系统调用。如果进程在中途被 SIGKILL
+ * （Ctrl+C、OOM、内核 panic、系统挂起）打断，文件就可能只写了一半；
+ * 下一次 `JSON.parse` 会直接失败，连整个 mailbox / team roster 都读不出来。
+ *
+ * 这里采用的模式是：先写到 `<path>.tmp-<pid>-<ts>`，fsync，再 `rename`
+ * 覆盖正式路径。POSIX `rename(2)` 在同一文件系统上是原子的，因此读取方
+ * 要么看到旧版本，要么看到新版本，不会看到半截文件。临时文件名带唯一后缀，
+ * 可以避免两个写入者互相踩到对方的 tmp 文件（同一路径的并发写本来会由别处的
+ * 进程内锁避免，这里只是再加一层防御）。
+ */
+export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`
+  const handle = await open(tmpPath, 'w')
+  try {
+    await handle.writeFile(JSON.stringify(value, null, 2), 'utf-8')
+    // 在 rename 前强制把 tmp inode 的数据刷盘。
+    // 否则如果断电发生在 rename 之后，文件虽然存在，但内容可能是空的，
+    // 就失去了“原子改名”这套方案的意义。
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  try {
+    await rename(tmpPath, filePath)
+  } catch (error) {
+    // rename 失败时尽力清理 tmp 文件。
+    await unlink(tmpPath).catch(() => undefined)
+    throw error
+  }
+}
+
+/**
+ * 同步版本，给必须保持同步的调用路径使用（例如在 process.on('exit')
+ * 里触发的处理逻辑）。
+ */
+export function writeJsonAtomicSync(filePath: string, value: unknown): void {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`
+  const fd = openSync(tmpPath, 'w')
+  try {
+    writeSync(fd, JSON.stringify(value, null, 2))
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+  try {
+    renameSync(tmpPath, filePath)
+  } catch (error) {
+    try {
+      unlinkSync(tmpPath)
+    } catch {
+      // 尽力清理。
+    }
+    throw error
+  }
+}
