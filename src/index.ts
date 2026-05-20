@@ -218,7 +218,7 @@ async function main() {
     if (beforeTokens < compactTriggerTokens) return currentMessages
 
     console.log(
-      `\n  [${reason}] ~${beforeTokens}/${contextLimitTokens} tokens >= ${Math.round(
+      `\n  [${reason}] 上下文 ~${beforeTokens}/${contextLimitTokens} tokens >= ${Math.round(
         compactTriggerRatio * 100
       )}%，触发压缩...`
     )
@@ -235,7 +235,7 @@ async function main() {
     }
 
     const afterTokens = estimatePromptTokens(nextMessages)
-    console.log(`  [压缩结果] ~${afterTokens}/${contextLimitTokens} tokens`)
+    console.log(`  [压缩结果] 上下文 ~${afterTokens}/${contextLimitTokens} tokens`)
     return nextMessages
   }
 
@@ -268,7 +268,11 @@ async function main() {
 
       const loopResult = await agentLoop(model, registry, messages, SYSTEM, {
         tokenBudget,
-        preflight: (currentMessages, { step }) => compactIfNeeded(currentMessages, `Step ${step} preflight`)
+        preflight: (currentMessages, { step }) => compactIfNeeded(currentMessages, `Step ${step} preflight`),
+        contextUsage: (currentMessages) => ({
+          used: estimatePromptTokens(currentMessages),
+          limit: contextLimitTokens
+        })
       })
       messages = loopResult.messages
       store.appendAll(loopResult.newMessages)

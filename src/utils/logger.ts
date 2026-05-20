@@ -71,14 +71,24 @@ export function fmtRetry(attempt: number, max: number, delay: number): string {
   return `  ${c.yellow(S.arrow)} 重试 ${c.bold(`${attempt}/${max}`)} ${c.dim(`${delay}ms 后`)}`
 }
 
-/** 格式化 Token 消耗 */
-export function fmtTokenUsage(used: number, budget: number): string {
+/** 格式化上下文占用 */
+export function fmtContextUsage(used: number, limit: number): string {
+  const pct = Math.round((used / limit) * 100)
+  const barLen = 12
+  const filled = Math.min(barLen, Math.round((pct / 100) * barLen))
+  const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled)
+  const color = pct > 85 ? c.red : pct > 65 ? c.yellow : c.green
+  return `  ${c.gray('上下文')} ${color(bar)} ${c.bold(`${used}`)}/${limit} ${c.dim(`(${pct}%)`)}`
+}
+
+/** 格式化本轮累计执行 token */
+export function fmtTurnTokenUsage(used: number, budget: number): string {
   const pct = Math.round((used / budget) * 100)
   const barLen = 12
   const filled = Math.min(barLen, Math.round((pct / 100) * barLen))
   const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled)
   const color = pct > 80 ? c.red : pct > 50 ? c.yellow : c.green
-  return `  ${c.gray('Token')} ${color(bar)} ${c.bold(`${used}`)}/${budget} ${c.dim(`(${pct}%)`)}`
+  return `  ${c.gray('本轮消耗')} ${color(bar)} ${c.bold(`${used}`)}/${budget} ${c.dim(`(${pct}%)`)}`
 }
 
 /** 格式化首 Token 时间 (TTFT) */

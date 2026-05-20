@@ -1,24 +1,339 @@
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+import {
+  closeSync,
+  createReadStream,
+  existsSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
 import type { ToolDefinition } from './registry'
+
+const DEFAULT_READ_MAX_LINES = 300
+const MAX_READ_MAX_LINES = 2000
+const DEFAULT_READ_MAX_CHARS = 20000
+const MAX_READ_MAX_CHARS = 100000
+const LARGE_FILE_BYTES = 1024 * 1024
+
+interface ReadFileInput {
+  path: string
+  startLine?: number
+  endLine?: number
+  maxLines?: number
+  maxChars?: number
+  showLineNumbers?: boolean
+}
 
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
-  description: '读取指定路径的文件内容',
+  description:
+    '按行范围读取指定路径的文本文件。默认读取前 300 行；读取大文件时请用 startLine/endLine 或 maxLines 分段查看',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: '文件路径' }
+      path: { type: 'string', description: '文件路径' },
+      startLine: { type: 'integer', minimum: 1, description: '起始行号，从 1 开始，默认 1' },
+      endLine: {
+        type: 'integer',
+        minimum: 1,
+        description: '结束行号，包含该行。若不传，则按 maxLines 计算'
+      },
+      maxLines: {
+        type: 'integer',
+        minimum: 1,
+        maximum: MAX_READ_MAX_LINES,
+        description: `最多返回多少行，默认 ${DEFAULT_READ_MAX_LINES}，最大 ${MAX_READ_MAX_LINES}`
+      },
+      maxChars: {
+        type: 'integer',
+        minimum: 1000,
+        maximum: MAX_READ_MAX_CHARS,
+        description: `最多返回多少字符，默认 ${DEFAULT_READ_MAX_CHARS}，最大 ${MAX_READ_MAX_CHARS}`
+      },
+      showLineNumbers: {
+        type: 'boolean',
+        description: '是否在正文前显示行号。默认 false；需要复制内容用于 edit_file 时不要开启'
+      }
     },
     required: ['path'],
     additionalProperties: false
   },
   isConcurrencySafe: true,
   isReadOnly: true,
-  maxResultChars: 20000, // 演示用，生产环境通常 50000+
-  execute: async ({ path }: { path: string }) => {
-    return readFileSync(resolve(path), 'utf-8')
+  maxResultChars: MAX_READ_MAX_CHARS + 2000,
+  execute: async (input: ReadFileInput) => {
+    try {
+      return await readFileRange(input)
+    } catch (err) {
+      return `读取失败: ${err instanceof Error ? err.message : err}`
+    }
   }
+}
+
+async function readFileRange(input: ReadFileInput): Promise<string> {
+  const resolved = resolve(input.path)
+  if (!existsSync(resolved)) return `文件不存在: ${input.path}`
+
+  const stat = statSync(resolved)
+  if (stat.isDirectory()) return `路径是目录，不是文件: ${input.path}`
+  if (looksLikeBinaryFile(resolved, stat.size)) {
+    return `文件看起来是二进制内容，已拒绝按文本读取: ${input.path} (${formatBytes(stat.size)})`
+  }
+
+  const startLine = normalizePositiveInteger(input.startLine, 1, 'startLine')
+  const maxLines = normalizePositiveInteger(input.maxLines, DEFAULT_READ_MAX_LINES, 'maxLines')
+  const maxChars = normalizePositiveInteger(input.maxChars, DEFAULT_READ_MAX_CHARS, 'maxChars')
+  const cappedMaxLines = Math.min(maxLines, MAX_READ_MAX_LINES)
+  const cappedMaxChars = Math.min(maxChars, MAX_READ_MAX_CHARS)
+  const showLineNumbers = input.showLineNumbers === true
+  const requestedEndLine = input.endLine !== undefined
+    ? normalizePositiveInteger(input.endLine, startLine + cappedMaxLines - 1, 'endLine')
+    : startLine + cappedMaxLines - 1
+  const endLine = Math.min(requestedEndLine, startLine + MAX_READ_MAX_LINES - 1)
+
+  if (endLine < startLine) {
+    return `参数错误: endLine (${endLine}) 不能小于 startLine (${startLine})`
+  }
+
+  const result =
+    stat.size <= LARGE_FILE_BYTES
+      ? readSmallFileRange(resolved, startLine, endLine, cappedMaxChars, showLineNumbers)
+      : await readLargeFileRange(resolved, startLine, endLine, cappedMaxChars, showLineNumbers)
+
+  const notices: string[] = []
+  if (stat.size > LARGE_FILE_BYTES) {
+    notices.push('文件较大，已按范围读取，未扫描全文统计总行数；建议用 startLine/endLine 分段读取或用 grep 定位')
+  }
+  if (maxLines > MAX_READ_MAX_LINES) {
+    notices.push(`maxLines 已从 ${maxLines} 限制为 ${MAX_READ_MAX_LINES}`)
+  }
+  if (requestedEndLine > endLine) {
+    notices.push(`请求结束行 ${requestedEndLine} 超过单次读取上限，实际读取到 ${endLine}`)
+  }
+  if (maxChars > MAX_READ_MAX_CHARS) {
+    notices.push(`maxChars 已从 ${maxChars} 限制为 ${MAX_READ_MAX_CHARS}`)
+  }
+  if (result.truncatedByChars) {
+    notices.push('返回内容达到 maxChars 限制，当前范围内仍有内容未显示')
+  }
+  if (result.hasMoreAfterRange) {
+    notices.push(`后续可继续读取 startLine=${result.nextStartLine}`)
+  }
+
+  return [
+    `[read_file] ${resolved}`,
+    `大小: ${formatBytes(stat.size)} (${stat.size} bytes)`,
+    `总行数: ${result.totalLines ?? '未知（大文件范围读取未扫描全文）'}`,
+    `请求范围: ${startLine}-${requestedEndLine}`,
+    `实际读取范围: ${startLine}-${endLine}`,
+    `返回范围: ${result.firstReturnedLine ?? '无'}-${result.lastReturnedLine ?? '无'}`,
+    `返回行数: ${result.returnedLineCount}`,
+    `截断: ${result.truncated ? '是' : '否'}`,
+    `行号: ${showLineNumbers ? '显示' : '隐藏（正文为原始内容）'}`,
+    notices.length ? `提示: ${notices.join('；')}` : null,
+    '',
+    '内容:',
+    result.lines.length ? result.lines.join('\n') : '(指定范围内没有内容)'
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n')
+}
+
+interface ReadRangeResult {
+  lines: string[]
+  totalLines?: number
+  firstReturnedLine?: number
+  lastReturnedLine?: number
+  returnedLineCount: number
+  nextStartLine: number
+  hasMoreAfterRange: boolean
+  truncated: boolean
+  truncatedByChars: boolean
+}
+
+function readSmallFileRange(
+  resolved: string,
+  startLine: number,
+  endLine: number,
+  maxChars: number,
+  showLineNumbers: boolean
+): ReadRangeResult {
+  const content = readFileSync(resolved, 'utf-8')
+  const allLines = splitLines(content)
+  const selected = allLines.slice(startLine - 1, Math.min(endLine, allLines.length))
+  const { lines, lastReturnedLine, truncatedByChars } = renderLines(
+    selected,
+    startLine,
+    maxChars,
+    showLineNumbers
+  )
+  const hasMoreAfterRange = endLine < allLines.length || truncatedByChars
+  const firstReturnedLine = lines.length > 0 ? startLine : undefined
+
+  return {
+    lines,
+    totalLines: allLines.length,
+    firstReturnedLine,
+    lastReturnedLine,
+    returnedLineCount: lines.length,
+    nextStartLine: (lastReturnedLine ?? endLine) + 1,
+    hasMoreAfterRange,
+    truncated: startLine > 1 || hasMoreAfterRange || truncatedByChars,
+    truncatedByChars
+  }
+}
+
+async function readLargeFileRange(
+  resolved: string,
+  startLine: number,
+  endLine: number,
+  maxChars: number,
+  showLineNumbers: boolean
+): Promise<ReadRangeResult> {
+  const rl = createInterface({
+    input: createReadStream(resolved, { encoding: 'utf-8' }),
+    crlfDelay: Infinity
+  })
+
+  const lines: string[] = []
+  let lineNo = 0
+  let usedChars = 0
+  let truncatedByChars = false
+  let firstReturnedLine: number | undefined
+  let lastReturnedLine: number | undefined
+  let stoppedBeforeEof = false
+
+  for await (const line of rl) {
+    lineNo++
+    if (lineNo < startLine) continue
+    if (lineNo > endLine) {
+      stoppedBeforeEof = true
+      break
+    }
+
+    const appended = appendRenderedLine(lines, line, lineNo, maxChars, usedChars, showLineNumbers)
+    if (!appended.added) {
+      truncatedByChars = true
+      break
+    }
+
+    usedChars = appended.usedChars
+    firstReturnedLine ??= lineNo
+    lastReturnedLine = lineNo
+    if (appended.truncatedByChars) {
+      truncatedByChars = true
+      break
+    }
+  }
+  rl.close()
+
+  const totalLines = stoppedBeforeEof || truncatedByChars ? undefined : lineNo
+
+  return {
+    lines,
+    totalLines,
+    firstReturnedLine,
+    lastReturnedLine,
+    returnedLineCount: lines.length,
+    nextStartLine: (lastReturnedLine ?? endLine) + 1,
+    hasMoreAfterRange: stoppedBeforeEof || truncatedByChars,
+    truncated: startLine > 1 || stoppedBeforeEof || truncatedByChars,
+    truncatedByChars
+  }
+}
+
+function renderLines(
+  rawLines: string[],
+  startLine: number,
+  maxChars: number,
+  showLineNumbers: boolean
+): { lines: string[]; lastReturnedLine?: number; truncatedByChars: boolean } {
+  const lines: string[] = []
+  let usedChars = 0
+  let truncatedByChars = false
+  let lastReturnedLine: number | undefined
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const lineNo = startLine + i
+    const appended = appendRenderedLine(lines, rawLines[i], lineNo, maxChars, usedChars, showLineNumbers)
+    if (!appended.added) {
+      truncatedByChars = true
+      break
+    }
+
+    usedChars = appended.usedChars
+    lastReturnedLine = lineNo
+    if (appended.truncatedByChars) {
+      truncatedByChars = true
+      break
+    }
+  }
+
+  return { lines, lastReturnedLine, truncatedByChars }
+}
+
+function appendRenderedLine(
+  lines: string[],
+  rawLine: string,
+  lineNo: number,
+  maxChars: number,
+  usedChars: number,
+  showLineNumbers: boolean
+): { added: boolean; usedChars: number; truncatedByChars: boolean } {
+  const rendered = showLineNumbers ? `${String(lineNo).padStart(6, ' ')} | ${rawLine}` : rawLine
+  const nextSize = rendered.length + 1
+
+  if (usedChars + nextSize <= maxChars) {
+    lines.push(rendered)
+    return { added: true, usedChars: usedChars + nextSize, truncatedByChars: false }
+  }
+
+  const remaining = maxChars - usedChars
+  if (remaining <= 30) {
+    return { added: false, usedChars, truncatedByChars: true }
+  }
+
+  lines.push(`${rendered.slice(0, remaining - 18)} ...[行内截断]`)
+  return { added: true, usedChars: maxChars, truncatedByChars: true }
+}
+
+function splitLines(content: string): string[] {
+  if (!content) return []
+  const lines = content.split(/\r\n|\n|\r/)
+  if (lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer`)
+  }
+  return value
+}
+
+function looksLikeBinaryFile(resolved: string, fileSize: number): boolean {
+  if (fileSize === 0) return false
+
+  const fd = openSync(resolved, 'r')
+  try {
+    const buffer = Buffer.alloc(Math.min(8192, fileSize))
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0)
+    return buffer.subarray(0, bytesRead).includes(0)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
 }
 
 export const writeFileTool: ToolDefinition = {

@@ -9,7 +9,8 @@ import {
   fmtToolResult,
   fmtLoopWarning,
   fmtRetry,
-  fmtTokenUsage,
+  fmtContextUsage,
+  fmtTurnTokenUsage,
   fmtStop,
   fmtContinue,
   fmtStepPerf,
@@ -28,6 +29,7 @@ export interface AgentLoopResult {
 export interface AgentLoopOptions {
   tokenBudget?: number
   preflight?: (messages: ModelMessage[], context: { step: number }) => Promise<ModelMessage[]>
+  contextUsage?: (messages: ModelMessage[]) => { used: number; limit: number }
 }
 
 export async function agentLoop(
@@ -138,7 +140,7 @@ export async function agentLoop(
     messages.push(...stepResponse!.messages)
     newMessages.push(...stepResponse!.messages)
 
-    // Token 预算追踪
+    // 只把执行 token 作为本轮成本/死循环硬保护；主显示使用当前上下文占用。
     const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : 0
     const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : 0
     totalTokens += inp + out
@@ -150,9 +152,13 @@ export async function agentLoop(
       console.log(fmtStepPerf(ttft, tps))
     }
 
-    console.log(fmtTokenUsage(totalTokens, tokenBudget))
+    if (options.contextUsage) {
+      const context = options.contextUsage(messages)
+      console.log(fmtContextUsage(context.used, context.limit))
+    }
     if (totalTokens > tokenBudget) {
-      console.log(fmtStop('Token 预算耗尽，强制停止'))
+      console.log(fmtTurnTokenUsage(totalTokens, tokenBudget))
+      console.log(fmtStop('本轮执行预算耗尽，强制停止'))
       break
     }
 
