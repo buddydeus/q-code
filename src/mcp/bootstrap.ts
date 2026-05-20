@@ -38,10 +38,12 @@ export async function bootstrapMcp(
   clearMcpRegistry()
   toolRegistry.unregisterByPrefix('mcp__')
 
-  seedPendingEntries(config.servers)
+  const skipped = seedPendingEntries(config.servers)
   const settled = await Promise.allSettled(
     Object.entries(config.servers).map(([name, serverConfig]) =>
-      connectAndRegister(name, serverConfig, toolRegistry)
+      skipped.has(name)
+        ? Promise.resolve({ connection: getMcpRegistryEntry(name)!.connection, toolCount: 0 })
+        : connectAndRegister(name, serverConfig, toolRegistry)
     )
   )
 
@@ -111,7 +113,8 @@ async function connectAndRegister(
   return { connection, toolCount: tools.length }
 }
 
-function seedPendingEntries(servers: Record<string, ScopedMcpServerConfig>): void {
+function seedPendingEntries(servers: Record<string, ScopedMcpServerConfig>): Set<string> {
+  const skipped = new Set<string>()
   const normalizedNames = new Map<string, string>()
   for (const [name, config] of Object.entries(servers)) {
     const normalized = normalizeNameForMcp(name)
@@ -127,6 +130,7 @@ function seedPendingEntries(servers: Record<string, ScopedMcpServerConfig>): voi
         },
         []
       )
+      skipped.add(name)
       continue
     }
     normalizedNames.set(normalized, name)
@@ -141,6 +145,7 @@ function seedPendingEntries(servers: Record<string, ScopedMcpServerConfig>): voi
       []
     )
   }
+  return skipped
 }
 
 export function summarizeMcpRegistry(): string {

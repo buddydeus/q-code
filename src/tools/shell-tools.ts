@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process'
 import type { ToolDefinition } from './registry'
 
 export const bashTool: ToolDefinition = {
-  name: 'bash',
+  name: 'f',
   description: '执行 shell 命令并返回输出。适合运行脚本、检查环境、执行构建等操作',
   parameters: {
     type: 'object',

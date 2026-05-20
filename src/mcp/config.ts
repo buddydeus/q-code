@@ -23,8 +23,11 @@ export function getMcpSettingsPaths(cwd: string = process.cwd()): {
   userSettingsPath: string
   projectSettingsPath: string
 } {
+  const qCodeHome = process.env.Q_CODE_HOME
+    ? resolve(process.env.Q_CODE_HOME)
+    : join(homedir(), '.q-code')
   return {
-    userSettingsPath: join(homedir(), '.q-code', 'settings.json'),
+    userSettingsPath: join(qCodeHome, 'settings.json'),
     projectSettingsPath: join(resolve(cwd), '.q-code', 'settings.json')
   }
 }

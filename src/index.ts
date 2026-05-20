@@ -10,8 +10,7 @@ import {
   createTaskTools,
   createTodoWriteTool,
   ToolRegistry,
-  type ToolDefinition,
-  MCPClient
+  type ToolDefinition
 } from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
 import {
@@ -64,6 +63,15 @@ import {
   type TaskGraphOptions,
   type TaskMode
 } from './context/tasks'
+import {
+  bootstrapMcp,
+  closeMcpSubsystem,
+  describeTransport,
+  reconnectMcpServer,
+  summarizeMcpRegistry
+} from './mcp/bootstrap'
+import { getMcpSettingsPaths } from './mcp/config'
+import { getMcpRegistry, getMcpRegistryEntry, resolveMcpRegistryName } from './mcp/registry'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -111,34 +119,25 @@ const toolSearchTool: ToolDefinition = {
 
 registry.register(toolSearchTool)
 
-async function connectMCP(options: { quiet?: boolean } = {}) {
+async function connectMCP(options: { quiet?: boolean; cwd?: string } = {}) {
   const quiet = options.quiet === true
-  const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN
-
-  let canSpawn = true
   try {
-    const { execSync } = await import('node:child_process')
-    execSync('echo test', { stdio: 'ignore' })
-  } catch {
-    canSpawn = false
-  }
-
-  if (githubToken && canSpawn) {
-    if (!quiet) console.log('\n连接 GitHub MCP Server...')
-    try {
-      const client = new MCPClient('npx', ['-y', '@modelcontextprotocol/server-github'], {
-        GITHUB_PERSONAL_ACCESS_TOKEN: githubToken
-      })
-      const tools = await registry.registerMCPServer('github', client)
-      if (!quiet) console.log(`  已注册 ${tools.length} 个 MCP 工具`)
-      return
-    } catch (err) {
-      if (!quiet) console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`)
+    const result = await bootstrapMcp(options.cwd ?? process.cwd(), registry)
+    if (!quiet) {
+      for (const error of result.config.errors) console.log(`  [MCP config] ${error}`)
+      if (result.connections.length > 0) {
+        console.log(`\n  [MCP] 已配置 ${result.connections.length} 个 server，已注册 ${result.toolCount} 个工具`)
+      } else {
+        const paths = getMcpSettingsPaths(options.cwd ?? process.cwd())
+        console.log('\n  [MCP] 未配置 MCP server')
+        console.log(`  全局配置: ${paths.userSettingsPath}`)
+        console.log(`  项目配置: ${paths.projectSettingsPath}`)
+      }
     }
-  }
-
-  if (!githubToken && !quiet) {
-    console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN')
+    return result
+  } catch (err) {
+    if (!quiet) console.log(`  [MCP] 启动失败: ${formatErrorMessage(err)}`)
+    throw err
   }
 }
 
@@ -204,7 +203,14 @@ async function main() {
   const startInPlanMode = process.argv.includes('--plan')
 
   if (!dumpSystemPrompt) console.log(fmtBanner('1.0.0'))
-  await connectMCP({ quiet: dumpSystemPrompt })
+  const mcpBootstrapPromise = connectMCP({ quiet: dumpSystemPrompt, cwd: process.cwd() })
+  if (dumpSystemPrompt) {
+    await mcpBootstrapPromise
+  } else {
+    void mcpBootstrapPromise.catch(() => {
+      /* connectMCP already printed a concise error */
+    })
+  }
   const isContinue = process.argv.includes('--continue')
   const requestedSessionId = getStringArg('--session')
   const store = dumpSystemPrompt
@@ -338,7 +344,7 @@ async function main() {
 
   if (dumpSystemPrompt) {
     console.log(SYSTEM)
-    await registry.closeAllMCP()
+    await closeMcpSubsystem()
     return
   }
   if (!store) throw new Error('Session store was not initialized')
@@ -457,7 +463,7 @@ async function main() {
   async function closeCli(): Promise<void> {
     if (closed) return
     closed = true
-    await registry.closeAllMCP()
+    await closeMcpSubsystem()
     rl.close()
   }
 
@@ -492,6 +498,11 @@ async function main() {
       }
       if (trimmed === '/tasks' || trimmed.startsWith('/tasks ')) {
         await handleTasksCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
+      if (trimmed === '/mcp' || trimmed.startsWith('/mcp ')) {
+        await handleMcpCommand(trimmed)
         if (!closed) ask()
         return
       }
@@ -672,6 +683,78 @@ async function main() {
     }
   }
 
+  async function handleMcpCommand(command: string): Promise<void> {
+    const args = command.slice('/mcp'.length).trim().split(/\s+/).filter(Boolean)
+    const subcommand = args[0]
+
+    if (!subcommand) {
+      const summary = summarizeMcpRegistry()
+      console.log('\n' + summary)
+      if (getMcpRegistry().length === 0) {
+        const paths = getMcpSettingsPaths(activeStore.cwd)
+        console.log('\n  配置位置:')
+        console.log(`  全局: ${paths.userSettingsPath}`)
+        console.log(`  项目: ${paths.projectSettingsPath}`)
+      }
+      return
+    }
+
+    if (subcommand === 'tools') {
+      const serverName = args[1]
+      if (!serverName) {
+        console.log('\n  [MCP] 用法: /mcp tools <serverName>')
+        return
+      }
+      const resolved = resolveMcpRegistryName(serverName)
+      const entry = resolved ? getMcpRegistryEntry(resolved) : undefined
+      if (!entry) {
+        console.log(`\n  [MCP] 未找到 server: ${serverName}`)
+        return
+      }
+      if (entry.tools.length === 0) {
+        console.log(`\n  [MCP] ${resolved} 当前没有已注册工具，状态: ${entry.connection.type}`)
+        if (entry.connection.type === 'failed') console.log(`  错误: ${entry.connection.error}`)
+        return
+      }
+
+      const lines = [`MCP tools from '${resolved}' (${entry.tools.length})`, '']
+      for (const tool of entry.tools) {
+        const readOnly = tool.isReadOnly ? 'read-only' : 'write-capable'
+        const desc = tool.description.replace(/\s+/g, ' ').slice(0, 120)
+        lines.push(`- ${tool.name} [${readOnly}] ${desc}`)
+      }
+      console.log('\n' + lines.join('\n'))
+      return
+    }
+
+    if (subcommand === 'reconnect') {
+      const serverName = args[1]
+      if (!serverName) {
+        console.log('\n  [MCP] 用法: /mcp reconnect <serverName>')
+        return
+      }
+      console.log(`\n  [MCP] 正在重连 ${serverName}...`)
+      const connection = await reconnectMcpServer(serverName, registry)
+      if (!connection) {
+        console.log(`  [MCP] 未找到 server: ${serverName}`)
+        return
+      }
+      if (connection.type === 'connected') {
+        const entry = getMcpRegistryEntry(connection.name)
+        console.log(
+          `  [MCP] ${connection.name} 已连接 (${describeTransport(connection.config)})，工具数: ${entry?.tools.length ?? 0}`
+        )
+      } else if (connection.type === 'failed') {
+        console.log(`  [MCP] ${connection.name} 重连失败: ${connection.error}`)
+      } else {
+        console.log(`  [MCP] ${connection.name} 状态: ${connection.type}`)
+      }
+      return
+    }
+
+    console.log('\n  [MCP] 用法: /mcp、/mcp tools <serverName>、/mcp reconnect <serverName>')
+  }
+
   async function handleApprovePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
     if (!content?.trim()) {
@@ -768,7 +851,7 @@ async function main() {
     })
   }
 
-  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统。\n')
+  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP。\n')
   ask()
 }
 

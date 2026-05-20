@@ -40,7 +40,9 @@ cp .env.example .env
 | `ESCALATED_MAX_OUTPUT_TOKENS` | ❌ | 输出触顶后的升级重试上限，默认 64000 |
 | `COMPACT_MAX_OUTPUT_TOKENS` | ❌ | 压缩摘要输出上限，默认 20000 |
 | `Q_CODE_SESSION_DIR` | ❌ | 会话存储目录，默认 .sessions |
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | GitHub MCP 扩展 Token |
+| `Q_CODE_HOME` | ❌ | q-code 全局配置目录，默认 `~/.q-code` |
+| `MCP_CONNECT_TIMEOUT_MS` | ❌ | MCP server 连接超时，默认 30000 |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌ | 旧版 GitHub MCP 兼容入口；新配置建议使用 `mcpServers` |
 | `TAVILY_API_KEY` | ❌ | Tavily 搜索 API Key |
 | `SERPER_API_KEY` | ❌ | Serper 搜索 API Key |
 
@@ -88,7 +90,14 @@ src/
 │   ├── task-tools.ts     # Task V2 工具
 │   ├── todo-tools.ts     # TodoWrite V1 工具
 │   ├── utility-tools.ts  # glob / grep / URL 抓取 / 预览
-│   └── mcp-client.ts     # MCP 协议客户端
+├── mcp/
+│   ├── config.ts         # MCP settings.json 配置加载
+│   ├── client.ts         # MCP SDK client + stdio/http/sse transport
+│   ├── fetch-tools.ts    # MCP tool → q-code ToolDefinition 适配
+│   ├── bootstrap.ts      # 非阻塞启动、重连和注册表刷新
+│   ├── registry.ts       # MCP server 连接状态注册表
+│   ├── names.ts          # MCP 工具名 normalization
+│   └── types.ts          # MCP 配置和连接状态类型
 └── utils/
     ├── index.ts
     └── logger.ts         # 格式化输出
@@ -247,7 +256,54 @@ CLI 命令：
 
 #### MCP 扩展
 
-配置 `GITHUB_PERSONAL_ACCESS_TOKEN` 后自动连接 GitHub MCP Server，工具以 `mcp__github__<tool>` 形式注册。MCP 工具默认延迟加载，Agent 需要时通过 `tool_search` 按需激活。
+q-code 支持标准 `mcpServers` 配置，把外部 MCP server 适配成普通工具。配置分两级：
+
+| 路径 | 说明 |
+|------|------|
+| `~/.q-code/settings.json` | 全局 MCP 配置；可通过 `Q_CODE_HOME` 改变根目录 |
+| `<cwd>/.q-code/settings.json` | 项目级 MCP 配置；同名 server 整条覆盖全局配置 |
+
+示例：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+支持的 transport：
+
+| 类型 | 说明 |
+|------|------|
+| `stdio` | 默认类型；本地子进程，如 `npx -y @modelcontextprotocol/server-*` |
+| `http` | Streamable HTTP；适合远端 SaaS / 自建服务 |
+| `sse` | 旧版 SSE；headers 会同时注入 POST 和长连 GET |
+
+MCP 工具名会规范化为 `mcp__<server>__<tool>`，例如 `my.db` 的 `echo.tool` 会变成 `mcp__my_db__echo_tool`。MCP 工具默认延迟加载，Agent 需要时通过 `tool_search` 按需激活，避免大量外部工具撑大 System Prompt。
+
+启动时 MCP 连接在后台并行进行：慢 server 不会阻塞 CLI；连接成功后工具会增量注册。`--dump-system-prompt` 会等待 MCP bootstrap 完成，方便检查最终 prompt。
+
+CLI 命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/mcp` | 查看 MCP server 状态、transport、工具数量 |
+| `/mcp tools <serverName>` | 查看某个 server 暴露的工具 |
+| `/mcp reconnect <serverName>` | 清理缓存并重连某个 server |
+
+兼容说明：如果未配置 `mcpServers.github`，但设置了 `GITHUB_PERSONAL_ACCESS_TOKEN`，q-code 会按旧行为自动添加一个 GitHub stdio MCP server。新项目建议迁移到 `settings.json`。
 
 #### 并发控制
 
