@@ -3,6 +3,8 @@ export interface PromptContext {
   deferredToolSummary: string
   sessionMessageCount: number
   sessionId: string
+  runtimeContext?: string
+  agentMdContext?: string
 }
 
 type PipeFn = (ctx: PromptContext) => string | null
@@ -61,6 +63,24 @@ export function deferredTools(): PipeFn {
   return (ctx) => {
     if (!ctx.deferredToolSummary) return null
     return `如果你需要的工具不在当前列表中，使用 tool_search 工具搜索。${ctx.deferredToolSummary}`
+  }
+}
+
+export function runtimeEnvironment(): PipeFn {
+  return (ctx) => {
+    if (!ctx.runtimeContext) return null
+    return ctx.runtimeContext
+  }
+}
+
+export function agentMdInstructions(): PipeFn {
+  return (ctx) => {
+    if (!ctx.agentMdContext) return null
+    return [
+      '项目指令（AGENT.md / AGENTS.md）：',
+      '以下内容按从全局到项目根、再到当前目录的顺序加载；发生冲突时，后出现、路径更接近当前工作目录的指令优先。',
+      ctx.agentMdContext
+    ].join('\n\n')
   }
 }
 

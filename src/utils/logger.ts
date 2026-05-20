@@ -72,13 +72,14 @@ export function fmtRetry(attempt: number, max: number, delay: number): string {
 }
 
 /** 格式化上下文占用 */
-export function fmtContextUsage(used: number, limit: number): string {
+export function fmtContextUsage(used: number, limit: number, state = 'normal'): string {
   const pct = Math.round((used / limit) * 100)
   const barLen = 12
   const filled = Math.min(barLen, Math.round((pct / 100) * barLen))
   const bar = '█'.repeat(filled) + '░'.repeat(barLen - filled)
-  const color = pct > 85 ? c.red : pct > 65 ? c.yellow : c.green
-  return `  ${c.gray('上下文')} ${color(bar)} ${c.bold(`${used}`)}/${limit} ${c.dim(`(${pct}%)`)}`
+  const color = state === 'blocking' || state === 'error' ? c.red : state === 'warning' ? c.yellow : c.green
+  const label = state === 'normal' ? '' : c.dim(` ${state}`)
+  return `  ${c.gray('上下文')} ${color(bar)} ${c.bold(`${used}`)}/${limit} ${c.dim(`(${pct}%)`)}${label}`
 }
 
 /** 格式化本轮累计执行 token */

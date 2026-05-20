@@ -2,54 +2,32 @@ import 'dotenv/config'
 import { type ModelMessage } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
-import { fmtBanner, fmtToolList, fmtPrompt } from './utils/logger'
+import { fmtBanner, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
 import { allTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
-import { agentLoop } from './agent/loop'
+import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
 import {
   coreRules,
   deferredTools,
+  agentMdInstructions,
   PromptBuilder,
   PromptContext,
+  runtimeEnvironment,
   sessionContext,
   toolGuide
 } from './context/prompt-builder'
 import { SessionStore } from './session/store'
-import { estimateTokens, microcompact, summarize } from './context/compressor'
-
-const baseURL = normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL'))
-const apiKey = getRequiredEnv('OPENAI_API_KEY')
-const modelName = getRequiredEnv('OPENAI_MODEL')
-
-const openai = createOpenAI({
-  baseURL,
-  apiKey
-  // fetch: async (input, init) => {
-  //   if (init?.body && typeof init.body === 'string') {
-  //     try {
-  //       const body = JSON.parse(init.body)
-  //       body.service_tier = 'priority'
-  //       body.reasoning_effort = 'xhigh'
-  //       init = { ...init, body: JSON.stringify(body) }
-  //     } catch {}
-  //   }
-  //   return fetch(input, init)
-  // }
-})
-
-const model = openai.chat(modelName)
-
-// Summary 专用模型
-const summaryBaseURL = normalizeBaseURL(getRequiredEnv('SUMMARY_BASE_URL'))
-const summaryApiKey = getRequiredEnv('SUMMARY_API_KEY')
-const summaryModelName = getRequiredEnv('SUMMARY_MODEL')
-
-const summaryOpenai = createOpenAI({
-  baseURL: summaryBaseURL,
-  apiKey: summaryApiKey
-})
-
-const summaryModel = summaryOpenai.chat(summaryModelName)
+import { microcompact, summarize } from './context/compressor'
+import { CompactionCircuitBreaker } from './context/auto-compact'
+import { loadAgentMdContext } from './context/agent-md'
+import {
+  formatRuntimeEnvironmentContext,
+  getRuntimeEnvironmentContext
+} from './context/runtime-context'
+import {
+  buildTokenBudgetSnapshot,
+  type UsageAnchor
+} from './context/token-budget'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -89,7 +67,8 @@ const toolSearchTool: ToolDefinition = {
 
 registry.register(toolSearchTool)
 
-async function connectMCP() {
+async function connectMCP(options: { quiet?: boolean } = {}) {
+  const quiet = options.quiet === true
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN
 
   let canSpawn = true
@@ -101,20 +80,20 @@ async function connectMCP() {
   }
 
   if (githubToken && canSpawn) {
-    console.log('\n连接 GitHub MCP Server...')
+    if (!quiet) console.log('\n连接 GitHub MCP Server...')
     try {
       const client = new MCPClient('npx', ['-y', '@modelcontextprotocol/server-github'], {
         GITHUB_PERSONAL_ACCESS_TOKEN: githubToken
       })
       const tools = await registry.registerMCPServer('github', client)
-      console.log(`  已注册 ${tools.length} 个 MCP 工具`)
+      if (!quiet) console.log(`  已注册 ${tools.length} 个 MCP 工具`)
       return
     } catch (err) {
-      console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`)
+      if (!quiet) console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`)
     }
   }
 
-  if (!githubToken) {
+  if (!githubToken && !quiet) {
     console.log('\n未配置 GITHUB_PERSONAL_ACCESS_TOKEN')
   }
 }
@@ -139,86 +118,147 @@ function getRatioEnv(name: string, fallback: number): number {
   return ratio
 }
 
-function estimateTextTokens(text: string): number {
-  return Math.ceil(text.length / 4)
+function getStringArg(name: string): string | undefined {
+  const eq = process.argv.find((arg) => arg.startsWith(`${name}=`))
+  if (eq) return eq.slice(name.length + 1).trim() || undefined
+
+  const index = process.argv.indexOf(name)
+  if (index < 0) return undefined
+  const value = process.argv[index + 1]
+  if (!value || value.startsWith('--')) return undefined
+  return value.trim() || undefined
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function createModel() {
+  const openai = createOpenAI({
+    baseURL: normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL')),
+    apiKey: getRequiredEnv('OPENAI_API_KEY')
+  })
+
+  return openai.chat(getRequiredEnv('OPENAI_MODEL'))
+}
+
+function createSummaryModel() {
+  const summaryOpenai = createOpenAI({
+    baseURL: normalizeBaseURL(getRequiredEnv('SUMMARY_BASE_URL')),
+    apiKey: getRequiredEnv('SUMMARY_API_KEY')
+  })
+  const name = getRequiredEnv('SUMMARY_MODEL')
+
+  return {
+    model: summaryOpenai.chat(name),
+    name
+  }
 }
 
 async function main() {
-  console.log(fmtBanner('1.0.0'))
-  await connectMCP()
-  // Session 持久化
+  const dumpSystemPrompt = process.argv.includes('--dump-system-prompt')
+
+  if (!dumpSystemPrompt) console.log(fmtBanner('1.0.0'))
+  await connectMCP({ quiet: dumpSystemPrompt })
   const isContinue = process.argv.includes('--continue')
-  const sessionId = 'default'
-  const store = new SessionStore(sessionId)
+  const requestedSessionId = getStringArg('--session')
+  const store = dumpSystemPrompt
+    ? null
+    : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
+  const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
 
   let messages: ModelMessage[] = []
-  if (isContinue && store.exists()) {
+  if (store && isContinue && store.exists()) {
     messages = store.load()
-    console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条历史消息`)
+    const restored = store.getSummary()
+    if (!dumpSystemPrompt) {
+      console.log(
+        `\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`
+      )
+      console.log(`  transcript: ${restored.transcriptPath}`)
+    }
   } else {
-    console.log(`\n[Session] 新会话 "${sessionId}"`)
+    if (!dumpSystemPrompt) {
+      const prefix = isContinue ? '未找到可恢复会话，已创建新会话' : '新会话'
+      console.log(`\n[Session] ${prefix} "${sessionId}"`)
+      if (store) console.log(`  transcript: ${store.paths.transcriptPath}`)
+    }
   }
 
   let summary = ''
-
-  // ── 压缩演示 ──
-  const beforeTokens = estimateTokens(messages)
-  console.log(`\n[压缩前] ${messages.length} 条消息, ~${beforeTokens} tokens`)
-
-  // Layer 1: Microcompact
-  const mc = microcompact(messages)
-  messages = mc.messages
-  const afterMCTokens = estimateTokens(messages)
-  console.log(`[Layer 1: Microcompact] 清理了 ${mc.cleared} 个工具结果, ~${afterMCTokens} tokens`)
-
-  // Layer 2: LLM Summarization
-  const compResult = await summarize(summaryModel, messages, summary)
-  messages = compResult.messages
-  summary = compResult.summary
-  const afterSumTokens = estimateTokens(messages)
-  if (compResult.compressedCount > 0) {
-    console.log(
-      `[Layer 2: Summarization] 压缩了 ${compResult.compressedCount} 条消息, ~${afterSumTokens} tokens (使用 ${summaryModelName})`
-    )
-    console.log(`[摘要预览] ${summary.slice(0, 150)}...`)
-  } else {
-    console.log(`[Layer 2: Summarization] 未触发（消息量不够）`)
-  }
-
-  console.log(
-    `[压缩后] ${messages.length} 条消息, ~${afterSumTokens} tokens (节省 ${beforeTokens - afterSumTokens} tokens)\n`
-  )
+  const compactionBreaker = new CompactionCircuitBreaker()
+  const [runtimeContext, agentMdContext] = await Promise.all([
+    getRuntimeEnvironmentContext().then(formatRuntimeEnvironmentContext),
+    loadAgentMdContext()
+  ])
 
   // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
+    .pipe('runtimeEnvironment', runtimeEnvironment())
+    .pipe('agentMdInstructions', agentMdInstructions())
     .pipe('sessionContext', sessionContext())
 
   const promptCtx: PromptContext = {
     toolCount: registry.getActiveTools().length,
     deferredToolSummary: registry.getDeferredToolSummary(),
     sessionMessageCount: messages.length,
-    sessionId
+    sessionId,
+    runtimeContext,
+    agentMdContext
   }
 
   const SYSTEM = builder.build(promptCtx)
 
-  function estimatePromptTokens(currentMessages: ModelMessage[]): number {
-    return (
-      estimateTextTokens(SYSTEM) +
-      registry.countTokenEstimate().active +
-      estimateTokens(currentMessages)
-    )
+  if (dumpSystemPrompt) {
+    console.log(SYSTEM)
+    await registry.closeAllMCP()
+    return
+  }
+  if (!store) throw new Error('Session store was not initialized')
+  const activeStore = store
+  const model = createModel()
+  const { model: summaryModel, name: summaryModelName } = createSummaryModel()
+
+  function snapshotContext(currentMessages: ModelMessage[], usageAnchor?: UsageAnchor) {
+    return buildTokenBudgetSnapshot(currentMessages, {
+      systemPrompt: SYSTEM,
+      activeToolSchemaTokens: registry.countTokenEstimate().active,
+      contextLimitTokens,
+      compactTriggerRatio,
+      usageAnchor
+    })
   }
 
-  async function compactIfNeeded(currentMessages: ModelMessage[], reason: string): Promise<ModelMessage[]> {
-    const beforeTokens = estimatePromptTokens(currentMessages)
-    if (beforeTokens < compactTriggerTokens) return currentMessages
+  async function compactIfNeeded(
+    currentMessages: ModelMessage[],
+    reason: string,
+    trigger: 'preflight' | 'post-turn',
+    usageAnchor?: UsageAnchor
+  ): Promise<AgentLoopPreflightResult> {
+    const before = snapshotContext(currentMessages, usageAnchor)
+    const beforeForReduction = usageAnchor ? snapshotContext(currentMessages) : before
+    if (before.state === 'normal' || before.state === 'warning') {
+      return { messages: currentMessages, usageAnchor }
+    }
+
+    if (!compactionBreaker.shouldAttempt(before)) {
+      const skipReason = `自动压缩已连续失败 ${compactionBreaker.failures} 次，本次跳过`
+      console.log(`\n  [${reason}] ${skipReason}`)
+      return {
+        messages: currentMessages,
+        usageAnchor,
+        stopReason:
+          before.state === 'blocking'
+            ? `${skipReason}；上下文已到 ${before.used}/${before.limit} tokens，停止以避免请求失败`
+            : undefined
+      }
+    }
 
     console.log(
-      `\n  [${reason}] 上下文 ~${beforeTokens}/${contextLimitTokens} tokens >= ${Math.round(
+      `\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens >= ${Math.round(
         compactTriggerRatio * 100
       )}%，触发压缩...`
     )
@@ -227,16 +267,38 @@ async function main() {
     let nextMessages = mc.messages
     if (mc.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc.cleared} 个工具结果`)
 
-    const comp = await summarize(summaryModel, nextMessages, summary)
+    const comp = await summarize(summaryModel, nextMessages, summary, { force: true })
     if (comp.compressedCount > 0) {
       nextMessages = comp.messages
       summary = comp.summary
       console.log(`  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`)
     }
 
-    const afterTokens = estimatePromptTokens(nextMessages)
-    console.log(`  [压缩结果] 上下文 ~${afterTokens}/${contextLimitTokens} tokens`)
-    return nextMessages
+    const after = snapshotContext(nextMessages)
+    const changed = mc.cleared > 0 || comp.compressedCount > 0
+    const reduced = after.used < beforeForReduction.used
+
+    if (changed && reduced) {
+      compactionBreaker.recordSuccess()
+      activeStore.appendCompactionSnapshot({
+        trigger,
+        beforeTokens: before.used,
+        afterTokens: after.used,
+        messages: nextMessages
+      })
+    } else {
+      compactionBreaker.recordFailure()
+    }
+
+    console.log(`  [压缩结果] 上下文 ~${after.used}/${contextLimitTokens} tokens`)
+    return {
+      messages: nextMessages,
+      usageAnchor: undefined,
+      stopReason:
+        before.state === 'blocking' && after.state === 'blocking'
+          ? `上下文压缩后仍处于 blocking (${after.used}/${after.limit} tokens)，停止以避免请求失败`
+          : undefined
+    }
   }
 
   // Debug: 显示 Prompt Pipe 各模块状态
@@ -251,36 +313,69 @@ async function main() {
   )
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
+  let closed = false
 
-  function ask() {
-    rl.question('\nYou: ', async (input) => {
-      const trimmed = input.trim()
-      if (!trimmed || trimmed === 'exit') {
-        console.log('Bye!')
-        await registry.closeAllMCP()
-        rl.close()
-        return
-      }
+  async function closeCli(): Promise<void> {
+    if (closed) return
+    closed = true
+    await registry.closeAllMCP()
+    rl.close()
+  }
 
+  async function handleInput(input: string): Promise<void> {
+    const trimmed = input.trim()
+    if (!trimmed || trimmed === 'exit') {
+      console.log('Bye!')
+      await closeCli()
+      return
+    }
+
+    try {
       const userMsg: ModelMessage = { role: 'user', content: trimmed }
       messages.push(userMsg)
-      store.append(userMsg)
+      activeStore.append(userMsg)
 
       const loopResult = await agentLoop(model, registry, messages, SYSTEM, {
         tokenBudget,
-        preflight: (currentMessages, { step }) => compactIfNeeded(currentMessages, `Step ${step} preflight`),
-        contextUsage: (currentMessages) => ({
-          used: estimatePromptTokens(currentMessages),
-          limit: contextLimitTokens
-        })
+        preflight: (currentMessages, { step, usageAnchor }) =>
+          compactIfNeeded(currentMessages, `Step ${step} preflight`, 'preflight', usageAnchor),
+        contextUsage: (currentMessages, { usageAnchor }) => {
+          const snapshot = snapshotContext(currentMessages, usageAnchor)
+          return {
+            used: snapshot.used,
+            limit: snapshot.limit,
+            state: snapshot.state
+          }
+        },
+        onUsage: (turnUsage, totalUsage) => {
+          activeStore.appendUsage(turnUsage, totalUsage)
+        },
+        onToolEvent: (event) => {
+          activeStore.appendToolEvent({ type: 'tool_event', ...event })
+        }
       })
       messages = loopResult.messages
-      store.appendAll(loopResult.newMessages)
+      activeStore.appendUnpersisted(loopResult.newMessages)
 
       // Post-turn compaction keeps the next user turn below the configured context threshold.
-      messages = await compactIfNeeded(messages, 'Post-turn compaction')
+      const postTurn = await compactIfNeeded(
+        messages,
+        'Post-turn compaction',
+        'post-turn',
+        loopResult.usageAnchor
+      )
+      messages = postTurn.messages
+      if (postTurn.stopReason) console.log(fmtStop(postTurn.stopReason))
+    } catch (error) {
+      console.log(fmtStop(`本轮执行失败: ${formatErrorMessage(error)}`))
+    }
 
-      ask()
+    if (!closed) ask()
+  }
+
+  function ask() {
+    rl.question('\nYou: ', (input) => {
+      void handleInput(input)
     })
   }
 

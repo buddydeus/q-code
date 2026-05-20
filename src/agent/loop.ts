@@ -1,10 +1,15 @@
-import { streamText, type ModelMessage } from 'ai'
+import { streamText, type LanguageModelUsage, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection'
 import { isRetryable, calculateDelay, sleep } from './retry'
 import { ToolRegistry } from '../tools/registry'
 import {
+  buildUsageAnchor,
+  type TokenUsage,
+  type UsageAnchor,
+  usageFromLanguageModelUsage
+} from '../context/token-budget'
+import {
   fmtStepHeader,
-  fmtStepFooter,
   fmtToolCall,
   fmtToolResult,
   fmtLoopWarning,
@@ -24,12 +29,35 @@ const DEFAULT_TOKEN_BUDGET = 256000
 export interface AgentLoopResult {
   messages: ModelMessage[]
   newMessages: ModelMessage[]
+  usageAnchor?: UsageAnchor
+}
+
+export interface AgentLoopPreflightResult {
+  messages: ModelMessage[]
+  usageAnchor?: UsageAnchor
+  stopReason?: string
+}
+
+export interface AgentToolEvent {
+  phase: 'start' | 'done'
+  name: string
+  toolCallId?: string
+  resultLength?: number
+  isError?: boolean
 }
 
 export interface AgentLoopOptions {
   tokenBudget?: number
-  preflight?: (messages: ModelMessage[], context: { step: number }) => Promise<ModelMessage[]>
-  contextUsage?: (messages: ModelMessage[]) => { used: number; limit: number }
+  preflight?: (
+    messages: ModelMessage[],
+    context: { step: number; usageAnchor?: UsageAnchor }
+  ) => Promise<ModelMessage[] | AgentLoopPreflightResult>
+  contextUsage?: (
+    messages: ModelMessage[],
+    context: { usageAnchor?: UsageAnchor }
+  ) => { used: number; limit: number; state?: string }
+  onUsage?: (turnUsage: TokenUsage, totalUsage: TokenUsage) => void
+  onToolEvent?: (event: AgentToolEvent) => void
 }
 
 export async function agentLoop(
@@ -40,7 +68,8 @@ export async function agentLoop(
   options: AgentLoopOptions = {}
 ): Promise<AgentLoopResult> {
   let step = 0
-  let totalTokens = 0
+  let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+  let usageAnchor: UsageAnchor | undefined
   const tokenBudget = options.tokenBudget ?? DEFAULT_TOKEN_BUDGET
   const newMessages: ModelMessage[] = []
   const taskStart = Date.now()
@@ -50,23 +79,39 @@ export async function agentLoop(
     step++
     console.log(fmtStepHeader(step))
     if (options.preflight) {
-      messages = await options.preflight(messages, { step })
+      const beforePreflight = messages
+      const preflight = normalizePreflightResult(
+        await options.preflight(messages, { step, usageAnchor }),
+        beforePreflight,
+        usageAnchor
+      )
+      messages = preflight.messages
+      usageAnchor = preflight.usageAnchor
+      if (preflight.stopReason) {
+        console.log(fmtStop(preflight.stopReason))
+        break
+      }
     }
 
     let hasToolCall = false
     let fullText = ''
     let shouldBreak = false
-    let lastToolCall: { name: string; input: unknown } | null = null
+    let lastToolCall: { name: string; input: unknown; toolCallId?: string } | null = null
+    const toolCallsById = new Map<string, { name: string; input: unknown }>()
     let stepResponse: Awaited<ReturnType<typeof streamText>['response']>
-    let stepUsage: Awaited<ReturnType<typeof streamText>['usage']>
+    let stepUsage: LanguageModelUsage | undefined
 
     let stepStart = 0
     let firstTokenAt = 0
+    let requestMessageCount = messages.length
+    let requestToolSchemaTokens = registry.countTokenEstimate().active
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
       try {
         stepStart = Date.now()
         firstTokenAt = 0
+        requestMessageCount = messages.length
+        requestToolSchemaTokens = registry.countTokenEstimate().active
         const result = streamText({
           model,
           system,
@@ -87,8 +132,18 @@ export async function agentLoop(
             case 'tool-call': {
               if (!firstTokenAt) firstTokenAt = Date.now()
               hasToolCall = true
-              lastToolCall = { name: part.toolName, input: part.input }
+              lastToolCall = {
+                name: part.toolName,
+                input: part.input,
+                toolCallId: part.toolCallId
+              }
+              toolCallsById.set(part.toolCallId, { name: part.toolName, input: part.input })
               console.log(`  ${fmtToolCall(part.toolName, part.input)}`)
+              options.onToolEvent?.({
+                phase: 'start',
+                name: part.toolName,
+                toolCallId: part.toolCallId
+              })
 
               const detection = detect(part.toolName, part.input)
               if (detection.stuck) {
@@ -110,9 +165,30 @@ export async function agentLoop(
 
             case 'tool-result':
               console.log(`  ${fmtToolResult(part.output)}`)
-              if (lastToolCall) {
-                recordResult(lastToolCall.name, lastToolCall.input, part.output)
+              {
+                const matched = toolCallsById.get(part.toolCallId) ?? lastToolCall
+                if (matched) {
+                  recordResult(matched.name, matched.input, part.output)
+                  options.onToolEvent?.({
+                    phase: 'done',
+                    name: matched.name,
+                    toolCallId: part.toolCallId,
+                    resultLength: measureResultLength(part.output),
+                    isError: false
+                  })
+                }
               }
+              break
+
+            case 'tool-error':
+              console.log(`  ${fmtToolResult(part.error)}`)
+              options.onToolEvent?.({
+                phase: 'done',
+                name: part.toolName,
+                toolCallId: part.toolCallId,
+                resultLength: measureResultLength(part.error),
+                isError: true
+              })
               break
           }
         }
@@ -141,23 +217,33 @@ export async function agentLoop(
     newMessages.push(...stepResponse!.messages)
 
     // 只把执行 token 作为本轮成本/死循环硬保护；主显示使用当前上下文占用。
-    const inp = typeof stepUsage?.inputTokens === 'number' ? stepUsage.inputTokens : 0
-    const out = typeof stepUsage?.outputTokens === 'number' ? stepUsage.outputTokens : 0
-    totalTokens += inp + out
+    const turnUsage = usageFromLanguageModelUsage(stepUsage)
+    totalUsage = {
+      inputTokens: totalUsage.inputTokens + turnUsage.inputTokens,
+      outputTokens: totalUsage.outputTokens + turnUsage.outputTokens,
+      totalTokens: totalUsage.totalTokens + turnUsage.totalTokens
+    }
+    usageAnchor = buildUsageAnchor({
+      requestMessageCount,
+      usage: turnUsage,
+      systemPrompt: system,
+      activeToolSchemaTokens: requestToolSchemaTokens
+    })
+    options.onUsage?.(turnUsage, totalUsage)
 
     if (firstTokenAt && stepStart) {
       const ttft = firstTokenAt - stepStart
       const elapsed = (Date.now() - stepStart) / 1000
-      const tps = elapsed > 0 ? out / elapsed : 0
+      const tps = elapsed > 0 ? turnUsage.outputTokens / elapsed : 0
       console.log(fmtStepPerf(ttft, tps))
     }
 
     if (options.contextUsage) {
-      const context = options.contextUsage(messages)
-      console.log(fmtContextUsage(context.used, context.limit))
+      const context = options.contextUsage(messages, { usageAnchor })
+      console.log(fmtContextUsage(context.used, context.limit, context.state))
     }
-    if (totalTokens > tokenBudget) {
-      console.log(fmtTurnTokenUsage(totalTokens, tokenBudget))
+    if (totalUsage.totalTokens > tokenBudget) {
+      console.log(fmtTurnTokenUsage(totalUsage.totalTokens, tokenBudget))
       console.log(fmtStop('本轮执行预算耗尽，强制停止'))
       break
     }
@@ -175,5 +261,33 @@ export async function agentLoop(
   }
 
   console.log(fmtTaskDuration(Date.now() - taskStart))
-  return { messages, newMessages }
+  return { messages, newMessages, usageAnchor }
+}
+
+function normalizePreflightResult(
+  result: ModelMessage[] | AgentLoopPreflightResult,
+  previousMessages: ModelMessage[],
+  previousAnchor: UsageAnchor | undefined
+): AgentLoopPreflightResult {
+  if (Array.isArray(result)) {
+    return {
+      messages: result,
+      usageAnchor: result === previousMessages ? previousAnchor : undefined
+    }
+  }
+
+  return {
+    ...result,
+    usageAnchor:
+      result.usageAnchor ?? (result.messages === previousMessages ? previousAnchor : undefined)
+  }
+}
+
+function measureResultLength(value: unknown): number {
+  if (typeof value === 'string') return value.length
+  try {
+    return JSON.stringify(value ?? '').length
+  } catch {
+    return String(value).length
+  }
 }
