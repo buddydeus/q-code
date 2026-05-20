@@ -8,6 +8,7 @@ import type { ToolDefinition } from './registry'
 
 export interface TodoToolController {
   getSessionId: () => string
+  isEnabled?: () => boolean
 }
 
 export function createTodoWriteTool(controller: TodoToolController): ToolDefinition {
@@ -51,6 +52,7 @@ export function createTodoWriteTool(controller: TodoToolController): ToolDefinit
     isConcurrencySafe: false,
     isReadOnly: false,
     allowInPlanMode: true,
+    isEnabled: () => controller.isEnabled?.() ?? true,
     execute: async ({ todos }: { todos: unknown }) => {
       const parsed = parseTodoItems(todos)
       if (!parsed.todos) {

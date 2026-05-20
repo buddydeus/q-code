@@ -8,6 +8,7 @@ export interface ToolDefinition {
   isConcurrencySafe?: boolean
   isReadOnly?: boolean
   allowInPlanMode?: boolean
+  isEnabled?: () => boolean
   maxResultChars?: number
   execute: (input: any) => Promise<unknown>
   shouldDefer?: boolean
@@ -249,6 +250,8 @@ export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESU
 }
 
 function isToolVisibleInMode(tool: ToolDefinition, mode: ToolVisibilityMode): boolean {
+  if (tool.isEnabled && !tool.isEnabled()) return false
+
   if (mode === 'plan') {
     // q-code does not have a permission system. Plan mode is enforced by only
     // exposing read-only tools plus explicitly allowed session/planning tools.

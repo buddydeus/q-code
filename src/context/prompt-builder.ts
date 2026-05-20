@@ -4,7 +4,9 @@ export interface PromptContext {
   sessionMessageCount: number
   sessionId: string
   agentMode?: string
+  taskMode?: 'task' | 'todo'
   planFilePath?: string
+  taskContext?: string
   todoContext?: string
   runtimeContext?: string
   agentMdContext?: string
@@ -71,18 +73,43 @@ export function deferredTools(): PipeFn {
 }
 
 export function todoGuide(): PipeFn {
-  return () =>
+  return (ctx) => {
+    if (ctx.taskMode !== 'todo') return null
+    return (
     [
       '多步骤任务请主动使用 todo_write 维护会话级任务清单。',
       '任务清单应保持简短、可执行；每次调用 todo_write 都要传入完整列表。',
       '通常保持恰好一个任务为 in_progress；完成全部任务后把所有项标记 completed，让清单自动清空。'
     ].join('\n')
+    )
+  }
 }
 
 export function todoContext(): PipeFn {
   return (ctx) => {
+    if (ctx.taskMode !== 'todo') return null
     if (!ctx.todoContext) return null
     return ['当前会话任务清单：', ctx.todoContext].join('\n\n')
+  }
+}
+
+export function taskGuide(): PipeFn {
+  return (ctx) => {
+    if (ctx.taskMode !== 'task') return null
+    return [
+      '复杂、多步骤或跨回合任务请优先使用 task_create / task_update / task_get / task_list 维护持久化任务图。',
+      '开始执行前先用 task_list 找到 ready 的任务；更新任务前先用 task_get 读取最新状态。',
+      '用 blockedBy / blocks 表达依赖关系。完成一个任务后标记 completed，再调用 task_list 查看被解锁的后续任务。',
+      '短小临时任务如确实只需要会话便签，用户可通过 /tasks todo 切回 TodoWrite V1。'
+    ].join('\n')
+  }
+}
+
+export function taskContext(): PipeFn {
+  return (ctx) => {
+    if (ctx.taskMode !== 'task') return null
+    if (!ctx.taskContext) return null
+    return ['当前持久化任务图：', ctx.taskContext].join('\n\n')
   }
 }
 

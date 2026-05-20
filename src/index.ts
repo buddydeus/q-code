@@ -4,7 +4,15 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
 import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
-import { allTools, createPlanTools, createTodoWriteTool, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
+import {
+  allTools,
+  createPlanTools,
+  createTaskTools,
+  createTodoWriteTool,
+  ToolRegistry,
+  type ToolDefinition,
+  MCPClient
+} from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
 import {
   coreRules,
@@ -16,6 +24,8 @@ import {
   projectMemory,
   runtimeEnvironment,
   sessionContext,
+  taskContext,
+  taskGuide,
   todoContext,
   todoGuide,
   toolGuide
@@ -46,6 +56,14 @@ import {
 } from './context/plan-attachments'
 import type { ToolVisibilityMode } from './tools/registry'
 import { clearTodos, formatTodoList, getTodos } from './context/todos'
+import {
+  formatTaskList,
+  getTaskGraphDir,
+  listTasks,
+  resetTaskGraph,
+  type TaskGraphOptions,
+  type TaskMode
+} from './context/tasks'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -199,6 +217,7 @@ async function main() {
   }
   const planFilePath = getPlanFilePath(planOptions)
   let agentMode: ToolVisibilityMode = startInPlanMode ? 'plan' : 'normal'
+  let taskMode: TaskMode = 'task'
   let needsPlanModeExitAttachment = false
   let pendingPlanApproval = false
   let pendingPlanSummary = ''
@@ -229,8 +248,14 @@ async function main() {
     })
   )
   registry.register(
+    ...createTaskTools({
+      getSessionId: () => sessionId,
+      getCwd: () => store?.cwd ?? process.cwd(),
+      getTaskMode: () => taskMode
+    }),
     createTodoWriteTool({
-      getSessionId: () => sessionId
+      getSessionId: () => sessionId,
+      isEnabled: () => taskMode === 'todo'
     })
   )
   registry.setMode(agentMode)
@@ -265,6 +290,8 @@ async function main() {
     .pipe('coreRules', coreRules())
     .pipe('modeContext', modeContext())
     .pipe('toolGuide', toolGuide())
+    .pipe('taskGuide', taskGuide())
+    .pipe('taskContext', taskContext())
     .pipe('todoGuide', todoGuide())
     .pipe('todoContext', todoContext())
     .pipe('deferredTools', deferredTools())
@@ -281,7 +308,9 @@ async function main() {
       sessionMessageCount: messages.length,
       sessionId,
       agentMode,
+      taskMode,
       planFilePath,
+      taskContext: await getCurrentTaskContext(),
       todoContext: getCurrentTodoContext(),
       runtimeContext,
       agentMdContext,
@@ -296,7 +325,9 @@ async function main() {
     sessionMessageCount: messages.length,
     sessionId,
     agentMode,
+    taskMode,
     planFilePath,
+    taskContext: await getCurrentTaskContext(),
     todoContext: getCurrentTodoContext(),
     runtimeContext,
     agentMdContext,
@@ -412,6 +443,7 @@ async function main() {
 
   const activeTools = registry.getActiveTools()
   console.log(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
+  console.log(`任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`)
   if (agentMode === 'plan') console.log(`Plan 文件: ${planFilePath}`)
   console.log(
     `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
@@ -455,6 +487,11 @@ async function main() {
       }
       if (trimmed === '/todos' || trimmed.startsWith('/todos ')) {
         handleTodosCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
+      if (trimmed === '/tasks' || trimmed.startsWith('/tasks ')) {
+        await handleTasksCommand(trimmed)
         if (!closed) ask()
         return
       }
@@ -513,6 +550,9 @@ async function main() {
       },
       onToolResult: (event) => {
         if (event.name === 'todo_write' && typeof event.output === 'string') {
+          console.log(`\n${event.output}`)
+        }
+        if (event.name.startsWith('task_') && typeof event.output === 'string') {
           console.log(`\n${event.output}`)
         }
       }
@@ -595,6 +635,43 @@ async function main() {
     console.log('\n' + formatTodoList(getTodos(sessionId)))
   }
 
+  async function handleTasksCommand(command: string): Promise<void> {
+    const arg = command.slice('/tasks'.length).trim()
+    if (arg === 'task') {
+      taskMode = 'task'
+      console.log('\n  [Tasks] 已切换到 Task V2 持久化任务图。')
+      console.log(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
+      console.log('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
+      return
+    }
+
+    if (arg === 'todo') {
+      taskMode = 'todo'
+      console.log('\n  [Tasks] 已切换到 TodoWrite V1 会话级任务清单。')
+      console.log('\n' + formatTodoList(getTodos(sessionId)))
+      return
+    }
+
+    if (arg === 'reset') {
+      const deleted = await resetTaskGraph(getCurrentTaskOptions())
+      console.log(`\n  [Tasks] 已清空当前会话任务图，删除 ${deleted} 个任务；highwatermark 已保留。`)
+      return
+    }
+
+    if (arg) {
+      console.log('\n  [Tasks] 用法: /tasks、/tasks task、/tasks todo、/tasks reset')
+      return
+    }
+
+    console.log(`\n  [Tasks] 当前任务系统: ${taskMode}`)
+    if (taskMode === 'task') {
+      console.log(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
+      console.log('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
+    } else {
+      console.log('\n' + formatTodoList(getTodos(sessionId)))
+    }
+  }
+
   async function handleApprovePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
     if (!content?.trim()) {
@@ -643,8 +720,22 @@ async function main() {
   }
 
   function getCurrentTodoContext(): string | undefined {
+    if (taskMode !== 'todo') return undefined
     const todos = getTodos(sessionId)
     return todos.length > 0 ? formatTodoList(todos) : undefined
+  }
+
+  async function getCurrentTaskContext(): Promise<string | undefined> {
+    if (taskMode !== 'task') return undefined
+    const tasks = await listTasks(getCurrentTaskOptions())
+    return tasks.length > 0 ? formatTaskList(tasks) : undefined
+  }
+
+  function getCurrentTaskOptions(): TaskGraphOptions {
+    return {
+      cwd: store?.cwd ?? process.cwd(),
+      sessionId
+    }
   }
 
   async function handleCompactCommand(command: string): Promise<void> {
@@ -677,7 +768,7 @@ async function main() {
     })
   }
 
-  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode。\n')
+  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统。\n')
   ask()
 }
 
