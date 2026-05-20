@@ -4,29 +4,6 @@ import { createServer, type Server } from 'node:http'
 import fg from 'fast-glob'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
 
-export const weatherTool: ToolDefinition = {
-  name: 'get_weather',
-  description: '查询指定城市的天气信息',
-  parameters: {
-    type: 'object',
-    properties: {
-      city: { type: 'string', description: '城市名称，如"北京"、"上海"' }
-    },
-    required: ['city'],
-    additionalProperties: false
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  execute: async ({ city }: { city: string }) => {
-    const data: Record<string, string> = {
-      北京: '晴，15-25°C，东南风 2 级',
-      上海: '多云，18-22°C，西南风 3 级',
-      深圳: '阵雨，22-28°C，南风 2 级'
-    }
-    return data[city] || `${city}：暂无数据`
-  }
-}
-
 export const fetchUrlTool: ToolDefinition = {
   name: 'fetch_url',
   description: '抓取指定 URL 的网页内容并转换为纯文本（自动剥离 HTML 标签）',

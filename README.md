@@ -267,7 +267,7 @@ src/
 | Shell    | `bash`                                                      | Shell 命令执行                                          |
 | 搜索     | `glob` / `grep` / `pick_search`                             | 文件搜索 / 内容搜索 / 代码库语义搜索                    |
 | 网络     | `fetch_url` / `web_fetch`                                   | 网页抓取                                                |
-| 实用     | `weather` / `start_preview`                                 | 天气查询 / 本地预览服务                                 |
+| 实用     | `start_preview`                                             | 本地预览服务                                             |
 | 记忆     | `memory_write`                                              | 跨对话项目记忆写入                                      |
 | 技能     | `Skill`                                                     | 按需加载并执行 SKILL.md 工作流                          |
 | 子代理   | `Agent`                                                     | 同步或后台启动独立上下文的 SubAgent，支持 worktree 隔离 |
