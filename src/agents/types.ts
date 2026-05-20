@@ -1,6 +1,7 @@
 import type { ModelMessage } from 'ai'
 
 export type AgentSource = 'built-in' | 'user' | 'project'
+export type AgentIsolation = 'none' | 'worktree'
 
 export interface AgentDefinition {
   agentType: string
@@ -10,6 +11,7 @@ export interface AgentDefinition {
   readOnlyOnly?: boolean
   model?: string
   maxTurns?: number
+  isolation?: AgentIsolation
   source: AgentSource
   filePath?: string
   getSystemPrompt: () => string
@@ -26,4 +28,5 @@ export interface AgentRunResult {
   outputTokens: number
   turnCount: number
   warnings: string[]
+  reason?: string
 }

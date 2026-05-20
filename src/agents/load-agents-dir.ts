@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { splitFrontmatter } from '../skills/parse-frontmatter'
-import type { AgentDefinition, AgentSource } from './types'
+import type { AgentDefinition, AgentIsolation, AgentSource } from './types'
 
 export function getQCodeHome(): string {
   return process.env.Q_CODE_HOME?.trim() || path.join(os.homedir(), '.q-code')
@@ -83,6 +83,7 @@ async function loadFromOneDir(dir: string, source: AgentSource): Promise<LoadedF
     const model = asString(split.raw.model)
     const maxTurns = asPositiveInt(split.raw.maxTurns ?? split.raw.max_turns)
     const readOnlyOnly = asBoolean(split.raw.readOnlyOnly ?? split.raw.read_only_only)
+    const isolation = asIsolation(split.raw.isolation)
     const realFile = await fs.realpath(filePath).catch(() => filePath)
 
     agents.push({
@@ -93,6 +94,7 @@ async function loadFromOneDir(dir: string, source: AgentSource): Promise<LoadedF
       ...(readOnlyOnly ? { readOnlyOnly } : {}),
       ...(model ? { model } : {}),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
+      ...(isolation ? { isolation } : {}),
       source,
       filePath: realFile,
       getSystemPrompt: () => systemPrompt
@@ -100,6 +102,12 @@ async function loadFromOneDir(dir: string, source: AgentSource): Promise<LoadedF
   }
 
   return { agents, warnings }
+}
+
+function asIsolation(value: unknown): AgentIsolation | undefined {
+  const normalized = asString(value)
+  if (normalized === 'none' || normalized === 'worktree') return normalized
+  return undefined
 }
 
 export async function loadAllCustomAgents(cwd: string): Promise<LoadAllCustomAgentsResult> {

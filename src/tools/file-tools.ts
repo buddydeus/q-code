@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
-import type { ToolDefinition } from './registry'
+import type { ToolDefinition, ToolExecutionContext } from './registry'
 
 const DEFAULT_READ_MAX_LINES = 300
 const MAX_READ_MAX_LINES = 2000
@@ -65,17 +65,17 @@ export const readFileTool: ToolDefinition = {
   isConcurrencySafe: true,
   isReadOnly: true,
   maxResultChars: MAX_READ_MAX_CHARS + 2000,
-  execute: async (input: ReadFileInput) => {
+  execute: async (input: ReadFileInput, context: ToolExecutionContext) => {
     try {
-      return await readFileRange(input)
+      return await readFileRange(input, context)
     } catch (err) {
       return `读取失败: ${err instanceof Error ? err.message : err}`
     }
   }
 }
 
-async function readFileRange(input: ReadFileInput): Promise<string> {
-  const resolved = resolve(input.path)
+async function readFileRange(input: ReadFileInput, context: ToolExecutionContext): Promise<string> {
+  const resolved = resolve(context.cwd, input.path)
   if (!existsSync(resolved)) return `文件不存在: ${input.path}`
 
   const stat = statSync(resolved)
@@ -350,8 +350,8 @@ export const writeFileTool: ToolDefinition = {
   },
   isConcurrencySafe: false, // 写操作不能并行
   isReadOnly: false,
-  execute: async ({ path, content }: { path: string; content: string }) => {
-    writeFileSync(resolve(path), content, 'utf-8')
+  execute: async ({ path, content }: { path: string; content: string }, context: ToolExecutionContext) => {
+    writeFileSync(resolve(context.cwd, path), content, 'utf-8')
     return `已写入 ${content.length} 字符到 ${path}`
   }
 }
@@ -369,8 +369,8 @@ export const listDirectoryTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
-  execute: async ({ path = '.' }: { path?: string }) => {
-    const resolved = resolve(path)
+  execute: async ({ path = '.' }: { path?: string }, context: ToolExecutionContext) => {
+    const resolved = resolve(context.cwd, path)
     return readdirSync(resolved)
       .map((name) => {
         const stat = statSync(join(resolved, name))
@@ -396,8 +396,8 @@ export const editFileTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
-  execute: async ({ path, old_string, new_string }) => {
-    const resolved = resolve(path)
+  execute: async ({ path, old_string, new_string }, context: ToolExecutionContext) => {
+    const resolved = resolve(context.cwd, path)
     if (!existsSync(resolved)) return `文件不存在: ${path}`
 
     const content = readFileSync(resolved, 'utf-8')

@@ -70,9 +70,12 @@ export interface AgentLoopOptions {
     context: { usageAnchor?: UsageAnchor }
   ) => { used: number; limit: number; state?: string }
   onUsage?: (turnUsage: TokenUsage, totalUsage: TokenUsage) => void
+  onText?: (text: string) => void
   onToolEvent?: (event: AgentToolEvent) => void
   onToolResult?: (event: AgentToolResultEvent) => void
   stopAfterToolNames?: string[]
+  abortSignal?: AbortSignal
+  quiet?: boolean
 }
 
 export async function agentLoop(
@@ -92,11 +95,13 @@ export async function agentLoop(
     options.escalatedMaxOutputTokens ?? DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS
   const newMessages: ModelMessage[] = []
   const taskStart = Date.now()
+  const quiet = options.quiet === true
   resetHistory()
 
   while (step < maxSteps) {
+    throwIfAborted(options.abortSignal)
     step++
-    console.log(fmtStepHeader(step))
+    if (!quiet) console.log(fmtStepHeader(step))
     if (options.preflight) {
       const beforePreflight = messages
       const preflight = normalizePreflightResult(
@@ -145,19 +150,22 @@ export async function agentLoop(
         const result = streamText({
           model,
           system,
-          tools: registry.toAISDKFormat(),
+          tools: registry.toAISDKFormat({ abortSignal: options.abortSignal }),
           messages,
           maxOutputTokens: outputTokenLimit,
           maxRetries: 0,
+          ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
           onError: () => {}
         })
 
         for await (const part of result.fullStream) {
+          throwIfAborted(options.abortSignal)
           switch (part.type) {
             case 'text-delta':
               if (!firstTokenAt) firstTokenAt = Date.now()
-              process.stdout.write(part.text)
+              if (!quiet) process.stdout.write(part.text)
               fullText += part.text
+              options.onText?.(part.text)
               break
 
             case 'tool-call': {
@@ -169,7 +177,7 @@ export async function agentLoop(
                 toolCallId: part.toolCallId
               }
               toolCallsById.set(part.toolCallId, { name: part.toolName, input: part.input })
-              console.log(`  ${fmtToolCall(part.toolName, part.input)}`)
+              if (!quiet) console.log(`  ${fmtToolCall(part.toolName, part.input)}`)
               options.onToolEvent?.({
                 phase: 'start',
                 name: part.toolName,
@@ -178,7 +186,7 @@ export async function agentLoop(
 
               const detection = detect(part.toolName, part.input)
               if (detection.stuck) {
-                console.log(fmtLoopWarning(detection.message, detection.level))
+                if (!quiet) console.log(fmtLoopWarning(detection.message, detection.level))
                 if (detection.level === 'critical') {
                   shouldBreak = true
                 } else {
@@ -195,7 +203,7 @@ export async function agentLoop(
             }
 
             case 'tool-result':
-              console.log(`  ${fmtToolResult(part.output)}`)
+              if (!quiet) console.log(`  ${fmtToolResult(part.output)}`)
               {
                 const matched = toolCallsById.get(part.toolCallId) ?? lastToolCall
                 if (matched) {
@@ -221,7 +229,7 @@ export async function agentLoop(
               break
 
             case 'tool-error':
-              console.log(`  ${fmtToolResult(part.error)}`)
+              if (!quiet) console.log(`  ${fmtToolResult(part.error)}`)
               options.onToolEvent?.({
                 phase: 'done',
                 name: part.toolName,
@@ -246,14 +254,15 @@ export async function agentLoop(
           discardedUsage = addUsage(discardedUsage, partialUsage)
           didEscalateOutput = true
           outputTokenLimit = escalatedMaxOutputTokens
-          console.log(fmtOutputRetry(maxOutputTokens, escalatedMaxOutputTokens))
+          if (!quiet) console.log(fmtOutputRetry(maxOutputTokens, escalatedMaxOutputTokens))
           continue
         }
         break
       } catch (error) {
+        if (options.abortSignal?.aborted) throw createAbortError(options.abortSignal)
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
         const delay = calculateDelay(attempt)
-        console.log(fmtRetry(attempt, MAX_RETRIES, delay))
+        if (!quiet) console.log(fmtRetry(attempt, MAX_RETRIES, delay))
         await sleep(delay)
         hasToolCall = false
         fullText = ''
@@ -264,7 +273,7 @@ export async function agentLoop(
     }
 
     if (shouldBreak) {
-      console.log(fmtStop('循环检测触发，Agent 已停止'))
+      if (!quiet) console.log(fmtStop('循环检测触发，Agent 已停止'))
       break
     }
 
@@ -291,37 +300,53 @@ export async function agentLoop(
       const ttft = firstTokenAt - stepStart
       const elapsed = (Date.now() - stepStart) / 1000
       const tps = elapsed > 0 ? anchorUsage.outputTokens / elapsed : 0
-      console.log(fmtStepPerf(ttft, tps))
+      if (!quiet) console.log(fmtStepPerf(ttft, tps))
     }
 
     if (options.contextUsage) {
       const context = options.contextUsage(messages, { usageAnchor })
-      console.log(fmtContextUsage(context.used, context.limit, context.state))
+      if (!quiet) console.log(fmtContextUsage(context.used, context.limit, context.state))
     }
     if (totalUsage.totalTokens > tokenBudget) {
-      console.log(fmtTurnTokenUsage(totalUsage.totalTokens, tokenBudget))
-      console.log(fmtStop('本轮执行预算耗尽，强制停止'))
+      if (!quiet) {
+        console.log(fmtTurnTokenUsage(totalUsage.totalTokens, tokenBudget))
+        console.log(fmtStop('本轮执行预算耗尽，强制停止'))
+      }
       break
     }
     if (stopAfterStepReason) {
-      console.log(`  ${stopAfterStepReason}`)
+      if (!quiet) console.log(`  ${stopAfterStepReason}`)
       break
     }
 
     if (!hasToolCall) {
-      if (fullText) console.log()
+      if (fullText && !quiet) console.log()
       break
     }
 
-    console.log(fmtContinue())
+    if (!quiet) console.log(fmtContinue())
   }
 
   if (step >= maxSteps) {
-    console.log(fmtStop('达到最大步数限制，强制停止'))
+    if (!quiet) console.log(fmtStop('达到最大步数限制，强制停止'))
   }
 
-  console.log(fmtTaskDuration(Date.now() - taskStart))
+  if (!quiet) console.log(fmtTaskDuration(Date.now() - taskStart))
   return { messages, newMessages, usageAnchor }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return
+  throw createAbortError(signal)
+}
+
+function createAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason
+  if (reason instanceof Error) return reason
+  const message = typeof reason === 'string' && reason.trim() ? reason : 'Aborted'
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
 }
 
 function normalizePreflightResult(

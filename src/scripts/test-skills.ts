@@ -128,14 +128,17 @@ try {
 
   console.log('\n[4] Skill tool execution')
   const skillTool = createSkillTool({ getSessionId: () => 'session-123' })
-  const toolResult = await skillTool.execute({ skill: 'hello-world', args: 'Ada' })
+  const toolResult = await skillTool.execute(
+    { skill: 'hello-world', args: 'Ada' },
+    { cwd }
+  )
   assert(typeof toolResult === 'string', 'Skill tool returns text')
   assert(String(toolResult).includes('Follow the instructions below'), 'Skill tool marks body as instructions')
   assert(String(toolResult).includes('Hello Ada'), 'Skill tool substitutes $ARGUMENTS')
   assert(String(toolResult).includes('session-123'), 'Skill tool substitutes session id')
   assert(!String(toolResult).includes('Global hello'), 'Skill tool uses project override body')
 
-  const hiddenResult = await skillTool.execute({ skill: 'secret-handshake' })
+  const hiddenResult = await skillTool.execute({ skill: 'secret-handshake' }, { cwd })
   assert(
     String(hiddenResult).includes('disable-model-invocation'),
     'Skill tool rejects model invocation for hidden skill'

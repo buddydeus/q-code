@@ -9,9 +9,19 @@ export interface ToolDefinition {
   allowInPlanMode?: boolean
   isEnabled?: () => boolean
   maxResultChars?: number
-  execute: (input: any) => Promise<unknown>
+  execute: (input: any, context: ToolExecutionContext) => Promise<unknown>
   shouldDefer?: boolean
   searchHint?: string
+}
+
+export interface ToolExecutionContext {
+  cwd: string
+  abortSignal?: AbortSignal
+}
+
+export interface ToolRegistryOptions {
+  cwd?: string
+  quiet?: boolean
 }
 
 export type ToolVisibilityMode = 'normal' | 'plan'
@@ -24,12 +34,31 @@ const DEFAULT_MAX_RESULT_CHARS = 100000
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>()
   private visibilityMode: ToolVisibilityMode = 'normal'
+  private cwd: string
+  private quiet: boolean
 
   private exclusiveLock = false
   private concurrentCount = 0
   private waitQueue: Array<() => void> = []
 
   private discoveredTools = new Set<string>()
+
+  constructor(options: ToolRegistryOptions = {}) {
+    this.cwd = options.cwd ?? process.cwd()
+    this.quiet = options.quiet === true
+  }
+
+  setCwd(cwd: string): void {
+    this.cwd = cwd
+  }
+
+  getCwd(): string {
+    return this.cwd
+  }
+
+  setQuiet(quiet: boolean): void {
+    this.quiet = quiet
+  }
 
   register(...tools: ToolDefinition[]): void {
     for (const tool of tools) {
@@ -171,7 +200,7 @@ export class ToolRegistry {
     for (const resolve of waiting) resolve()
   }
 
-  toAISDKFormat(): Record<string, any> {
+  toAISDKFormat(context: Partial<ToolExecutionContext> = {}): Record<string, any> {
     const result: Record<string, any> = {}
     const activeTools = this.getActiveTools()
 
@@ -187,13 +216,16 @@ export class ToolRegistry {
         execute: async (input: any) => {
           if (isSafe) {
             await registry.acquireConcurrent()
-            console.log(fmtLockAcquire(tool.name, true))
+            if (!registry.quiet) console.log(fmtLockAcquire(tool.name, true))
           } else {
             await registry.acquireExclusive()
-            console.log(fmtLockAcquire(tool.name, false))
+            if (!registry.quiet) console.log(fmtLockAcquire(tool.name, false))
           }
           try {
-            const raw = await executeFn(input)
+            const raw = await executeFn(input, {
+              cwd: context.cwd ?? registry.cwd,
+              ...(context.abortSignal ? { abortSignal: context.abortSignal } : {})
+            })
             const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
             return truncateResult(text, maxChars)
           } finally {

@@ -85,6 +85,11 @@ import { bootstrapAgents } from './agents/bootstrap'
 import { formatAgentsSystemReminder } from './agents/prompt-injection'
 import { getAllAgents } from './agents/registry'
 import { getProjectAgentsDir, getUserAgentsDir } from './agents/load-agents-dir'
+import { getAllAsyncAgents, killAsyncAgent } from './agents/async-agent-store'
+import {
+  drainPendingNotifications,
+  pendingNotificationCount
+} from './agents/notification-store'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -298,7 +303,9 @@ async function main() {
       getAgentMdContext: () => agentMdContext,
       getTokenBudget: () => tokenBudget,
       getMaxOutputTokens: () => defaultMaxOutputTokens,
-      getEscalatedMaxOutputTokens: () => escalatedMaxOutputTokens
+      getEscalatedMaxOutputTokens: () => escalatedMaxOutputTokens,
+      getSessionId: () => sessionId,
+      getCwd: () => activeStore.cwd
     })
   )
 
@@ -366,6 +373,7 @@ async function main() {
   }
   if (!store) throw new Error('Session store was not initialized')
   const activeStore = store
+  registry.setCwd(activeStore.cwd)
   const model = createModel()
   const { model: summaryModel, name: summaryModelName } = createSummaryModel()
 
@@ -572,6 +580,7 @@ async function main() {
   }
 
   async function runAgentTurnWithMessages(userMessages: ModelMessage[], userQuery: string): Promise<void> {
+    injectPendingTaskNotifications()
     await injectPlanModeMessages()
 
     messages.push(...userMessages)
@@ -627,6 +636,19 @@ async function main() {
     messages = postTurn.messages
     if (postTurn.stopReason) console.log(fmtStop(postTurn.stopReason))
     if (pendingPlanApproval) await printPlanApprovalHint()
+  }
+
+  function injectPendingTaskNotifications(): void {
+    const notifications = drainPendingNotifications()
+    if (notifications.length === 0) return
+
+    const notificationMessages: ModelMessage[] = notifications.map((notification) => ({
+      role: 'user',
+      content: notification.text
+    }))
+    messages.push(...notificationMessages)
+    activeStore.appendAll(notificationMessages)
+    console.log(`\n  [Agents] 已注入 ${notifications.length} 条后台任务通知。`)
   }
 
   async function injectPlanModeMessages(): Promise<void> {
@@ -833,13 +855,24 @@ async function main() {
   }
 
   function handleAgentsCommand(command: string): void {
-    const arg = command.slice('/agents'.length).trim()
-    if (arg) {
-      console.log('\n  [Agents] 用法: /agents')
+    const args = command.slice('/agents'.length).trim().split(/\s+/).filter(Boolean)
+    if (args[0] === 'kill') {
+      const agentId = args[1]
+      if (!agentId) {
+        console.log('\n  [Agents] 用法: /agents kill <agent_id>')
+        return
+      }
+      const killed = killAsyncAgent(agentId)
+      console.log(killed ? `\n  [Agents] 已请求终止后台任务 ${agentId}` : `\n  [Agents] 未找到运行中的后台任务 ${agentId}`)
+      return
+    }
+    if (args.length > 0) {
+      console.log('\n  [Agents] 用法: /agents、/agents kill <agent_id>')
       return
     }
 
     const agents = getAllAgents()
+    const asyncAgents = getAllAsyncAgents()
     if (agents.length === 0) {
       console.log('\nSubAgents (0 loaded)')
       console.log('  没有找到 SubAgents。可添加到:')
@@ -854,7 +887,8 @@ async function main() {
         agent.source,
         agent.readOnlyOnly ? 'read-only' : null,
         agent.model ? `model=${agent.model}` : null,
-        agent.maxTurns ? `maxTurns=${agent.maxTurns}` : null
+        agent.maxTurns ? `maxTurns=${agent.maxTurns}` : null,
+        agent.isolation ? `isolation=${agent.isolation}` : null
       ].filter((item): item is string => item !== null)
       const tools = agent.tools?.length ? agent.tools.join(',') : '*'
       const disallowed = agent.disallowedTools?.length
@@ -864,10 +898,35 @@ async function main() {
       lines.push(`  ${agent.whenToUse}`)
     }
     lines.push('')
+    lines.push(`Background agents (${asyncAgents.length})`)
+    if (asyncAgents.length === 0) {
+      lines.push('  当前没有后台任务。')
+    } else {
+      for (const entry of asyncAgents) {
+        const bits = [
+          entry.status,
+          entry.isolated ? 'worktree' : null,
+          `tools=${entry.toolUseCount}`,
+          entry.totalTokens !== undefined ? `tokens=${entry.totalTokens}` : null,
+          entry.durationMs !== undefined ? `duration=${entry.durationMs}ms` : null
+        ].filter((item): item is string => item !== null)
+        lines.push(`- ${entry.agentId} [${bits.join(', ')}] ${entry.description}`)
+        lines.push(`  type=${entry.agentType} output=${entry.outputFile}`)
+        if (entry.worktreePath) {
+          lines.push(`  worktree=${entry.worktreePath} branch=${entry.worktreeBranch ?? '(unknown)'}`)
+        }
+        if (entry.error) lines.push(`  error=${entry.error}`)
+      }
+    }
+    if (pendingNotificationCount() > 0) {
+      lines.push('')
+      lines.push(`待注入通知: ${pendingNotificationCount()} 条`)
+    }
+    lines.push('')
     lines.push('自定义 SubAgent 文件:')
     lines.push(`  用户级: ${getUserAgentsDir()}/<name>.md`)
     lines.push(`  项目级: ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`)
-    lines.push('修改 agent 文件后需要重启 q-code。')
+    lines.push('修改 agent 文件后需要重启 q-code；终止后台任务可用 /agents kill <agent_id>。')
     console.log('\n' + lines.join('\n'))
   }
 

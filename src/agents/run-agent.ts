@@ -27,15 +27,29 @@ export interface RunChildAgentParams {
   tokenBudget?: number
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
+  cwdOverride?: string
+  abortSignal?: AbortSignal
+  quiet?: boolean
+  onProgress?: (event: ChildAgentProgressEvent) => void
 }
+
+export type ChildAgentProgressEvent =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; toolName: string; toolCallId?: string }
+  | { type: 'tool_result'; toolName: string; toolCallId?: string; isError?: boolean; output: unknown }
+  | { type: 'turn_usage'; turnUsage: TokenUsage; cumulativeUsage: TokenUsage; turnCount: number }
 
 export async function runChildAgent(params: RunChildAgentParams): Promise<AgentRunResult> {
   const startTime = Date.now()
   const resolved = resolveAgentTools(params.agentDefinition, params.availableTools)
-  const registry = buildChildRegistry(resolved.resolvedTools, resolved.hasWildcard)
+  const registry = buildChildRegistry(resolved.resolvedTools, resolved.hasWildcard, {
+    cwd: params.cwdOverride,
+    quiet: params.quiet
+  })
   const messages: ModelMessage[] = [{ role: 'user', content: params.prompt }]
   let totalToolUseCount = 0
   let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
+  let turnCount = 0
 
   const system = buildChildSystemPrompt({
     definition: params.agentDefinition,
@@ -49,11 +63,48 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     maxOutputTokens: params.maxOutputTokens,
     escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
     maxSteps: params.agentDefinition.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
+    abortSignal: params.abortSignal,
+    quiet: params.quiet,
+    onText: (text) => {
+      params.onProgress?.({ type: 'text', text })
+    },
     onToolEvent: (event) => {
-      if (event.phase === 'start') totalToolUseCount++
+      if (event.phase === 'start') {
+        totalToolUseCount++
+        params.onProgress?.({
+          type: 'tool_use',
+          toolName: event.name,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {})
+        })
+      }
+      if (event.phase === 'done' && event.isError) {
+        params.onProgress?.({
+          type: 'tool_result',
+          toolName: event.name,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+          isError: true,
+          output: '(tool error)'
+        })
+      }
+    },
+    onToolResult: (event) => {
+      params.onProgress?.({
+        type: 'tool_result',
+        toolName: event.name,
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        isError: false,
+        output: event.output
+      })
     },
     onUsage: (_turnUsage, nextTotalUsage) => {
       totalUsage = nextTotalUsage
+      turnCount++
+      params.onProgress?.({
+        type: 'turn_usage',
+        turnUsage: _turnUsage,
+        cumulativeUsage: nextTotalUsage,
+        turnCount
+      })
     }
   })
 
@@ -74,12 +125,17 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     inputTokens: totalUsage.inputTokens,
     outputTokens: totalUsage.outputTokens,
     turnCount: countAssistantTurns(loopResult.newMessages),
-    warnings
+    warnings,
+    reason: 'completed'
   }
 }
 
-function buildChildRegistry(tools: ToolDefinition[], hasWildcard: boolean): ToolRegistry {
-  const registry = new ToolRegistry()
+function buildChildRegistry(
+  tools: ToolDefinition[],
+  hasWildcard: boolean,
+  options: { cwd?: string; quiet?: boolean } = {}
+): ToolRegistry {
+  const registry = new ToolRegistry(options)
   const includesToolSearch = tools.some((tool) => tool.name === 'tool_search')
   registry.register(...tools.filter((tool) => tool.name !== 'tool_search'))
   if (includesToolSearch) registry.register(createToolSearchTool(registry))

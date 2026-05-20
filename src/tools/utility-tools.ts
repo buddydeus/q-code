@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { extname, join, relative, resolve } from 'node:path'
 import { createServer, type Server } from 'node:http'
 import fg from 'fast-glob'
-import type { ToolDefinition } from './registry'
+import type { ToolDefinition, ToolExecutionContext } from './registry'
 
 export const weatherTool: ToolDefinition = {
   name: 'get_weather',
@@ -78,9 +78,12 @@ export const globTool: ToolDefinition = {
   },
   isConcurrencySafe: true,
   isReadOnly: true,
-  execute: async ({ pattern, path = '.' }: { pattern: string; path?: string }) => {
+  execute: async (
+    { pattern, path = '.' }: { pattern: string; path?: string },
+    context: ToolExecutionContext
+  ) => {
     const results = await fg(pattern, {
-      cwd: resolve(path),
+      cwd: resolve(context.cwd, path),
       ignore: ['node_modules/**', '.git/**'],
       dot: false,
       onlyFiles: true,
@@ -106,8 +109,11 @@ export const grepTool: ToolDefinition = {
   isConcurrencySafe: true,
   isReadOnly: true,
   maxResultChars: 3000,
-  execute: async ({ pattern, path = '.' }: { pattern: string; path?: string }) => {
-    const baseDir = resolve(path)
+  execute: async (
+    { pattern, path = '.' }: { pattern: string; path?: string },
+    context: ToolExecutionContext
+  ) => {
+    const baseDir = resolve(context.cwd, path)
     const regex = new RegExp(pattern, 'i')
     const matches: string[] = []
     const SKIP = new Set(['node_modules', '.git', 'dist'])
@@ -192,9 +198,12 @@ export const startPreviewTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
-  execute: async ({ port = 8080 }: { port?: number } = {}) => {
+  execute: async (
+    { port = 8080 }: { port?: number } = {},
+    context: ToolExecutionContext
+  ) => {
     if (previewServer) return `预览服务器已在运行 → http://localhost:${port}`
-    const root = resolve('app')
+    const root = resolve(context.cwd, 'app')
     if (!existsSync(root)) return '错误：app/ 目录不存在'
 
     previewServer = createServer((req, res) => {

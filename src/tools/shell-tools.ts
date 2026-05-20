@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process'
-import type { ToolDefinition } from './registry'
+import type { ToolDefinition, ToolExecutionContext } from './registry'
 
 export const bashTool: ToolDefinition = {
   name: 'f',
@@ -15,15 +15,16 @@ export const bashTool: ToolDefinition = {
   isConcurrencySafe: false,
   isReadOnly: false,
   maxResultChars: 3000,
-  execute: async ({ command }: { command: string }) => {
+  execute: async ({ command }: { command: string }, context: ToolExecutionContext) => {
     try {
-      execSync('echo test', { stdio: 'ignore' })
+      execSync('echo test', { cwd: context.cwd, stdio: 'ignore' })
     } catch {
       return `[bash 不可用] 当前环境（WebContainer）不支持 shell 命令。本地终端运行 pnpm start 可使用 bash 工具。`
     }
 
     try {
       const output = execSync(command, {
+        cwd: context.cwd,
         encoding: 'utf-8',
         timeout: 10000,
         maxBuffer: 1024 * 1024,

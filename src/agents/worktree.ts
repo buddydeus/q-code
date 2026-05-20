@@ -1,0 +1,155 @@
+import { execFile } from 'node:child_process'
+import * as fs from 'node:fs/promises'
+import * as path from 'node:path'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+const WORKTREES_SUBDIR = path.join('.q-code', 'worktrees')
+
+export interface WorktreeInfo {
+  worktreePath: string
+  worktreeBranch: string
+  headCommit: string
+  gitRoot: string
+}
+
+interface ExecResult {
+  code: number
+  stdout: string
+  stderr: string
+}
+
+export async function findGitRoot(cwd: string): Promise<string | null> {
+  let current = path.resolve(cwd)
+
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      await fs.stat(path.join(current, '.git'))
+      return current
+    } catch {
+      const parent = path.dirname(current)
+      if (parent === current) return null
+      current = parent
+    }
+  }
+
+  return null
+}
+
+export async function createAgentWorktree(slug: string, cwd: string): Promise<WorktreeInfo> {
+  const gitRoot = await findGitRoot(cwd)
+  if (!gitRoot) {
+    throw new Error(`Cannot create worktree: ${cwd} is not inside a git repository.`)
+  }
+
+  const head = await git(['rev-parse', 'HEAD'], gitRoot)
+  if (head.code !== 0) {
+    throw new Error(`Failed to read HEAD: ${head.stderr.trim() || `exit ${head.code}`}`)
+  }
+
+  const worktreePath = worktreePathFor(gitRoot, slug)
+  const worktreeBranch = worktreeBranchName(slug)
+  await fs.mkdir(path.dirname(worktreePath), { recursive: true })
+
+  const add = await git(['worktree', 'add', '-B', worktreeBranch, worktreePath, 'HEAD'], gitRoot)
+  if (add.code !== 0) {
+    throw new Error(`git worktree add failed: ${add.stderr.trim() || `exit ${add.code}`}`)
+  }
+
+  return {
+    worktreePath,
+    worktreeBranch,
+    headCommit: head.stdout.trim(),
+    gitRoot
+  }
+}
+
+export async function hasWorktreeChanges(
+  worktreePath: string,
+  headCommit: string
+): Promise<boolean> {
+  const status = await git(['status', '--porcelain'], worktreePath)
+  if (status.code !== 0) return true
+  if (status.stdout.trim()) return true
+
+  const commits = await git(['rev-list', '--count', `${headCommit}..HEAD`], worktreePath)
+  if (commits.code !== 0) return true
+  const count = Number.parseInt(commits.stdout.trim(), 10)
+  return Number.isFinite(count) && count > 0
+}
+
+export async function removeAgentWorktree(
+  info: Pick<WorktreeInfo, 'worktreePath' | 'worktreeBranch' | 'gitRoot'>
+): Promise<{ ok: boolean; error?: string }> {
+  const errors: string[] = []
+
+  const remove = await git(['worktree', 'remove', '--force', info.worktreePath], info.gitRoot)
+  if (remove.code !== 0) {
+    errors.push(`worktree remove: ${remove.stderr.trim() || `exit ${remove.code}`}`)
+  }
+
+  const branchDelete = await git(['branch', '-D', info.worktreeBranch], info.gitRoot)
+  if (branchDelete.code !== 0) {
+    errors.push(`branch -D: ${branchDelete.stderr.trim() || `exit ${branchDelete.code}`}`)
+  }
+
+  if (errors.length > 0) return { ok: false, error: errors.join('; ') }
+  return { ok: true }
+}
+
+export async function cleanupWorktreeIfClean(
+  info: WorktreeInfo | undefined
+): Promise<{ worktreePath?: string; worktreeBranch?: string }> {
+  if (!info) return {}
+
+  let dirty = true
+  try {
+    dirty = await hasWorktreeChanges(info.worktreePath, info.headCommit)
+  } catch {
+    dirty = true
+  }
+
+  if (dirty) {
+    return {
+      worktreePath: info.worktreePath,
+      worktreeBranch: info.worktreeBranch
+    }
+  }
+
+  await removeAgentWorktree(info)
+  return {}
+}
+
+export function worktreeBranchName(slug: string): string {
+  return `worktree-${flattenSlug(slug)}`
+}
+
+export function worktreePathFor(gitRoot: string, slug: string): string {
+  return path.join(gitRoot, WORKTREES_SUBDIR, flattenSlug(slug))
+}
+
+async function git(args: string[], cwd: string): Promise<ExecResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync('git', args, {
+      cwd,
+      maxBuffer: 16 * 1024 * 1024
+    })
+    return { code: 0, stdout, stderr }
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & {
+      code?: number | string
+      stdout?: string
+      stderr?: string
+    }
+    const code = typeof err.code === 'number' ? err.code : 127
+    return {
+      code,
+      stdout: err.stdout ?? '',
+      stderr: err.stderr ?? (error instanceof Error ? error.message : String(error))
+    }
+  }
+}
+
+function flattenSlug(slug: string): string {
+  return slug.replace(/[^A-Za-z0-9._-]/g, '+')
+}

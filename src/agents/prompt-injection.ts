@@ -12,8 +12,10 @@ export function formatAgentsSystemReminder(agents: AgentDefinition[]): string {
   })
 
   const lines = sorted.map((agent) => {
-    const tag = agent.source
-    return `- ${agent.agentType} [${tag}]: ${truncate(agent.whenToUse, MAX_DESC_CHARS)}`
+    const tags = [agent.source, agent.isolation ? `isolation=${agent.isolation}` : null].filter(
+      (tag): tag is string => tag !== null
+    )
+    return `- ${agent.agentType} [${tags.join(', ')}]: ${truncate(agent.whenToUse, MAX_DESC_CHARS)}`
   })
 
   return [
@@ -30,7 +32,7 @@ export function formatAgentsSystemReminder(agents: AgentDefinition[]): string {
     '- User-level shared agents can be placed at `~/.q-code/agents/<name>.md`.',
     '- Format: Markdown with YAML frontmatter plus a body that becomes the sub-agent system prompt.',
     '- Required fields: `name`, `description`.',
-    '- Optional fields: `tools`, `disallowedTools`, `model`, `maxTurns`, `readOnlyOnly`.',
+    '- Optional fields: `tools`, `disallowedTools`, `model`, `maxTurns`, `readOnlyOnly`, `isolation` (`none` or `worktree`).',
     '- Restart q-code after creating or editing agent files.',
     '',
     'Template:',
@@ -40,6 +42,7 @@ export function formatAgentsSystemReminder(agents: AgentDefinition[]): string {
     'description: Use for focused code review of a small change set.',
     'tools: "read_file,grep,glob"',
     'disallowedTools: "write_file,edit_file"',
+    'isolation: worktree',
     'maxTurns: 12',
     '---',
     'You are a focused code review sub-agent. Return findings first, then residual risk.',

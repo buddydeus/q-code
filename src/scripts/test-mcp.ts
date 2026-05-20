@@ -49,7 +49,7 @@ async function main(): Promise<void> {
 
     const discovered = registry.searchTools(toolName)
     assert(discovered.length === 1, 'tool_search path should discover the MCP tool')
-    const output = await discovered[0].execute({ message: 'hello mcp' })
+    const output = await discovered[0].execute({ message: 'hello mcp' }, { cwd: tmpProject })
     assert(output === 'hello mcp', `unexpected tool output: ${String(output)}`)
 
     const entry = getMcpRegistryEntry('my.db')

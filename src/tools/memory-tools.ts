@@ -1,6 +1,6 @@
 import { isMemoryType } from '../context/memory/memory-types'
 import { writeProjectMemory } from '../context/memory/memdir'
-import type { ToolDefinition } from './registry'
+import type { ToolDefinition, ToolExecutionContext } from './registry'
 
 interface MemoryWriteInput {
   name: string
@@ -32,7 +32,7 @@ export const memoryWriteTool: ToolDefinition = {
   },
   isConcurrencySafe: false,
   isReadOnly: false,
-  execute: async (input: MemoryWriteInput) => {
+  execute: async (input: MemoryWriteInput, context: ToolExecutionContext) => {
     const name = typeof input.name === 'string' ? input.name.trim() : ''
     const description = typeof input.description === 'string' ? input.description.trim() : ''
     const content = typeof input.content === 'string' ? input.content.trim() : ''
@@ -43,7 +43,7 @@ export const memoryWriteTool: ToolDefinition = {
     }
 
     const result = await writeProjectMemory({
-      cwd: process.cwd(),
+      cwd: context.cwd,
       name,
       description,
       type: input.type,

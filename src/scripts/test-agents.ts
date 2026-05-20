@@ -98,6 +98,7 @@ try {
       'disallowedTools: "edit_file"',
       'model: "project-model"',
       'maxTurns: 7',
+      'isolation: worktree',
       '---',
       '',
       'Project reviewer body.'
@@ -137,11 +138,12 @@ try {
   assert(boot.warnings.some((warning: string) => warning.includes('missing required')), 'warns on invalid custom agent')
   assert(registry.findAgent('reviewer')?.source === 'project', 'project agent overrides user agent')
   assert(registry.findAgent('reviewer')?.getSystemPrompt().includes('Project reviewer body'), 'uses project body')
+  assert(registry.findAgent('reviewer')?.isolation === 'worktree', 'parses project agent isolation')
 
   console.log('\n[2] progressive discovery reminder')
   const reminder = formatAgentsSystemReminder(registry.getAllAgents())
   assert(reminder.includes('<system-reminder>'), 'renders system-reminder wrapper')
-  assert(reminder.includes('reviewer [project]'), 'lists project custom agent')
+  assert(reminder.includes('reviewer [project, isolation=worktree]'), 'lists project custom agent with isolation')
   assert(!reminder.includes('Project reviewer body'), 'does not disclose custom agent body during discovery')
 
   console.log('\n[3] tool filtering')
@@ -193,29 +195,38 @@ try {
     {
       createModel: (modelName?: string) => ({ modelName }),
       getDefaultModelName: () => 'default-model',
-      getAvailableTools: () => availableTools
+      getAvailableTools: () => availableTools,
+      getCwd: () => cwd,
+      getSessionId: () => 'test-session'
     },
     runner
   )
-  const output = await tool.execute({ prompt: 'Inspect something.', description: 'inspect' })
+  const toolContext = { cwd }
+  const output = await tool.execute({ prompt: 'Inspect something.', description: 'inspect' }, toolContext)
   assert(typeof output === 'string', 'Agent tool returns text')
   assert(String(output).includes('<sub_agent_result>'), 'Agent tool wraps final summary')
   assert(captured?.agentDefinition.agentType === 'general-purpose', 'defaults to general-purpose')
   assert((captured?.model as { modelName?: string }).modelName === 'default-model', 'uses default model fallback')
 
-  const reviewerOutput = await tool.execute({
-    prompt: 'Review this.',
-    description: 'review',
-    subagent_type: 'reviewer'
-  })
+  const reviewerOutput = await tool.execute(
+    {
+      prompt: 'Review this.',
+      description: 'review',
+      subagent_type: 'reviewer'
+    },
+    toolContext
+  )
   assert(String(reviewerOutput).includes("Sub-agent 'reviewer' completed"), 'dispatches custom agent')
   assert((captured?.model as { modelName?: string }).modelName === 'project-model', 'uses agent model fallback')
 
-  const missingOutput = await tool.execute({
-    prompt: 'Do it.',
-    description: 'missing',
-    subagent_type: 'does-not-exist'
-  })
+  const missingOutput = await tool.execute(
+    {
+      prompt: 'Do it.',
+      description: 'missing',
+      subagent_type: 'does-not-exist'
+    },
+    toolContext
+  )
   assert(String(missingOutput).includes('not found'), 'reports unknown sub-agent')
 
   console.log('\nAll agents checks passed.\n')
