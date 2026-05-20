@@ -1,0 +1,277 @@
+import type { TerminalEvent, TerminalRole, TerminalStatus } from './events'
+
+export type TranscriptItemKind = 'message' | 'tool' | 'usage' | 'context'
+
+export interface TranscriptItem {
+  id: string
+  kind: TranscriptItemKind
+  role?: TerminalRole
+  title?: string
+  text: string
+  status?: 'running' | 'done' | 'error'
+  isStreaming?: boolean
+  source?: string
+  agentId?: string
+}
+
+export interface TerminalContextUsage {
+  used: number
+  limit: number
+  state?: string
+}
+
+export interface TerminalUsage {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+}
+
+export interface TerminalState {
+  transcript: TranscriptItem[]
+  status: TerminalStatus
+  statusText: string
+  contextUsage?: TerminalContextUsage
+  usage?: TerminalUsage
+  activeAssistantId?: string
+  activeToolIds: Record<string, string>
+  nextId: number
+}
+
+const MAX_TRANSCRIPT_ITEMS = 400
+
+export function createInitialTerminalState(): TerminalState {
+  return {
+    transcript: [],
+    status: 'idle',
+    statusText: 'Ready',
+    activeToolIds: {},
+    nextId: 1
+  }
+}
+
+export function terminalReducer(state: TerminalState, event: TerminalEvent): TerminalState {
+  switch (event.type) {
+    case 'message':
+      return appendItem(
+        {
+          ...state,
+          activeAssistantId: event.role === 'assistant' ? undefined : state.activeAssistantId
+        },
+        {
+          kind: 'message',
+          role: event.role,
+          text: event.text,
+          source: event.source,
+          agentId: event.agentId
+        }
+      )
+
+    case 'assistant_delta': {
+      const activeId = state.activeAssistantId
+      if (!activeId) {
+        const next = appendItem(state, {
+          kind: 'message',
+          role: 'assistant',
+          text: event.text,
+          isStreaming: true,
+          source: event.source,
+          agentId: event.agentId
+        })
+        const item = next.transcript[next.transcript.length - 1]
+        return {
+          ...next,
+          status: 'thinking',
+          statusText: 'Assistant streaming',
+          activeAssistantId: item?.id
+        }
+      }
+
+      return {
+        ...state,
+        status: 'thinking',
+        statusText: 'Assistant streaming',
+        transcript: state.transcript.map((item) =>
+          item.id === activeId ? { ...item, text: item.text + event.text, isStreaming: true } : item
+        )
+      }
+    }
+
+    case 'assistant_done':
+      return {
+        ...state,
+        status: state.status === 'thinking' ? 'idle' : state.status,
+        statusText: state.status === 'thinking' ? 'Ready' : state.statusText,
+        activeAssistantId: undefined,
+        transcript: state.transcript.map((item) =>
+          item.id === state.activeAssistantId ? { ...item, isStreaming: false } : item
+        )
+      }
+
+    case 'tool_call': {
+      const title = event.name
+      const text = formatToolInput(event.input)
+      const next = appendItem(
+        { ...state, status: 'running_tool', statusText: `Running ${event.name}` },
+        {
+          kind: 'tool',
+          role: 'tool',
+          title,
+          text,
+          status: 'running',
+          source: event.source,
+          agentId: event.agentId
+        }
+      )
+      const item = next.transcript[next.transcript.length - 1]
+      if (!event.toolCallId || !item) return next
+      return {
+        ...next,
+        activeToolIds: {
+          ...next.activeToolIds,
+          [event.toolCallId]: item.id
+        }
+      }
+    }
+
+    case 'tool_result': {
+      const toolItemId = event.toolCallId ? state.activeToolIds[event.toolCallId] : undefined
+      const resultText = formatToolResult(event.output, event.resultLength, event.isError)
+      const status = event.isError ? 'error' : 'done'
+      const nextActiveToolIds = { ...state.activeToolIds }
+      if (event.toolCallId) delete nextActiveToolIds[event.toolCallId]
+
+      if (toolItemId) {
+        return {
+          ...state,
+          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'idle',
+          statusText: Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Ready',
+          activeToolIds: nextActiveToolIds,
+          transcript: state.transcript.map((item) =>
+            item.id === toolItemId
+              ? {
+                  ...item,
+                  status,
+                  text: item.text ? `${item.text}\n${resultText}` : resultText
+                }
+              : item
+          )
+        }
+      }
+
+      return appendItem(
+        {
+          ...state,
+          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'idle',
+          statusText: Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Ready',
+          activeToolIds: nextActiveToolIds
+        },
+        {
+          kind: 'tool',
+          role: 'tool',
+          title: event.name,
+          text: resultText,
+          status,
+          source: event.source,
+          agentId: event.agentId
+        }
+      )
+    }
+
+    case 'status':
+      return {
+        ...state,
+        status: event.status,
+        statusText: event.text
+      }
+
+    case 'context_usage': {
+      const nextState = {
+        ...state,
+        contextUsage: {
+          used: event.used,
+          limit: event.limit,
+          state: event.state
+        }
+      }
+      const shouldLogContext =
+        event.state !== undefined &&
+        event.state !== 'normal' &&
+        state.contextUsage?.state !== event.state
+      if (!shouldLogContext) return nextState
+      return appendItem(nextState, {
+        kind: 'context',
+        text: `上下文 ${event.used}/${event.limit} tokens (${Math.round((event.used / event.limit) * 100)}%) ${event.state}`
+      })
+    }
+
+    case 'usage':
+      return {
+        ...state,
+        usage: {
+          totalTokens: event.totalUsage.totalTokens,
+          inputTokens: event.totalUsage.inputTokens,
+          outputTokens: event.totalUsage.outputTokens
+        }
+      }
+
+    case 'error':
+      return appendItem(
+        {
+          ...state,
+          status: 'error',
+          statusText: event.text
+        },
+        {
+          kind: 'message',
+          role: 'error',
+          text: event.text,
+          source: event.source,
+          agentId: event.agentId
+        }
+      )
+  }
+}
+
+function appendItem(
+  state: TerminalState,
+  item: Omit<TranscriptItem, 'id'>
+): TerminalState {
+  const nextItem: TranscriptItem = {
+    ...item,
+    id: `t-${state.nextId}`
+  }
+  const transcript = [...state.transcript, nextItem].slice(-MAX_TRANSCRIPT_ITEMS)
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    transcript
+  }
+}
+
+function formatToolInput(input: unknown): string {
+  if (input === undefined) return ''
+  const text = stringifyUnknown(input)
+  return truncate(text, 900)
+}
+
+function formatToolResult(output: unknown, resultLength: number | undefined, isError: boolean | undefined): string {
+  const prefix = isError ? 'Error' : 'Result'
+  if (output === undefined) {
+    return resultLength === undefined ? prefix : `${prefix}: ${resultLength} chars`
+  }
+  return `${prefix}: ${truncate(stringifyUnknown(output), 1200)}`
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  return `${text.slice(0, maxChars - 24)}\n... truncated ...`
+}

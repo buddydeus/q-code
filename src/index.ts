@@ -4,6 +4,8 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
 import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
+import { startTerminalRuntime, type TerminalRuntime } from './terminal/runtime'
+import type { TerminalEvent } from './terminal/events'
 import {
   allTools,
   createAgentTool,
@@ -174,6 +176,26 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
+function previewTerminalValue(value: unknown, maxChars = 2000): unknown {
+  if (typeof value === 'string') return truncateTerminalText(value, maxChars)
+  try {
+    return truncateTerminalText(JSON.stringify(value, null, 2), maxChars)
+  } catch {
+    return truncateTerminalText(String(value), maxChars)
+  }
+}
+
+function truncateTerminalText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const head = text.slice(0, Math.floor(maxChars * 0.4))
+  const tail = text.slice(-(maxChars - head.length))
+  return `${head}\n... clipped ${text.length - maxChars} chars for terminal ...\n${tail}`
+}
+
 function createModel(modelName?: string) {
   const openai = createOpenAI({
     baseURL: normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL')),
@@ -199,14 +221,60 @@ function createSummaryModel() {
 async function main() {
   const dumpSystemPrompt = process.argv.includes('--dump-system-prompt')
   const startInPlanMode = process.argv.includes('--plan')
+  const useTui =
+    !dumpSystemPrompt &&
+    process.stdin.isTTY &&
+    process.stdout.isTTY &&
+    !process.argv.includes('--classic') &&
+    process.env.Q_CODE_TUI !== '0'
 
-  if (!dumpSystemPrompt) console.log(fmtBanner('1.0.0'))
-  const mcpBootstrapPromise = connectMCP({ quiet: dumpSystemPrompt, cwd: process.cwd() })
+  let terminal: TerminalRuntime | undefined
+  let activeTurnAbortController: AbortController | undefined
+  const pendingTerminalEvents: TerminalEvent[] = []
+
+  const emitTerminal = (event: TerminalEvent): void => {
+    if (terminal) {
+      terminal.emit(event)
+    } else if (useTui) {
+      pendingTerminalEvents.push(event)
+    }
+  }
+  const print = (text = ''): void => {
+    if (useTui) {
+      emitTerminal({ type: 'message', role: 'system', text: stripAnsi(text) })
+    } else {
+      console.log(text)
+    }
+  }
+  const setStatus = (
+    text: string,
+    status: Extract<TerminalEvent, { type: 'status' }>['status'] = 'idle'
+  ): void => emitTerminal({ type: 'status', status, text })
+  const interruptActiveTurn = (): void => {
+    if (!activeTurnAbortController) return
+    activeTurnAbortController.abort(new Error('用户中断了当前任务'))
+    setStatus('Interrupting current turn', 'error')
+  }
+
+  if (!dumpSystemPrompt && !useTui) console.log(fmtBanner('1.0.0'))
+  const mcpBootstrapPromise = connectMCP({ quiet: dumpSystemPrompt || useTui, cwd: process.cwd() })
   if (dumpSystemPrompt) {
     await mcpBootstrapPromise
   } else {
-    void mcpBootstrapPromise.catch(() => {
-      /* connectMCP already printed a concise error */
+    void mcpBootstrapPromise.then((result) => {
+      if (!useTui) return
+      if (result.config.errors.length > 0) {
+        for (const error of result.config.errors) {
+          emitTerminal({ type: 'error', text: `[MCP config] ${error}` })
+        }
+      }
+      print(
+        result.connections.length > 0
+          ? `  [MCP] 已配置 ${result.connections.length} 个 server，已注册 ${result.toolCount} 个工具`
+          : '  [MCP] 未配置 MCP server'
+      )
+    }).catch((error) => {
+      if (useTui) emitTerminal({ type: 'error', text: `[MCP] 启动失败: ${formatErrorMessage(error)}` })
     })
   }
   const isContinue = process.argv.includes('--continue')
@@ -216,18 +284,18 @@ async function main() {
     : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
   const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
   const skillsBootstrap = await bootstrapSkills(store?.cwd ?? process.cwd()).catch((error) => {
-    if (!dumpSystemPrompt) console.log(`  [Skills] 启动失败: ${formatErrorMessage(error)}`)
+    if (!dumpSystemPrompt) print(`  [Skills] 启动失败: ${formatErrorMessage(error)}`)
     return { skillCount: 0, conditionalCount: 0, warnings: [] }
   })
   if (!dumpSystemPrompt) {
-    for (const warning of skillsBootstrap.warnings) console.log(`  ${warning}`)
+    for (const warning of skillsBootstrap.warnings) print(`  ${warning}`)
   }
   const agentsBootstrap = await bootstrapAgents(store?.cwd ?? process.cwd()).catch((error) => {
-    if (!dumpSystemPrompt) console.log(`  [Agents] 启动失败: ${formatErrorMessage(error)}`)
+    if (!dumpSystemPrompt) print(`  [Agents] 启动失败: ${formatErrorMessage(error)}`)
     return { agentCount: 0, customCount: 0, warnings: [] }
   })
   if (!dumpSystemPrompt) {
-    for (const warning of agentsBootstrap.warnings) console.log(`  ${warning}`)
+    for (const warning of agentsBootstrap.warnings) print(`  ${warning}`)
     if (isAgentTeamsEnabled()) {
       // A previous q-code run that owned a team may have been killed
       // before its `runAsyncAgentLifecycle` finally-block flipped each
@@ -236,11 +304,11 @@ async function main() {
       // flags now — without this, TeamDelete in this session would
       // refuse forever and the lead's roster would lie indefinitely.
       const reconciled = await reconcileStaleActiveMembers().catch(() => [])
-      console.log(
+      print(
         '  [Teams] Agent Teams 已启用（TeamCreate / SendMessage / TeamDelete 对模型可见）'
       )
       if (reconciled.length > 0) {
-        console.log(
+        print(
           `  [Teams] 启动时清理了 ${reconciled.length} 个团队的过期 isActive 标记: ${reconciled.join(', ')}`
         )
       }
@@ -301,14 +369,14 @@ async function main() {
     messages = store.load()
     const restored = store.getSummary()
     if (!dumpSystemPrompt) {
-      console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`)
-      console.log(`  transcript: ${restored.transcriptPath}`)
+      print(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`)
+      print(`  transcript: ${restored.transcriptPath}`)
     }
   } else {
     if (!dumpSystemPrompt) {
       const prefix = isContinue ? '未找到可恢复会话，已创建新会话' : '新会话'
-      console.log(`\n[Session] ${prefix} "${sessionId}"`)
-      if (store) console.log(`  transcript: ${store.paths.transcriptPath}`)
+      print(`\n[Session] ${prefix} "${sessionId}"`)
+      if (store) print(`  transcript: ${store.paths.transcriptPath}`)
     }
   }
 
@@ -440,14 +508,21 @@ async function main() {
     const before = snapshotContext(currentMessages, systemPrompt, usageAnchor)
     const beforeForReduction = usageAnchor ? snapshotContext(currentMessages, systemPrompt) : before
     if (!force && (before.state === 'normal' || before.state === 'warning')) {
-      if (before.state === 'warning')
-        console.log(fmtContextUsage(before.used, before.limit, before.state))
+      if (before.state === 'warning') {
+        print(fmtContextUsage(before.used, before.limit, before.state))
+        emitTerminal({
+          type: 'context_usage',
+          used: before.used,
+          limit: before.limit,
+          state: before.state
+        })
+      }
       return { messages: currentMessages, usageAnchor }
     }
 
     if (!force && !compactionBreaker.shouldAttempt(before)) {
       const skipReason = `自动压缩已连续失败 ${compactionBreaker.failures} 次，本次跳过`
-      console.log(`\n  [${reason}] ${skipReason}`)
+      print(`\n  [${reason}] ${skipReason}`)
       return {
         messages: currentMessages,
         usageAnchor,
@@ -461,7 +536,8 @@ async function main() {
     const triggerText = force
       ? '手动触发压缩'
       : `>= ${Math.round(compactTriggerRatio * 100)}%，触发压缩`
-    console.log(
+    setStatus('Compacting context', 'compacting')
+    print(
       `\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens ${triggerText}...`
     )
 
@@ -472,17 +548,17 @@ async function main() {
     let messagesForCompaction = offload.messages
     if (offload.offloaded > 0) {
       const totalChars = offload.entries.reduce((sum, entry) => sum + entry.originalChars, 0)
-      console.log(
+      print(
         `  [Context offload] 卸载了 ${offload.offloaded} 个大工具结果 (${totalChars} chars)`
       )
     }
     for (const warning of offload.warnings) {
-      console.log(`  [Context offload] 跳过卸载: ${warning}`)
+      print(`  [Context offload] 跳过卸载: ${warning}`)
     }
 
     const mc = microcompact(messagesForCompaction)
     let nextMessages = mc.messages
-    if (mc.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc.cleared} 个工具结果`)
+    if (mc.cleared > 0) print(`  [Microcompact] 清理了 ${mc.cleared} 个工具结果`)
 
     const comp = await summarize(summaryModel, nextMessages, summary, {
       force: true,
@@ -492,7 +568,7 @@ async function main() {
     if (comp.compressedCount > 0) {
       nextMessages = comp.messages
       summary = comp.summary
-      console.log(
+      print(
         `  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`
       )
     }
@@ -521,7 +597,14 @@ async function main() {
       compactionBreaker.recordFailure()
     }
 
-    console.log(`  [压缩结果] 上下文 ~${after.used}/${contextLimitTokens} tokens`)
+    print(`  [压缩结果] 上下文 ~${after.used}/${contextLimitTokens} tokens`)
+    emitTerminal({
+      type: 'context_usage',
+      used: after.used,
+      limit: contextLimitTokens,
+      state: after.state
+    })
+    setStatus('Ready')
     return {
       messages: nextMessages,
       usageAnchor: undefined,
@@ -532,41 +615,55 @@ async function main() {
     }
   }
 
+  if (useTui) {
+    registry.setQuiet(true)
+    terminal = startTerminalRuntime({
+      title: 'q-code',
+      sessionId,
+      cwd: activeStore.cwd,
+      initialEvents: pendingTerminalEvents,
+      onSubmit: handleInput,
+      onInterrupt: interruptActiveTurn,
+      onExit: closeCli
+    })
+  }
+
   // Debug: 显示 Prompt Pipe 各模块状态
-  builder.debug(initialPromptCtx)
+  builder.debug(initialPromptCtx, print)
 
   const activeTools = registry.getActiveTools()
-  console.log(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
-  console.log(
+  print(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
+  print(
     `Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`
   )
-  console.log(
+  print(
     `SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`
   )
-  console.log(
+  print(
     `任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`
   )
-  if (agentMode === 'plan') console.log(`Plan 文件: ${planFilePath}`)
-  console.log(
+  if (agentMode === 'plan') print(`Plan 文件: ${planFilePath}`)
+  print(
     `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
       compactTriggerRatio * 100
     )}%)，执行预算: ${tokenBudget} tokens，输出预算: ${defaultMaxOutputTokens}/${escalatedMaxOutputTokens}/${compactMaxOutputTokens}`
   )
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  const rl = useTui ? null : createInterface({ input: process.stdin, output: process.stdout })
   let closed = false
 
   async function closeCli(): Promise<void> {
     if (closed) return
     closed = true
     await closeMcpSubsystem()
-    rl.close()
+    rl?.close()
+    terminal?.instance.unmount()
   }
 
   async function handleInput(input: string): Promise<void> {
     const trimmed = input.trim()
     if (!trimmed || trimmed === 'exit') {
-      console.log('Bye!')
+      print('Bye!')
       await closeCli()
       return
     }
@@ -628,7 +725,7 @@ async function main() {
         return
       }
       if (pendingPlanApproval && !trimmed.startsWith('/')) {
-        console.log(
+        print(
           '\n  [Plan] 当前有待确认的计划。输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。'
         )
         if (!closed) ask()
@@ -637,14 +734,15 @@ async function main() {
 
       const skillExpansion = expandSkillSlashCommand(trimmed, sessionId)
       if (skillExpansion) {
-        console.log(`\n  [Skill] /${skillExpansion.skill.name}`)
+        print(`\n  [Skill] /${skillExpansion.skill.name}`)
         await runAgentTurnWithMessages(skillExpansion.messages, trimmed)
         return
       }
 
       await runAgentTurn(trimmed)
     } catch (error) {
-      console.log(fmtStop(`本轮执行失败: ${formatErrorMessage(error)}`))
+      emitTerminal({ type: 'error', text: `本轮执行失败: ${formatErrorMessage(error)}` })
+      print(fmtStop(`本轮执行失败: ${formatErrorMessage(error)}`))
     }
 
     if (!closed) ask()
@@ -665,63 +763,109 @@ async function main() {
     messages.push(...userMessages)
     activeStore.appendAll(userMessages)
     const turnSystem = await buildSystemPrompt(userQuery)
+    setStatus('Thinking', 'thinking')
+    const turnAbortController = new AbortController()
+    activeTurnAbortController = turnAbortController
 
-    const loopResult = await agentLoop(model, registry, messages, turnSystem, {
-      tokenBudget,
-      maxOutputTokens: defaultMaxOutputTokens,
-      escalatedMaxOutputTokens,
-      maxSteps,
-      stopAfterToolNames: ['exit_plan_mode'],
-      preflight: (currentMessages, { step, usageAnchor }) =>
-        compactIfNeeded(
-          currentMessages,
-          turnSystem,
-          `Step ${step} preflight`,
-          'preflight',
-          usageAnchor
-        ),
-      contextUsage: (currentMessages, { usageAnchor }) => {
-        const snapshot = snapshotContext(currentMessages, turnSystem, usageAnchor)
-        return {
-          used: snapshot.used,
-          limit: snapshot.limit,
-          state: snapshot.state
+    try {
+      const loopResult = await agentLoop(model, registry, messages, turnSystem, {
+        tokenBudget,
+        maxOutputTokens: defaultMaxOutputTokens,
+        escalatedMaxOutputTokens,
+        maxSteps,
+        quiet: useTui,
+        abortSignal: turnAbortController.signal,
+        stopAfterToolNames: ['exit_plan_mode'],
+        preflight: (currentMessages, { step, usageAnchor }) =>
+          compactIfNeeded(
+            currentMessages,
+            turnSystem,
+            `Step ${step} preflight`,
+            'preflight',
+            usageAnchor
+          ),
+        contextUsage: (currentMessages, { usageAnchor }) => {
+          const snapshot = snapshotContext(currentMessages, turnSystem, usageAnchor)
+          emitTerminal({
+            type: 'context_usage',
+            used: snapshot.used,
+            limit: snapshot.limit,
+            state: snapshot.state
+          })
+          return {
+            used: snapshot.used,
+            limit: snapshot.limit,
+            state: snapshot.state
+          }
+        },
+        onUsage: (turnUsage, totalUsage) => {
+          activeStore.appendUsage(turnUsage, totalUsage)
+          emitTerminal({ type: 'usage', turnUsage, totalUsage })
+        },
+        onText: (text) => {
+          emitTerminal({ type: 'assistant_delta', text })
+        },
+        onToolEvent: (event) => {
+          activeStore.appendToolEvent({ type: 'tool_event', ...event })
+          if (event.phase === 'start') {
+            emitTerminal({
+              type: 'tool_call',
+              name: event.name,
+              input: event.input,
+              toolCallId: event.toolCallId
+            })
+          } else if (event.isError) {
+            emitTerminal({
+              type: 'tool_result',
+              name: event.name,
+              toolCallId: event.toolCallId,
+              resultLength: event.resultLength,
+              isError: event.isError
+            })
+          }
+        },
+        onToolResult: (event) => {
+          emitTerminal({
+            type: 'tool_result',
+            name: event.name,
+            output: previewTerminalValue(event.output),
+            toolCallId: event.toolCallId,
+            isError: false
+          })
+          if (event.name === 'todo_write' && typeof event.output === 'string') {
+            print(`\n${event.output}`)
+          }
+          if (event.name.startsWith('task_') && typeof event.output === 'string') {
+            print(`\n${event.output}`)
+          }
+          const filePaths = extractToolFilePaths(event.name, event.input)
+          const activated = activateConditionalSkillsForPaths(filePaths, activeStore.cwd)
+          if (activated.length > 0) {
+            print(`\n  [Skills] 条件激活: ${activated.join(', ')}`)
+          }
         }
-      },
-      onUsage: (turnUsage, totalUsage) => {
-        activeStore.appendUsage(turnUsage, totalUsage)
-      },
-      onToolEvent: (event) => {
-        activeStore.appendToolEvent({ type: 'tool_event', ...event })
-      },
-      onToolResult: (event) => {
-        if (event.name === 'todo_write' && typeof event.output === 'string') {
-          console.log(`\n${event.output}`)
-        }
-        if (event.name.startsWith('task_') && typeof event.output === 'string') {
-          console.log(`\n${event.output}`)
-        }
-        const filePaths = extractToolFilePaths(event.name, event.input)
-        const activated = activateConditionalSkillsForPaths(filePaths, activeStore.cwd)
-        if (activated.length > 0) {
-          console.log(`\n  [Skills] 条件激活: ${activated.join(', ')}`)
-        }
+      })
+      emitTerminal({ type: 'assistant_done' })
+      messages = loopResult.messages
+      activeStore.appendUnpersisted(loopResult.newMessages)
+
+      const postTurnSystem = await buildSystemPrompt()
+      const postTurn = await compactIfNeeded(
+        messages,
+        postTurnSystem,
+        'Post-turn compaction',
+        'post-turn',
+        loopResult.usageAnchor
+      )
+      messages = postTurn.messages
+      if (postTurn.stopReason) print(fmtStop(postTurn.stopReason))
+      if (pendingPlanApproval) await printPlanApprovalHint()
+      setStatus('Ready')
+    } finally {
+      if (activeTurnAbortController === turnAbortController) {
+        activeTurnAbortController = undefined
       }
-    })
-    messages = loopResult.messages
-    activeStore.appendUnpersisted(loopResult.newMessages)
-
-    const postTurnSystem = await buildSystemPrompt()
-    const postTurn = await compactIfNeeded(
-      messages,
-      postTurnSystem,
-      'Post-turn compaction',
-      'post-turn',
-      loopResult.usageAnchor
-    )
-    messages = postTurn.messages
-    if (postTurn.stopReason) console.log(fmtStop(postTurn.stopReason))
-    if (pendingPlanApproval) await printPlanApprovalHint()
+    }
   }
 
   function injectPendingTaskNotifications(): void {
@@ -734,7 +878,7 @@ async function main() {
     }))
     messages.push(...notificationMessages)
     activeStore.appendAll(notificationMessages)
-    console.log(`\n  [Agents] 已注入 ${notifications.length} 条后台任务通知。`)
+    print(`\n  [Agents] 已注入 ${notifications.length} 条后台任务通知。`)
   }
 
   async function injectPlanModeMessages(): Promise<void> {
@@ -756,86 +900,86 @@ async function main() {
   async function handleModeCommand(command: string): Promise<void> {
     const requestedMode = command.slice('/mode'.length).trim()
     if (!requestedMode) {
-      console.log(`\n  [Mode] 当前模式: ${agentMode}`)
-      console.log(`  [Plan] ${planFilePath}`)
+      print(`\n  [Mode] 当前模式: ${agentMode}`)
+      print(`  [Plan] ${planFilePath}`)
       if (pendingPlanApproval)
-        console.log('  [Plan] 有待确认计划：/approve-plan 或 /revise-plan <反馈>')
+        print('  [Plan] 有待确认计划：/approve-plan 或 /revise-plan <反馈>')
       return
     }
 
     if (requestedMode !== 'plan' && requestedMode !== 'normal') {
-      console.log('\n  [Mode] 用法: /mode、/mode plan、/mode normal')
+      print('\n  [Mode] 用法: /mode、/mode plan、/mode normal')
       return
     }
 
     setAgentMode(requestedMode)
     if (requestedMode === 'plan') pendingPlanApproval = false
-    console.log(`\n  [Mode] 已切换到 ${agentMode}`)
-    if (agentMode === 'plan') console.log(`  [Plan] 计划文件: ${planFilePath}`)
+    print(`\n  [Mode] 已切换到 ${agentMode}`)
+    if (agentMode === 'plan') print(`  [Plan] 计划文件: ${planFilePath}`)
   }
 
   async function handlePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
-    console.log(`\n  [Plan] ${planFilePath}`)
+    print(`\n  [Plan] ${planFilePath}`)
     if (!content) {
-      console.log('  当前还没有计划内容。')
+      print('  当前还没有计划内容。')
       return
     }
 
-    console.log('\n' + content)
+    print('\n' + content)
   }
 
   function handleTodosCommand(command: string): void {
     const arg = command.slice('/todos'.length).trim()
     if (arg === 'clear') {
       clearTodos(sessionId)
-      console.log('\n  [Todos] 已清空当前会话任务清单。')
+      print('\n  [Todos] 已清空当前会话任务清单。')
       return
     }
     if (arg) {
-      console.log('\n  [Todos] 用法: /todos 或 /todos clear')
+      print('\n  [Todos] 用法: /todos 或 /todos clear')
       return
     }
 
-    console.log('\n' + formatTodoList(getTodos(sessionId)))
+    print('\n' + formatTodoList(getTodos(sessionId)))
   }
 
   async function handleTasksCommand(command: string): Promise<void> {
     const arg = command.slice('/tasks'.length).trim()
     if (arg === 'task') {
       taskMode = 'task'
-      console.log('\n  [Tasks] 已切换到 Task V2 持久化任务图。')
-      console.log(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
-      console.log('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
+      print('\n  [Tasks] 已切换到 Task V2 持久化任务图。')
+      print(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
+      print('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
       return
     }
 
     if (arg === 'todo') {
       taskMode = 'todo'
-      console.log('\n  [Tasks] 已切换到 TodoWrite V1 会话级任务清单。')
-      console.log('\n' + formatTodoList(getTodos(sessionId)))
+      print('\n  [Tasks] 已切换到 TodoWrite V1 会话级任务清单。')
+      print('\n' + formatTodoList(getTodos(sessionId)))
       return
     }
 
     if (arg === 'reset') {
       const deleted = await resetTaskGraph(getCurrentTaskOptions())
-      console.log(
+      print(
         `\n  [Tasks] 已清空当前会话任务图，删除 ${deleted} 个任务；highwatermark 已保留。`
       )
       return
     }
 
     if (arg) {
-      console.log('\n  [Tasks] 用法: /tasks、/tasks task、/tasks todo、/tasks reset')
+      print('\n  [Tasks] 用法: /tasks、/tasks task、/tasks todo、/tasks reset')
       return
     }
 
-    console.log(`\n  [Tasks] 当前任务系统: ${taskMode}`)
+    print(`\n  [Tasks] 当前任务系统: ${taskMode}`)
     if (taskMode === 'task') {
-      console.log(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
-      console.log('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
+      print(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
+      print('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
     } else {
-      console.log('\n' + formatTodoList(getTodos(sessionId)))
+      print('\n' + formatTodoList(getTodos(sessionId)))
     }
   }
 
@@ -845,12 +989,12 @@ async function main() {
 
     if (!subcommand) {
       const summary = summarizeMcpRegistry()
-      console.log('\n' + summary)
+      print('\n' + summary)
       if (getMcpRegistry().length === 0) {
         const paths = getMcpSettingsPaths(activeStore.cwd)
-        console.log('\n  配置位置:')
-        console.log(`  全局: ${paths.userSettingsPath}`)
-        console.log(`  项目: ${paths.projectSettingsPath}`)
+        print('\n  配置位置:')
+        print(`  全局: ${paths.userSettingsPath}`)
+        print(`  项目: ${paths.projectSettingsPath}`)
       }
       return
     }
@@ -858,18 +1002,18 @@ async function main() {
     if (subcommand === 'tools') {
       const serverName = args[1]
       if (!serverName) {
-        console.log('\n  [MCP] 用法: /mcp tools <serverName>')
+        print('\n  [MCP] 用法: /mcp tools <serverName>')
         return
       }
       const resolved = resolveMcpRegistryName(serverName)
       const entry = resolved ? getMcpRegistryEntry(resolved) : undefined
       if (!entry) {
-        console.log(`\n  [MCP] 未找到 server: ${serverName}`)
+        print(`\n  [MCP] 未找到 server: ${serverName}`)
         return
       }
       if (entry.tools.length === 0) {
-        console.log(`\n  [MCP] ${resolved} 当前没有已注册工具，状态: ${entry.connection.type}`)
-        if (entry.connection.type === 'failed') console.log(`  错误: ${entry.connection.error}`)
+        print(`\n  [MCP] ${resolved} 当前没有已注册工具，状态: ${entry.connection.type}`)
+        if (entry.connection.type === 'failed') print(`  错误: ${entry.connection.error}`)
         return
       }
 
@@ -879,51 +1023,51 @@ async function main() {
         const desc = tool.description.replace(/\s+/g, ' ').slice(0, 120)
         lines.push(`- ${tool.name} [${readOnly}] ${desc}`)
       }
-      console.log('\n' + lines.join('\n'))
+      print('\n' + lines.join('\n'))
       return
     }
 
     if (subcommand === 'reconnect') {
       const serverName = args[1]
       if (!serverName) {
-        console.log('\n  [MCP] 用法: /mcp reconnect <serverName>')
+        print('\n  [MCP] 用法: /mcp reconnect <serverName>')
         return
       }
-      console.log(`\n  [MCP] 正在重连 ${serverName}...`)
+      print(`\n  [MCP] 正在重连 ${serverName}...`)
       const connection = await reconnectMcpServer(serverName, registry)
       if (!connection) {
-        console.log(`  [MCP] 未找到 server: ${serverName}`)
+        print(`  [MCP] 未找到 server: ${serverName}`)
         return
       }
       if (connection.type === 'connected') {
         const entry = getMcpRegistryEntry(connection.name)
-        console.log(
+        print(
           `  [MCP] ${connection.name} 已连接 (${describeTransport(connection.config)})，工具数: ${entry?.tools.length ?? 0}`
         )
       } else if (connection.type === 'failed') {
-        console.log(`  [MCP] ${connection.name} 重连失败: ${connection.error}`)
+        print(`  [MCP] ${connection.name} 重连失败: ${connection.error}`)
       } else {
-        console.log(`  [MCP] ${connection.name} 状态: ${connection.type}`)
+        print(`  [MCP] ${connection.name} 状态: ${connection.type}`)
       }
       return
     }
 
-    console.log('\n  [MCP] 用法: /mcp、/mcp tools <serverName>、/mcp reconnect <serverName>')
+    print('\n  [MCP] 用法: /mcp、/mcp tools <serverName>、/mcp reconnect <serverName>')
   }
 
   function handleSkillsCommand(command: string): void {
     const arg = command.slice('/skills'.length).trim()
     if (arg) {
-      console.log('\n  [Skills] 用法: /skills')
+      print('\n  [Skills] 用法: /skills')
       return
     }
 
     const skills = getAllUserInvocableSkills()
     if (skills.length === 0) {
-      console.log('\nSkills (0 loaded)')
-      console.log('  没有找到 Skills。可添加到:')
-      console.log(`  ${process.env.Q_CODE_HOME?.trim() || '~/.q-code'}/skills/<name>/SKILL.md`)
-      console.log('  .q-code/skills/<name>/SKILL.md')
+      print('\nSkills (0 loaded)')
+      print('  没有找到 Skills。可添加到:')
+      print(`  ${process.env.Q_CODE_HOME?.trim() || '~/.q-code'}/skills/<name>/SKILL.md`)
+      print('  .q-code/skills/<name>/SKILL.md')
       return
     }
 
@@ -943,7 +1087,7 @@ async function main() {
       '',
       '模型只会在 system-reminder 里看到 visible skills；正文会在调用 Skill 工具或 /<skill-name> 时才加载。'
     )
-    console.log('\n' + lines.join('\n'))
+    print('\n' + lines.join('\n'))
   }
 
   function handleAgentsCommand(command: string): void {
@@ -951,11 +1095,11 @@ async function main() {
     if (args[0] === 'kill') {
       const agentId = args[1]
       if (!agentId) {
-        console.log('\n  [Agents] 用法: /agents kill <agent_id>')
+        print('\n  [Agents] 用法: /agents kill <agent_id>')
         return
       }
       const killed = killAsyncAgent(agentId)
-      console.log(
+      print(
         killed
           ? `\n  [Agents] 已请求终止后台任务 ${agentId}`
           : `\n  [Agents] 未找到运行中的后台任务 ${agentId}`
@@ -963,17 +1107,17 @@ async function main() {
       return
     }
     if (args.length > 0) {
-      console.log('\n  [Agents] 用法: /agents、/agents kill <agent_id>')
+      print('\n  [Agents] 用法: /agents、/agents kill <agent_id>')
       return
     }
 
     const agents = getAllAgents()
     const asyncAgents = getAllAsyncAgents()
     if (agents.length === 0) {
-      console.log('\nSubAgents (0 loaded)')
-      console.log('  没有找到 SubAgents。可添加到:')
-      console.log(`  ${getUserAgentsDir()}/<name>.md`)
-      console.log(`  ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`)
+      print('\nSubAgents (0 loaded)')
+      print('  没有找到 SubAgents。可添加到:')
+      print(`  ${getUserAgentsDir()}/<name>.md`)
+      print(`  ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`)
       return
     }
 
@@ -1034,14 +1178,14 @@ async function main() {
           : 'Agent Teams: 已启用，无活跃团队。模型可调 TeamCreate 启动一个。'
       )
     }
-    console.log('\n' + lines.join('\n'))
+    print('\n' + lines.join('\n'))
   }
 
   async function handleTeamsCommand(command: string): Promise<void> {
     const args = command.slice('/teams'.length).trim().split(/\s+/).filter(Boolean)
 
     if (!isAgentTeamsEnabled()) {
-      console.log(
+      print(
         '\n  [Teams] Agent Teams 未启用。用 --agent-teams 启动 q-code 或设置 Q_CODE_TEAMS=1。'
       )
       return
@@ -1050,17 +1194,17 @@ async function main() {
     if (args[0] === 'clear') {
       const active = getActiveTeam()
       if (!active) {
-        console.log('\n  [Teams] 当前没有活跃团队，无需清理。')
+        print('\n  [Teams] 当前没有活跃团队，无需清理。')
         return
       }
       const file = readTeamFile(active.teamName)
       const stillActive = file?.members.filter((m) => m.name !== TEAM_LEAD_NAME && m.isActive) ?? []
       const isForce = ['force', '-f', '--force'].includes((args[1] ?? '').toLowerCase())
       if (stillActive.length > 0 && !isForce) {
-        console.log(
+        print(
           `\n  [Teams] 拒绝清理：还有 ${stillActive.length} 个 teammate 在跑 (${stillActive.map((m) => m.name).join(', ')})。`
         )
-        console.log('  先 /agents kill <agent_id>，或用 /teams clear force 强制清理（不推荐）。')
+        print('  先 /agents kill <agent_id>，或用 /teams clear force 强制清理（不推荐）。')
         return
       }
       // Force path: kill any still-running async agents BEFORE we wipe
@@ -1073,17 +1217,17 @@ async function main() {
           if (killAsyncAgent(m.agentId)) killed.push(m.name)
         }
         if (killed.length > 0) {
-          console.log(`\n  [Teams] 已请求终止 ${killed.length} 个 teammate: ${killed.join(', ')}`)
+          print(`\n  [Teams] 已请求终止 ${killed.length} 个 teammate: ${killed.join(', ')}`)
         }
       }
       await cleanupTeamDirectory(active.teamName)
       clearActiveTeam()
-      console.log(`\n  [Teams] 已强制清理团队 "${active.teamName}" 的本地状态。`)
+      print(`\n  [Teams] 已强制清理团队 "${active.teamName}" 的本地状态。`)
       return
     }
 
     if (args.length > 0) {
-      console.log('\n  [Teams] 用法: /teams、/teams clear、/teams clear force')
+      print('\n  [Teams] 用法: /teams、/teams clear、/teams clear force')
       return
     }
 
@@ -1126,13 +1270,13 @@ async function main() {
     lines.push(
       '命令：/teams clear 清理当前团队（要求无活跃 teammate），/teams clear force 强制清理。'
     )
-    console.log('\n' + lines.join('\n'))
+    print('\n' + lines.join('\n'))
   }
 
   async function handleApprovePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
     if (!content?.trim()) {
-      console.log(`\n  [Plan] 没有可执行的计划。先进入 /mode plan 并让 Agent 写计划。`)
+      print(`\n  [Plan] 没有可执行的计划。先进入 /mode plan 并让 Agent 写计划。`)
       return
     }
 
@@ -1151,7 +1295,7 @@ async function main() {
   async function handleRevisePlanCommand(command: string): Promise<void> {
     const feedback = command.slice('/revise-plan'.length).trim()
     if (!feedback) {
-      console.log('\n  [Plan] 用法: /revise-plan <你希望修改计划的反馈>')
+      print('\n  [Plan] 用法: /revise-plan <你希望修改计划的反馈>')
       return
     }
 
@@ -1169,11 +1313,11 @@ async function main() {
 
   async function printPlanApprovalHint(): Promise<void> {
     const content = await readPlan(planOptions)
-    console.log('\n  [Plan] 计划已提交，等待确认。')
-    if (pendingPlanSummary) console.log(`  [Plan] 摘要: ${pendingPlanSummary}`)
-    console.log(`  [Plan] 文件: ${planFilePath}`)
-    if (content?.trim()) console.log('\n' + content)
-    console.log('\n  输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。')
+    print('\n  [Plan] 计划已提交，等待确认。')
+    if (pendingPlanSummary) print(`  [Plan] 摘要: ${pendingPlanSummary}`)
+    print(`  [Plan] 文件: ${planFilePath}`)
+    if (content?.trim()) print('\n' + content)
+    print('\n  输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。')
   }
 
   function getCurrentTodoContext(): string | undefined {
@@ -1197,12 +1341,12 @@ async function main() {
 
   async function handleCompactCommand(command: string): Promise<void> {
     if (messages.length === 0) {
-      console.log('\n  [Manual compaction] 当前没有可压缩的对话历史')
+      print('\n  [Manual compaction] 当前没有可压缩的对话历史')
       return
     }
     const focus = command.slice('/compact'.length).trim()
     if (focus) {
-      console.log('\n  [Manual compaction] 已收到压缩重点，将在摘要中优先保留')
+      print('\n  [Manual compaction] 已收到压缩重点，将在摘要中优先保留')
     }
 
     const manualSystem = await buildSystemPrompt()
@@ -1216,20 +1360,25 @@ async function main() {
       focus || undefined
     )
     messages = result.messages
-    if (result.stopReason) console.log(fmtStop(result.stopReason))
+    if (result.stopReason) print(fmtStop(result.stopReason))
   }
 
   function ask() {
+    if (!rl) return
     rl.question('\nYou: ', (input) => {
       void handleInput(input)
     })
   }
 
   const teamsHint = isAgentTeamsEnabled() ? '；用 /teams 查看 Agent Teams' : ''
-  console.log(
+  print(
     `对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents${teamsHint}。\n`
   )
-  ask()
+  if (terminal) {
+    await terminal.waitUntilExit()
+  } else {
+    ask()
+  }
 }
 
 main().catch(console.error)

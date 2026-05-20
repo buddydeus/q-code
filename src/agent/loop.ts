@@ -44,6 +44,7 @@ export interface AgentLoopPreflightResult {
 export interface AgentToolEvent {
   phase: 'start' | 'done'
   name: string
+  input?: unknown
   toolCallId?: string
   resultLength?: number
   isError?: boolean
@@ -119,7 +120,7 @@ export async function agentLoop(
       messages = preflight.messages
       usageAnchor = preflight.usageAnchor
       if (preflight.stopReason) {
-        console.log(fmtStop(preflight.stopReason))
+        if (!quiet) console.log(fmtStop(preflight.stopReason))
         break
       }
     }
@@ -191,6 +192,7 @@ export async function agentLoop(
               options.onToolEvent?.({
                 phase: 'start',
                 name: part.toolName,
+                input: part.input,
                 toolCallId: part.toolCallId
               })
 

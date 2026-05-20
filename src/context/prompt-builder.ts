@@ -40,14 +40,14 @@ export class PromptBuilder {
     return sections.join('\n\n')
   }
 
-  debug(ctx: PromptContext): void {
-    console.log('\n=== Prompt Pipe Debug ===')
+  debug(ctx: PromptContext, log: (text: string) => void = console.log): void {
+    log('\n=== Prompt Pipe Debug ===')
     for (const { name, fn } of this.pipes) {
       const result = fn(ctx)
       const status = result !== null ? `[ON] ${result.length} chars` : '[OFF]'
-      console.log(`  ${name}: ${status}`)
+      log(`  ${name}: ${status}`)
     }
-    console.log('========================\n')
+    log('========================\n')
   }
 }
 
