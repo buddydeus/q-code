@@ -11,8 +11,9 @@ import {
 } from '../context/prompt-builder'
 import type { TokenUsage } from '../context/token-budget'
 import { createToolSearchTool } from '../tools/tool-search-tool'
-import { ToolRegistry, type ToolDefinition } from '../tools/registry'
+import { ToolRegistry, type TeammateIdentity, type ToolDefinition } from '../tools/registry'
 import { resolveAgentTools } from './resolve-agent-tools'
+import { drainUnreadMessages, formatMailboxAttachment } from './teammate-mailbox'
 import type { AgentDefinition, AgentRunResult } from './types'
 
 export const DEFAULT_AGENT_MAX_TURNS = 30
@@ -31,12 +32,24 @@ export interface RunChildAgentParams {
   abortSignal?: AbortSignal
   quiet?: boolean
   onProgress?: (event: ChildAgentProgressEvent) => void
+  /**
+   * When set, this run is a named teammate inside an Agent Teams session.
+   * The identity is forwarded to every tool call and is used at startup
+   * to drain the teammate's mailbox into the opening user message.
+   */
+  teammateIdentity?: TeammateIdentity
 }
 
 export type ChildAgentProgressEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; toolName: string; toolCallId?: string }
-  | { type: 'tool_result'; toolName: string; toolCallId?: string; isError?: boolean; output: unknown }
+  | {
+      type: 'tool_result'
+      toolName: string
+      toolCallId?: string
+      isError?: boolean
+      output: unknown
+    }
   | { type: 'turn_usage'; turnUsage: TokenUsage; cumulativeUsage: TokenUsage; turnCount: number }
 
 export async function runChildAgent(params: RunChildAgentParams): Promise<AgentRunResult> {
@@ -46,7 +59,13 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     cwd: params.cwdOverride,
     quiet: params.quiet
   })
-  const messages: ModelMessage[] = [{ role: 'user', content: params.prompt }]
+
+  // Teammates may have unread inbox messages waiting from the team lead
+  // or other teammates. Drain them once at startup and prepend them to
+  // the opening user prompt so the loop sees them as authoritative
+  // coordination input on its very first turn.
+  const openingPrompt = await buildOpeningPrompt(params.prompt, params.teammateIdentity)
+  const messages: ModelMessage[] = [{ role: 'user', content: openingPrompt }]
   let totalToolUseCount = 0
   let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
   let turnCount = 0
@@ -55,7 +74,8 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     definition: params.agentDefinition,
     registry,
     runtimeContext: params.runtimeContext,
-    agentMdContext: params.agentMdContext
+    agentMdContext: params.agentMdContext,
+    teammateIdentity: params.teammateIdentity
   })
 
   const loopResult = await agentLoop(params.model, registry, messages, system, {
@@ -65,6 +85,7 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     maxSteps: params.agentDefinition.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
     abortSignal: params.abortSignal,
     quiet: params.quiet,
+    ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
     onText: (text) => {
       params.onProgress?.({ type: 'text', text })
     },
@@ -130,6 +151,21 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
   }
 }
 
+async function buildOpeningPrompt(
+  prompt: string,
+  identity: TeammateIdentity | undefined
+): Promise<string> {
+  if (!identity) return prompt
+  try {
+    const unread = await drainUnreadMessages(identity.agentName, identity.teamName)
+    if (unread.length === 0) return prompt
+    return `${formatMailboxAttachment(unread)}\n\n${prompt}`
+  } catch {
+    // Inbox is observability-grade; do not block the teammate from starting.
+    return prompt
+  }
+}
+
 function buildChildRegistry(
   tools: ToolDefinition[],
   hasWildcard: boolean,
@@ -155,11 +191,21 @@ function buildChildSystemPrompt(params: {
   registry: ToolRegistry
   runtimeContext?: string
   agentMdContext?: string
+  teammateIdentity?: TeammateIdentity
 }): string {
-  const builder = new PromptBuilder()
-    .pipe('coreRules', coreRules())
-    .pipe('subAgentInstructions', () =>
-      [
+  const subAgentBlock = params.teammateIdentity
+    ? [
+        '[Teammate]',
+        `你是团队 "${params.teammateIdentity.teamName}" 中的成员 "${params.teammateIdentity.agentName}"，` +
+          `agent 类型 ${params.definition.agentType}。`,
+        '在独立上下文中运行；主 Agent (lead) 只能看到你的最终摘要。',
+        '可以用 SendMessage({ to, message }) 给 lead 或其他 active teammate 发消息；' +
+          'to: "team-lead" 即可联系 lead。不允许调用 TeamCreate / TeamDelete，也不能再嵌套派出 teammate。',
+        '严格遵守下面的角色说明：',
+        '',
+        params.definition.getSystemPrompt()
+      ].join('\n')
+    : [
         '[SubAgent]',
         `当前子 Agent: ${params.definition.agentType}`,
         '你在独立上下文中运行。主 Agent 只能看到你的最终摘要，看不到你的中间消息和工具结果。',
@@ -167,7 +213,10 @@ function buildChildSystemPrompt(params: {
         '',
         params.definition.getSystemPrompt()
       ].join('\n')
-    )
+
+  const builder = new PromptBuilder()
+    .pipe('coreRules', coreRules())
+    .pipe('subAgentInstructions', () => subAgentBlock)
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())

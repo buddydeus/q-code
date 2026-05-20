@@ -7,13 +7,18 @@ import {
 } from '../agents/run-async-agent'
 import { runChildAgent, type RunChildAgentParams } from '../agents/run-agent'
 import { ensureTaskOutputFile } from '../agents/task-output'
-import type { AgentIsolation, AgentRunResult } from '../agents/types'
+import { getActiveTeam } from '../agents/team-context'
 import {
-  cleanupWorktreeIfClean,
-  createAgentWorktree,
-  type WorktreeInfo
-} from '../agents/worktree'
-import type { ToolDefinition, ToolExecutionContext } from './registry'
+  addTeamMember,
+  formatAgentId,
+  sanitizeName,
+  TEAM_LEAD_NAME,
+  type TeamMember
+} from '../agents/team-helpers'
+import type { AgentIsolation, AgentRunResult } from '../agents/types'
+import { cleanupWorktreeIfClean, createAgentWorktree, type WorktreeInfo } from '../agents/worktree'
+import { isAgentTeamsEnabled } from '../utils/agent-teams-enabled'
+import type { TeammateIdentity, ToolDefinition, ToolExecutionContext } from './registry'
 
 export interface AgentToolController {
   createModel: (modelName?: string) => any
@@ -29,9 +34,7 @@ export interface AgentToolController {
 }
 
 export type ChildAgentRunner = (params: RunChildAgentParams) => Promise<AgentRunResult>
-export type AsyncAgentLifecycleRunner = (
-  params: RunAsyncAgentLifecycleParams
-) => Promise<void>
+export type AsyncAgentLifecycleRunner = (params: RunAsyncAgentLifecycleParams) => Promise<void>
 
 interface AgentInput {
   prompt?: unknown
@@ -40,6 +43,8 @@ interface AgentInput {
   model?: unknown
   run_in_background?: unknown
   isolation?: unknown
+  name?: unknown
+  team_name?: unknown
 }
 
 interface NormalizedAgentInput {
@@ -49,6 +54,8 @@ interface NormalizedAgentInput {
   model?: string
   runInBackground?: boolean
   isolation?: AgentIsolation
+  name?: string
+  teamName?: string
 }
 
 export function createAgentTool(
@@ -59,7 +66,8 @@ export function createAgentTool(
   return {
     name: 'Agent',
     description:
-      '将一个聚焦子任务委托给专门的 sub-agent。子 Agent 在独立上下文中运行，拥有经过过滤的工具集；可同步返回结果，也可 run_in_background=true 后台运行并在完成后通过 task-notification 回传。',
+      '将一个聚焦子任务委托给专门的 sub-agent。子 Agent 在独立上下文中运行，拥有经过过滤的工具集；可同步返回结果，也可 run_in_background=true 后台运行并在完成后通过 task-notification 回传。' +
+      '如果当前已有活跃 Agent Teams（已经调过 TeamCreate），可额外传 name + team_name 把这个 Agent 升级为团队的命名 teammate，便于 SendMessage 寻址。',
     parameters: {
       type: 'object',
       properties: {
@@ -85,13 +93,22 @@ export function createAgentTool(
         run_in_background: {
           type: 'boolean',
           description:
-            '为 true 时后台运行并立即返回 async_launched；完成、失败或被终止后，会在下一轮用户输入前注入 task-notification。'
+            '为 true 时后台运行并立即返回 async_launched；完成、失败或被终止后，会在下一轮用户输入前注入 task-notification。命名 teammate 必须 true。'
         },
         isolation: {
           type: 'string',
           enum: ['none', 'worktree'],
           description:
             '文件系统隔离级别。worktree 会在 git worktree 中运行子 Agent，避免直接污染主工作区；缺省使用 Agent 定义里的 isolation，再缺省为 none。'
+        },
+        name: {
+          type: 'string',
+          description:
+            '【Agent Teams】队友的简短可寻址名字（如 "backend"），与 team_name 成对出现。设置后这个 Agent 会被注册到当前团队的 team.json，可被 SendMessage 通过该 name 寻址。命名 teammate 必须 run_in_background=true，且不能由其他 teammate 嵌套创建。'
+        },
+        team_name: {
+          type: 'string',
+          description: '【Agent Teams】目标团队名，必须等于当前活跃团队的 name。与 name 成对出现。'
         }
       },
       required: ['prompt', 'description'],
@@ -108,10 +125,15 @@ export function createAgentTool(
         return "Error: 'description' is required and must be a non-empty string."
       }
 
+      const teamValidation = validateTeammateInput(input, context)
+      if (teamValidation.error) return teamValidation.error
+
       const agentType = input.subagentType || 'general-purpose'
       const definition = findAgent(agentType)
       if (!definition) {
-        const available = getAllAgents().map((agent) => agent.agentType).join(', ')
+        const available = getAllAgents()
+          .map((agent) => agent.agentType)
+          .join(', ')
         return `Error: sub-agent "${agentType}" not found. Available agents: ${available || '(none)'}`
       }
 
@@ -120,7 +142,7 @@ export function createAgentTool(
       const sessionId = controller.getSessionId?.() ?? 'default'
       const availableTools = controller.getAvailableTools()
       const effectiveIsolation = input.isolation ?? definition.isolation ?? 'none'
-      const agentId = createAgentId(agentType)
+      const agentId = createAgentId(agentType, teamValidation.identity?.agentName)
       const isolationSetup = await setupWorktreeIfRequested(effectiveIsolation, cwd, agentId)
 
       if (input.runInBackground === true) {
@@ -140,6 +162,21 @@ export function createAgentTool(
             : {})
         })
 
+        // Register the teammate in team.json BEFORE launching the async
+        // lifecycle. If the launch races a SendMessage from the lead's
+        // next turn, the recipient must already be on the roster — and
+        // the lead's next system-prompt render must list it as active.
+        if (teamValidation.identity) {
+          await registerTeammate({
+            identity: teamValidation.identity,
+            agentId,
+            agentType,
+            model: modelName,
+            outputFile,
+            worktreeInfo: isolationSetup.worktreeInfo
+          })
+        }
+
         void asyncRunner({
           entry,
           agentDefinition: definition,
@@ -151,7 +188,8 @@ export function createAgentTool(
           tokenBudget: controller.getTokenBudget?.(),
           maxOutputTokens: controller.getMaxOutputTokens?.(),
           escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
-          ...(isolationSetup.worktreeInfo ? { worktreeInfo: isolationSetup.worktreeInfo } : {})
+          ...(isolationSetup.worktreeInfo ? { worktreeInfo: isolationSetup.worktreeInfo } : {}),
+          ...(teamValidation.identity ? { teammateIdentity: teamValidation.identity } : {})
         }).catch(() => {
           /* runAsyncAgentLifecycle owns user-visible failure reporting. */
         })
@@ -163,7 +201,8 @@ export function createAgentTool(
           agentId,
           outputFile,
           worktreeInfo: isolationSetup.worktreeInfo,
-          isolationWarning: isolationSetup.warning
+          isolationWarning: isolationSetup.warning,
+          teammateIdentity: teamValidation.identity
         })
       }
 
@@ -216,9 +255,9 @@ function normalizeInput(input: AgentInput): NormalizedAgentInput {
   const runInBackground =
     typeof input.run_in_background === 'boolean' ? input.run_in_background : undefined
   const isolation =
-    input.isolation === 'none' || input.isolation === 'worktree'
-      ? input.isolation
-      : undefined
+    input.isolation === 'none' || input.isolation === 'worktree' ? input.isolation : undefined
+  const name = typeof input.name === 'string' ? input.name.trim() : undefined
+  const teamName = typeof input.team_name === 'string' ? input.team_name.trim() : undefined
 
   return {
     prompt,
@@ -226,8 +265,118 @@ function normalizeInput(input: AgentInput): NormalizedAgentInput {
     ...(subagentType ? { subagentType } : {}),
     ...(model ? { model } : {}),
     ...(runInBackground !== undefined ? { runInBackground } : {}),
-    ...(isolation ? { isolation } : {})
+    ...(isolation ? { isolation } : {}),
+    ...(name ? { name } : {}),
+    ...(teamName ? { teamName } : {})
   }
+}
+
+interface TeammateValidationResult {
+  error?: string
+  identity?: TeammateIdentity
+}
+
+/**
+ * Run every Agent Teams validation rule (per doc §五) over the
+ * normalized input. Returns either an error string ready to hand back
+ * to the model, or the resolved teammate identity when this call is a
+ * valid named-teammate spawn. Returns `{}` when `name`/`team_name` are
+ * absent — that path is a plain SubAgent and skips team logic.
+ */
+function validateTeammateInput(
+  input: NormalizedAgentInput,
+  context: ToolExecutionContext
+): TeammateValidationResult {
+  const { name, teamName } = input
+
+  // Either both or neither.
+  if ((name && !teamName) || (!name && teamName)) {
+    return { error: "Error: 'name' and 'team_name' must be used together." }
+  }
+  if (!name || !teamName) return {}
+
+  if (!isAgentTeamsEnabled()) {
+    return {
+      error:
+        "Error: Agent Teams feature is not enabled. Start q-code with --agent-teams or Q_CODE_TEAMS=1 to use 'name' / 'team_name'."
+    }
+  }
+
+  if (sanitizeName(name) === TEAM_LEAD_NAME) {
+    return { error: `Error: "${TEAM_LEAD_NAME}" is reserved for the team lead.` }
+  }
+
+  const active = getActiveTeam()
+  if (!active) {
+    return {
+      error:
+        'Error: no team is active. Call TeamCreate first, then spawn teammates with this Agent call.'
+    }
+  }
+  if (sanitizeName(teamName) !== sanitizeName(active.teamName)) {
+    return {
+      error: `Error: team_name "${teamName}" does not match the active team "${active.teamName}".`
+    }
+  }
+
+  // Teammates cannot themselves spawn sub-teammates. The lead is the
+  // only caller without a teammateIdentity in its tool context.
+  if (context.teammateIdentity) {
+    return {
+      error:
+        'Error: nested teammate spawn rejected. Only the team lead may add teammates with name/team_name; ' +
+        'a teammate that needs help should SendMessage the lead or another teammate instead.'
+    }
+  }
+
+  // Source-aligned hard requirement: named teammates run async so the
+  // lead's loop can keep coordinating in parallel.
+  if (input.runInBackground !== true) {
+    return {
+      error:
+        'Error: named teammates must run in background (run_in_background=true). ' +
+        'A synchronous teammate would block the lead from coordinating the rest of the team.'
+    }
+  }
+
+  return {
+    identity: {
+      agentName: sanitizeName(name),
+      teamName: active.teamName
+    }
+  }
+}
+
+/**
+ * Append the new teammate to team.json. Called BEFORE the async loop
+ * starts so the lead's next system-prompt render and any SendMessage
+ * from the next turn both see the new member.
+ */
+async function registerTeammate(args: {
+  identity: TeammateIdentity
+  agentId: string
+  agentType: string
+  model: string
+  outputFile: string
+  worktreeInfo?: WorktreeInfo
+}): Promise<void> {
+  const member: TeamMember = {
+    agentId: args.agentId,
+    name: args.identity.agentName,
+    agentType: args.agentType,
+    model: args.model,
+    joinedAt: Date.now(),
+    isActive: true,
+    outputFile: args.outputFile,
+    ...(args.worktreeInfo
+      ? {
+          worktreePath: args.worktreeInfo.worktreePath,
+          worktreeBranch: args.worktreeInfo.worktreeBranch,
+          gitRoot: args.worktreeInfo.gitRoot
+        }
+      : {})
+  }
+  await addTeamMember(args.identity.teamName, member)
 }
 
 async function setupWorktreeIfRequested(
@@ -248,8 +397,12 @@ async function setupWorktreeIfRequested(
   }
 }
 
-function createAgentId(agentType: string): string {
+function createAgentId(agentType: string, teammateName?: string): string {
   const safeType = agentType.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 32) || 'agent'
+  if (teammateName) {
+    const safeName = teammateName.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 24) || 'teammate'
+    return `${safeName}-${safeType}-${randomUUID().slice(0, 6)}`
+  }
   return `${safeType}-${randomUUID().slice(0, 8)}`
 }
 
@@ -261,9 +414,13 @@ function formatAsyncLaunchResult(args: {
   outputFile: string
   worktreeInfo?: WorktreeInfo
   isolationWarning?: string
+  teammateIdentity?: TeammateIdentity
 }): string {
+  const role = args.teammateIdentity
+    ? `Teammate '${args.teammateIdentity.agentName}' (type ${args.agentType}) launched in team "${args.teammateIdentity.teamName}".`
+    : `Async sub-agent '${args.agentType}' launched successfully.`
   const lines = [
-    `Async sub-agent '${args.agentType}' launched successfully.`,
+    role,
     `task: ${args.description}`,
     `model: ${args.modelName}`,
     `agent_id: ${args.agentId}`,
@@ -272,7 +429,9 @@ function formatAsyncLaunchResult(args: {
       ? `worktree: ${args.worktreeInfo.worktreePath} (branch: ${args.worktreeInfo.worktreeBranch})`
       : '',
     args.isolationWarning ? `warning: ${args.isolationWarning}` : '',
-    '后台任务完成后会在下一轮用户输入前通过 <task-notification> 回传；除非用户要求，不要主动轮询输出文件。'
+    args.teammateIdentity
+      ? `提示：用 \`SendMessage({ to: "${args.teammateIdentity.agentName}", ... })\` 给这个队友发消息；它完成后会自动通过 <task-notification> 回传，并把 isActive 翻成 false。`
+      : '后台任务完成后会在下一轮用户输入前通过 <task-notification> 回传；除非用户要求，不要主动轮询输出文件。'
   ].filter(Boolean)
 
   return [
@@ -282,6 +441,10 @@ function formatAsyncLaunchResult(args: {
     `  <agent_id>${args.agentId}</agent_id>`,
     `  <agent_type>${args.agentType}</agent_type>`,
     `  <output_file>${args.outputFile}</output_file>`,
+    args.teammateIdentity
+      ? `  <teammate_name>${args.teammateIdentity.agentName}</teammate_name>`
+      : '',
+    args.teammateIdentity ? `  <team_name>${args.teammateIdentity.teamName}</team_name>` : '',
     args.worktreeInfo ? `  <worktree_path>${args.worktreeInfo.worktreePath}</worktree_path>` : '',
     args.worktreeInfo
       ? `  <worktree_branch>${args.worktreeInfo.worktreeBranch}</worktree_branch>`
@@ -311,16 +474,14 @@ function formatAgentToolResult(args: {
     args.worktreeFinal?.worktreePath
       ? `worktree: ${args.worktreeFinal.worktreePath} (branch: ${args.worktreeFinal.worktreeBranch}) — changes preserved.`
       : '',
-    warnings.length > 0 ? `warnings:\n${warnings.map((warning) => `  - ${warning}`).join('\n')}` : ''
+    warnings.length > 0
+      ? `warnings:\n${warnings.map((warning) => `  - ${warning}`).join('\n')}`
+      : ''
   ].filter(Boolean)
 
-  return [
-    lines.join('\n'),
-    '',
-    '<sub_agent_result>',
-    result.finalText,
-    '</sub_agent_result>'
-  ].join('\n')
+  return [lines.join('\n'), '', '<sub_agent_result>', result.finalText, '</sub_agent_result>'].join(
+    '\n'
+  )
 }
 
 function formatAgentToolFailure(args: {

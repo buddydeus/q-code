@@ -14,9 +14,22 @@ export interface ToolDefinition {
   searchHint?: string
 }
 
+export interface TeammateIdentity {
+  /** Member `name` (NOT agentId), e.g. "backend". */
+  agentName: string
+  /** Active team's name; matches TeamFile.name. */
+  teamName: string
+}
+
 export interface ToolExecutionContext {
   cwd: string
   abortSignal?: AbortSignal
+  /**
+   * Set when the tool runs inside a named teammate's loop (Agent Teams).
+   * Tools like SendMessage use it to resolve the sender's identity;
+   * absent → the call is coming from the team lead's main session.
+   */
+  teammateIdentity?: TeammateIdentity
 }
 
 export interface ToolRegistryOptions {
@@ -224,7 +237,8 @@ export class ToolRegistry {
           try {
             const raw = await executeFn(input, {
               cwd: context.cwd ?? registry.cwd,
-              ...(context.abortSignal ? { abortSignal: context.abortSignal } : {})
+              ...(context.abortSignal ? { abortSignal: context.abortSignal } : {}),
+              ...(context.teammateIdentity ? { teammateIdentity: context.teammateIdentity } : {})
             })
             const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
             return truncateResult(text, maxChars)

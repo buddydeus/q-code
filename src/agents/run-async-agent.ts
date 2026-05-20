@@ -1,10 +1,18 @@
-import { completeAsyncAgent, failAsyncAgent, getAsyncAgent, markAsyncAgentKilled, updateAsyncAgentProgress, type AsyncAgentEntry } from './async-agent-store'
+import {
+  completeAsyncAgent,
+  failAsyncAgent,
+  getAsyncAgent,
+  markAsyncAgentKilled,
+  updateAsyncAgentProgress,
+  type AsyncAgentEntry
+} from './async-agent-store'
 import { enqueuePendingNotification, formatTaskNotification } from './notification-store'
 import { runChildAgent } from './run-agent'
+import { setMemberActive } from './team-helpers'
 import { appendTaskOutput, previewToolResult } from './task-output'
 import { cleanupWorktreeIfClean, type WorktreeInfo } from './worktree'
 import type { AgentDefinition } from './types'
-import type { ToolDefinition } from '../tools/registry'
+import type { TeammateIdentity, ToolDefinition } from '../tools/registry'
 
 export interface RunAsyncAgentLifecycleParams {
   entry: AsyncAgentEntry
@@ -18,11 +26,16 @@ export interface RunAsyncAgentLifecycleParams {
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
   worktreeInfo?: WorktreeInfo
+  /**
+   * Present when this async run is a named teammate in an Agent Teams
+   * session. Forwarded to runChildAgent and used in a `finally` block
+   * to flip the teammate's `isActive` flag to false no matter how the
+   * run terminates (completed / failed / killed).
+   */
+  teammateIdentity?: TeammateIdentity
 }
 
-export async function runAsyncAgentLifecycle(
-  params: RunAsyncAgentLifecycleParams
-): Promise<void> {
+export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParams): Promise<void> {
   const startTime = Date.now()
   const { entry } = params
 
@@ -45,6 +58,7 @@ export async function runAsyncAgentLifecycle(
       maxOutputTokens: params.maxOutputTokens,
       escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
       ...(params.worktreeInfo ? { cwdOverride: params.worktreeInfo.worktreePath } : {}),
+      ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
       abortSignal: entry.abortController.signal,
       quiet: true,
       onProgress: (event) => {
@@ -178,5 +192,22 @@ export async function runAsyncAgentLifecycle(
         ...worktreeFinal
       })
     })
+  } finally {
+    // Always flip the team member's isActive flag — completed, failed,
+    // or killed. TeamDelete blocks until every teammate is inactive,
+    // and the lead's system-prompt roster shows [active]/[idle] based
+    // on this same flag. Skipping it on any failure path would leave
+    // a permanently-active ghost teammate stuck on the lead's roster.
+    if (params.teammateIdentity) {
+      try {
+        await setMemberActive(
+          params.teammateIdentity.teamName,
+          params.teammateIdentity.agentName,
+          false
+        )
+      } catch {
+        // Bookkeeping only; never propagate.
+      }
+    }
   }
 }

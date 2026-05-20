@@ -1,6 +1,6 @@
 # q-code
 
-基于 AI SDK 的命令行 Agent 框架，支持工具调用、Plan Mode、Task V2 持久化任务图、上下文自动压缩、会话持久化、跨对话项目记忆、Skills 渐进式披露、后台 SubAgent、Worktree 隔离和 MCP 扩展。
+基于 AI SDK 的命令行 Agent 框架，支持工具调用、Plan Mode、Task V2 持久化任务图、上下文自动压缩、会话持久化、跨对话项目记忆、Skills 渐进式披露、后台 SubAgent、Worktree 隔离、Agent Teams 多智能体协作和 MCP 扩展。
 
 ## 技术栈
 
@@ -33,29 +33,30 @@ pnpm install
 cp .env.example .env
 ```
 
-| 变量                           | 必填 | 说明                                                  |
-| ------------------------------ | ---- | ----------------------------------------------------- |
-| `OPENAI_BASE_URL`              | ✅   | OpenAI 兼容 API 地址                                  |
-| `OPENAI_API_KEY`               | ✅   | API Key                                               |
-| `OPENAI_MODEL`                 | ✅   | 主模型名称                                            |
-| `SUMMARY_BASE_URL`             | ✅   | 摘要模型 API 地址                                     |
-| `SUMMARY_API_KEY`              | ✅   | 摘要模型 API Key                                      |
-| `SUMMARY_MODEL`                | ✅   | 摘要模型名称（可用更廉价的模型）                      |
-| `TOKEN_BUDGET`                 | ❌   | 单轮执行 token 预算，默认 256000                      |
-| `CONTEXT_LIMIT_TOKENS`         | ❌   | 上下文窗口上限，默认 256000                           |
-| `COMPACT_TRIGGER_RATIO`        | ❌   | 压缩触发比例，默认 0.85                               |
-| `WARNING_TRIGGER_RATIO`        | ❌   | 上下文预警比例，默认 0.80                             |
-| `BLOCKING_TRIGGER_RATIO`       | ❌   | 强制停止比例，默认 0.98，会预留普通输出预算           |
-| `DEFAULT_MAX_OUTPUT_TOKENS`    | ❌   | 普通回答输出上限，默认 8000                           |
-| `ESCALATED_MAX_OUTPUT_TOKENS`  | ❌   | 输出触顶后的升级重试上限，默认 64000                  |
-| `COMPACT_MAX_OUTPUT_TOKENS`    | ❌   | 压缩摘要输出上限，默认 20000                          |
-| `Q_CODE_SESSION_DIR`           | ❌   | 会话存储目录，默认 .sessions                          |
-| `Q_CODE_HOME`                  | ❌   | q-code 全局配置目录，默认 `~/.q-code`                 |
-| `Q_CODE_SKILL_CHAR_BUDGET`     | ❌   | Skills discovery 注入字符预算，默认 8000              |
-| `MCP_CONNECT_TIMEOUT_MS`       | ❌   | MCP server 连接超时，默认 30000                       |
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌   | 旧版 GitHub MCP 兼容入口；新配置建议使用 `mcpServers` |
-| `TAVILY_API_KEY`               | ❌   | Tavily 搜索 API Key                                   |
-| `SERPER_API_KEY`               | ❌   | Serper 搜索 API Key                                   |
+| 变量                           | 必填 | 说明                                                          |
+| ------------------------------ | ---- | ------------------------------------------------------------- |
+| `OPENAI_BASE_URL`              | ✅   | OpenAI 兼容 API 地址                                          |
+| `OPENAI_API_KEY`               | ✅   | API Key                                                       |
+| `OPENAI_MODEL`                 | ✅   | 主模型名称                                                    |
+| `SUMMARY_BASE_URL`             | ✅   | 摘要模型 API 地址                                             |
+| `SUMMARY_API_KEY`              | ✅   | 摘要模型 API Key                                              |
+| `SUMMARY_MODEL`                | ✅   | 摘要模型名称（可用更廉价的模型）                              |
+| `TOKEN_BUDGET`                 | ❌   | 单轮执行 token 预算，默认 256000                              |
+| `CONTEXT_LIMIT_TOKENS`         | ❌   | 上下文窗口上限，默认 256000                                   |
+| `COMPACT_TRIGGER_RATIO`        | ❌   | 压缩触发比例，默认 0.85                                       |
+| `WARNING_TRIGGER_RATIO`        | ❌   | 上下文预警比例，默认 0.80                                     |
+| `BLOCKING_TRIGGER_RATIO`       | ❌   | 强制停止比例，默认 0.98，会预留普通输出预算                   |
+| `DEFAULT_MAX_OUTPUT_TOKENS`    | ❌   | 普通回答输出上限，默认 8000                                   |
+| `ESCALATED_MAX_OUTPUT_TOKENS`  | ❌   | 输出触顶后的升级重试上限，默认 64000                          |
+| `COMPACT_MAX_OUTPUT_TOKENS`    | ❌   | 压缩摘要输出上限，默认 20000                                  |
+| `Q_CODE_SESSION_DIR`           | ❌   | 会话存储目录，默认 .sessions                                  |
+| `Q_CODE_HOME`                  | ❌   | q-code 全局配置目录，默认 `~/.q-code`                         |
+| `Q_CODE_SKILL_CHAR_BUDGET`     | ❌   | Skills discovery 注入字符预算，默认 8000                      |
+| `Q_CODE_TEAMS`                 | ❌   | 设为 1/true/yes/on 开启 Agent Teams（等价于 `--agent-teams`） |
+| `MCP_CONNECT_TIMEOUT_MS`       | ❌   | MCP server 连接超时，默认 30000                               |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | ❌   | 旧版 GitHub MCP 兼容入口；新配置建议使用 `mcpServers`         |
+| `TAVILY_API_KEY`               | ❌   | Tavily 搜索 API Key                                           |
+| `SERPER_API_KEY`               | ❌   | Serper 搜索 API Key                                           |
 
 ### 启动
 
@@ -66,12 +67,13 @@ pnpm run continue       # 恢复上次会话
 
 ### 命令行参数
 
-| 参数                   | 说明                          |
-| ---------------------- | ----------------------------- |
-| `--continue`           | 恢复上次会话                  |
-| `--session=<id>`       | 指定会话 ID                   |
-| `--dump-system-prompt` | 输出完整 System Prompt 后退出 |
-| `--plan`               | 启动时直接进入 Plan Mode      |
+| 参数                   | 说明                                                     |
+| ---------------------- | -------------------------------------------------------- |
+| `--continue`           | 恢复上次会话                                             |
+| `--session=<id>`       | 指定会话 ID                                              |
+| `--dump-system-prompt` | 输出完整 System Prompt 后退出                            |
+| `--plan`               | 启动时直接进入 Plan Mode                                 |
+| `--agent-teams`        | 启用 Agent Teams 多智能体协作（也可设 `Q_CODE_TEAMS=1`） |
 
 ## 架构概览
 
@@ -442,14 +444,14 @@ You are a focused code review sub-agent. Return findings first, then residual ri
 
 `Agent` 工具参数：
 
-| 参数                | 说明                                                                 |
-| ------------------- | -------------------------------------------------------------------- |
-| `prompt`            | 必填，自包含任务说明；子 Agent 看不到主对话历史                      |
-| `description`       | 必填，短任务名，用于日志和结果摘要                                   |
-| `subagent_type`     | 可选，目标 Agent 类型，缺省 `general-purpose`                        |
-| `model`             | 可选，本次调用模型覆盖                                               |
-| `run_in_background` | 可选，为 `true` 时后台运行并立即返回 `<async_launched>`              |
-| `isolation`         | 可选，本次调用隔离覆盖：`none` / `worktree`；优先级高于 Agent 定义    |
+| 参数                | 说明                                                               |
+| ------------------- | ------------------------------------------------------------------ |
+| `prompt`            | 必填，自包含任务说明；子 Agent 看不到主对话历史                    |
+| `description`       | 必填，短任务名，用于日志和结果摘要                                 |
+| `subagent_type`     | 可选，目标 Agent 类型，缺省 `general-purpose`                      |
+| `model`             | 可选，本次调用模型覆盖                                             |
+| `run_in_background` | 可选，为 `true` 时后台运行并立即返回 `<async_launched>`            |
+| `isolation`         | 可选，本次调用隔离覆盖：`none` / `worktree`；优先级高于 Agent 定义 |
 
 结构性约束：
 
@@ -477,12 +479,80 @@ You are a focused code review sub-agent. Return findings first, then residual ri
 
 子 Agent 的文件读写、Shell、grep/glob 和记忆写入都会相对该 worktree 执行。任务结束时，q-code 会检查 worktree 是否有未提交改动或新 commit：干净则自动移除；有改动或检查失败则保留，并在结果或通知里返回 `worktree_path` 和 `worktree_branch`，方便人工 review 或合并。若当前目录不在 Git 仓库内，worktree 创建失败会降级为无隔离并返回 warning。
 
-| 命令                | 说明                                               |
-| ------------------- | -------------------------------------------------- |
+| 命令                | 说明                                                |
+| ------------------- | --------------------------------------------------- |
 | `/agents`           | 查看已加载 SubAgents、后台任务、输出文件和 worktree |
-| `/agents kill <id>` | 请求终止运行中的后台 Agent                         |
+| `/agents kill <id>` | 请求终止运行中的后台 Agent                          |
 
-### 9. MCP 扩展
+### 9. Agent Teams 多智能体协作
+
+Agent Teams 在 SubAgent 的基础上增加了**网状通信**：teammate 之间可以直接 SendMessage 互相对齐，不必把每条消息都中转给 lead；适合需要长期并行、跨角色协作的复杂任务（如 backend + frontend + reviewer 同时推进一个特性）。
+
+**启用**：用 `--agent-teams` 启动 q-code 或设置 `Q_CODE_TEAMS=1`。关闭状态下三个团队工具完全不向模型暴露。
+
+**核心模型**：
+
+```text
+~/.q-code/teams/<team>/
+├── team.json              ← TeamFile（成员注册表 + lead 信息）
+└── inboxes/
+    ├── backend.json       ← backend 的收件箱
+    ├── frontend.json      ← frontend 的收件箱
+    └── team-lead.json     ← lead 的收件箱
+```
+
+每个进程同一时间只能领导一个团队（`teamContext` 单例约束）；teammate 不能再嵌套 TeamCreate 或派出二级 teammate。
+
+**三个工具**：
+
+| 工具          | 作用                                                                                               |
+| ------------- | -------------------------------------------------------------------------------------------------- |
+| `TeamCreate`  | 开启团队会话，把当前进程注册为 lead                                                                |
+| `SendMessage` | 把纯文本消息丢进收件人的收件箱（`to: "*"` 广播；自发自收会被拒绝）                                 |
+| `TeamDelete`  | 解散团队，删 team.json + 所有 inbox + 干净 worktree（脏 worktree 保留）；要求所有 teammate 已 idle |
+
+**Agent 工具的扩展**：原有 `Agent({ ... })` 增加可选参数 `name` + `team_name`：
+
+```js
+Agent({
+  subagent_type: 'general-purpose',
+  name: 'backend',
+  team_name: 'refactor-auth',
+  run_in_background: true,
+  prompt: '实现 /api/auth 的 JWT 认证',
+  description: '后端认证模块'
+})
+```
+
+文档要求的 7 条校验全部覆盖：
+
+| 校验                            | 错误信息                                   |
+| ------------------------------- | ------------------------------------------ |
+| `name` 但 Agent Teams 未启用    | `Agent Teams feature is not enabled`       |
+| 只传 `name` 或只传 `team_name`  | `name and team_name must be used together` |
+| 没有活跃团队                    | `no team is active`                        |
+| `team_name` 与活跃团队不一致    | `team_name does not match active team`     |
+| `name` 等于保留字 `team-lead`   | `team-lead is reserved`                    |
+| 调用者本身已是 teammate（嵌套） | `nested teammate spawn rejected`           |
+| `run_in_background` 不为 true   | `named teammates must run in background`   |
+
+**通信流**：teammate 启动时 `runChildAgent` 会先 `drainUnreadMessages` 把所有未读邮件以 `<teammate-messages>` 上下文块拼到第一条 user prompt 前面；teammate 终止（成功/失败/被 kill）时 `runAsyncAgent` 在 `finally` 块里把 `isActive` 翻成 `false`，`<task-notification>` 在下一轮用户输入前注入对话。
+
+**System prompt 三档**：
+
+| 状态         | 注入内容                               |
+| ------------ | -------------------------------------- |
+| 特性开关关闭 | 空字符串                               |
+| 开启但无团队 | 提示模型 TeamCreate 的使用时机         |
+| 已有活跃团队 | 完整 roster（active/idle）+ 工作流规则 |
+
+| 命令                 | 说明                                         |
+| -------------------- | -------------------------------------------- |
+| `/teams`             | 查看活跃团队、成员状态、磁盘上的所有团队目录 |
+| `/teams clear`       | 清理当前团队（要求无活跃 teammate）          |
+| `/teams clear force` | 强制清理（建议先 `/agents kill <agent_id>`） |
+
+### 10. MCP 扩展
 
 q-code 支持标准 `mcpServers` 配置，把外部 MCP server 适配成普通工具。配置分两级：
 
@@ -531,7 +601,7 @@ MCP 工具名会规范化为 `mcp__<server>__<tool>`，例如 `my.db` 的 `echo.
 | `/mcp tools <serverName>`     | 查看某个 server 暴露的工具                |
 | `/mcp reconnect <serverName>` | 清理缓存并重连某个 server                 |
 
-### 10. 会话持久化与项目记忆
+### 11. 会话持久化与项目记忆
 
 #### 会话持久化
 

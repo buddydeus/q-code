@@ -10,6 +10,7 @@ export interface PromptContext {
   todoContext?: string
   skillsContext?: string
   agentsContext?: string
+  teamsContext?: string
   runtimeContext?: string
   agentMdContext?: string
   memoryContext?: string
@@ -88,16 +89,21 @@ export function agentsContext(): PipeFn {
   }
 }
 
+export function teamsContext(): PipeFn {
+  return (ctx) => {
+    if (!ctx.teamsContext) return null
+    return ctx.teamsContext
+  }
+}
+
 export function todoGuide(): PipeFn {
   return (ctx) => {
     if (ctx.taskMode !== 'todo') return null
-    return (
-    [
+    return [
       '多步骤任务请主动使用 todo_write 维护会话级任务清单。',
       '任务清单应保持简短、可执行；每次调用 todo_write 都要传入完整列表。',
       '通常保持恰好一个任务为 in_progress；完成全部任务后把所有项标记 completed，让清单自动清空。'
     ].join('\n')
-    )
   }
 }
 

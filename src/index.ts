@@ -7,9 +7,12 @@ import { createInterface } from 'node:readline'
 import {
   allTools,
   createAgentTool,
+  createSendMessageTool,
   createSkillTool,
   createPlanTools,
   createTaskTools,
+  createTeamCreateTool,
+  createTeamDeleteTool,
   createTodoWriteTool,
   createToolSearchTool,
   ToolRegistry
@@ -29,6 +32,7 @@ import {
   skillsContext,
   taskContext,
   taskGuide,
+  teamsContext,
   todoContext,
   todoGuide,
   toolGuide
@@ -41,10 +45,7 @@ import {
   formatRuntimeEnvironmentContext,
   getRuntimeEnvironmentContext
 } from './context/runtime-context'
-import {
-  buildTokenBudgetSnapshot,
-  type UsageAnchor
-} from './context/token-budget'
+import { buildTokenBudgetSnapshot, type UsageAnchor } from './context/token-budget'
 import { buildMemorySystemContext } from './context/memory/memdir'
 import {
   getPlanFilePath,
@@ -53,10 +54,7 @@ import {
   writePlan,
   type PlanFileOptions
 } from './context/plans'
-import {
-  getPlanModeAttachment,
-  getPlanModeExitAttachment
-} from './context/plan-attachments'
+import { getPlanModeAttachment, getPlanModeExitAttachment } from './context/plan-attachments'
 import type { ToolVisibilityMode } from './tools/registry'
 import { clearTodos, formatTodoList, getTodos } from './context/todos'
 import {
@@ -86,10 +84,16 @@ import { formatAgentsSystemReminder } from './agents/prompt-injection'
 import { getAllAgents } from './agents/registry'
 import { getProjectAgentsDir, getUserAgentsDir } from './agents/load-agents-dir'
 import { getAllAsyncAgents, killAsyncAgent } from './agents/async-agent-store'
+import { drainPendingNotifications, pendingNotificationCount } from './agents/notification-store'
+import { clearActiveTeam, getActiveTeam } from './agents/team-context'
 import {
-  drainPendingNotifications,
-  pendingNotificationCount
-} from './agents/notification-store'
+  cleanupTeamDirectory,
+  listTeamNames,
+  readTeamFile,
+  TEAM_LEAD_NAME
+} from './agents/team-helpers'
+import { formatTeamsSystemReminder } from './agents/team-prompt'
+import { isAgentTeamsEnabled } from './utils/agent-teams-enabled'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -115,7 +119,9 @@ async function connectMCP(options: { quiet?: boolean; cwd?: string } = {}) {
     if (!quiet) {
       for (const error of result.config.errors) console.log(`  [MCP config] ${error}`)
       if (result.connections.length > 0) {
-        console.log(`\n  [MCP] 已配置 ${result.connections.length} 个 server，已注册 ${result.toolCount} 个工具`)
+        console.log(
+          `\n  [MCP] 已配置 ${result.connections.length} 个 server，已注册 ${result.toolCount} 个工具`
+        )
       } else {
         const paths = getMcpSettingsPaths(options.cwd ?? process.cwd())
         console.log('\n  [MCP] 未配置 MCP server')
@@ -219,6 +225,11 @@ async function main() {
   })
   if (!dumpSystemPrompt) {
     for (const warning of agentsBootstrap.warnings) console.log(`  ${warning}`)
+    if (isAgentTeamsEnabled()) {
+      console.log(
+        '  [Teams] Agent Teams 已启用（TeamCreate / SendMessage / TeamDelete 对模型可见）'
+      )
+    }
   }
   const planOptions: PlanFileOptions = {
     cwd: store?.cwd ?? process.cwd(),
@@ -275,9 +286,7 @@ async function main() {
     messages = store.load()
     const restored = store.getSummary()
     if (!dumpSystemPrompt) {
-      console.log(
-        `\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`
-      )
+      console.log(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`)
       console.log(`  transcript: ${restored.transcriptPath}`)
     }
   } else {
@@ -309,6 +318,11 @@ async function main() {
     })
   )
 
+  // Agent Teams (stage 21): the three coordination tools. Their
+  // isEnabled() gate hides them from the model schema unless the
+  // feature flag is on, so registering unconditionally is safe.
+  registry.register(createTeamCreateTool(), createTeamDeleteTool(), createSendMessageTool())
+
   // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()
     .pipe('coreRules', coreRules())
@@ -320,6 +334,7 @@ async function main() {
     .pipe('todoContext', todoContext())
     .pipe('skillsContext', skillsContext())
     .pipe('agentsContext', agentsContext())
+    .pipe('teamsContext', teamsContext())
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())
     .pipe('agentMdInstructions', agentMdInstructions())
@@ -340,6 +355,7 @@ async function main() {
       todoContext: getCurrentTodoContext(),
       skillsContext: formatSkillsSystemReminder(getModelVisibleSkills()),
       agentsContext: formatAgentsSystemReminder(getAllAgents()),
+      teamsContext: formatTeamsSystemReminder(),
       runtimeContext,
       agentMdContext,
       memoryContext
@@ -359,6 +375,7 @@ async function main() {
     todoContext: getCurrentTodoContext(),
     skillsContext: formatSkillsSystemReminder(getModelVisibleSkills()),
     agentsContext: formatAgentsSystemReminder(getAllAgents()),
+    teamsContext: formatTeamsSystemReminder(),
     runtimeContext,
     agentMdContext,
     memoryContext: await buildMemorySystemContext()
@@ -377,7 +394,11 @@ async function main() {
   const model = createModel()
   const { model: summaryModel, name: summaryModelName } = createSummaryModel()
 
-  function snapshotContext(currentMessages: ModelMessage[], systemPrompt: string, usageAnchor?: UsageAnchor) {
+  function snapshotContext(
+    currentMessages: ModelMessage[],
+    systemPrompt: string,
+    usageAnchor?: UsageAnchor
+  ) {
     return buildTokenBudgetSnapshot(currentMessages, {
       systemPrompt,
       activeToolSchemaTokens: registry.countTokenEstimate().active,
@@ -402,7 +423,8 @@ async function main() {
     const before = snapshotContext(currentMessages, systemPrompt, usageAnchor)
     const beforeForReduction = usageAnchor ? snapshotContext(currentMessages, systemPrompt) : before
     if (!force && (before.state === 'normal' || before.state === 'warning')) {
-      if (before.state === 'warning') console.log(fmtContextUsage(before.used, before.limit, before.state))
+      if (before.state === 'warning')
+        console.log(fmtContextUsage(before.used, before.limit, before.state))
       return { messages: currentMessages, usageAnchor }
     }
 
@@ -422,7 +444,9 @@ async function main() {
     const triggerText = force
       ? '手动触发压缩'
       : `>= ${Math.round(compactTriggerRatio * 100)}%，触发压缩`
-    console.log(`\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens ${triggerText}...`)
+    console.log(
+      `\n  [${reason}] 上下文 ~${before.used}/${contextLimitTokens} tokens ${triggerText}...`
+    )
 
     const mc = microcompact(currentMessages)
     let nextMessages = mc.messages
@@ -436,7 +460,9 @@ async function main() {
     if (comp.compressedCount > 0) {
       nextMessages = comp.messages
       summary = comp.summary
-      console.log(`  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`)
+      console.log(
+        `  [Summarization] 压缩了 ${comp.compressedCount} 条消息 (使用 ${summaryModelName})`
+      )
     }
 
     const after = snapshotContext(nextMessages, systemPrompt)
@@ -474,9 +500,15 @@ async function main() {
 
   const activeTools = registry.getActiveTools()
   console.log(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
-  console.log(`Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`)
-  console.log(`SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`)
-  console.log(`任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`)
+  console.log(
+    `Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`
+  )
+  console.log(
+    `SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`
+  )
+  console.log(
+    `任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`
+  )
   if (agentMode === 'plan') console.log(`Plan 文件: ${planFilePath}`)
   console.log(
     `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
@@ -538,6 +570,11 @@ async function main() {
         if (!closed) ask()
         return
       }
+      if (trimmed === '/teams' || trimmed.startsWith('/teams ')) {
+        await handleTeamsCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
       if (trimmed === '/skills' || trimmed.startsWith('/skills ')) {
         handleSkillsCommand(trimmed)
         if (!closed) ask()
@@ -554,7 +591,9 @@ async function main() {
         return
       }
       if (pendingPlanApproval && !trimmed.startsWith('/')) {
-        console.log('\n  [Plan] 当前有待确认的计划。输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。')
+        console.log(
+          '\n  [Plan] 当前有待确认的计划。输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。'
+        )
         if (!closed) ask()
         return
       }
@@ -579,7 +618,10 @@ async function main() {
     await runAgentTurnWithMessages([userMsg], userContent)
   }
 
-  async function runAgentTurnWithMessages(userMessages: ModelMessage[], userQuery: string): Promise<void> {
+  async function runAgentTurnWithMessages(
+    userMessages: ModelMessage[],
+    userQuery: string
+  ): Promise<void> {
     injectPendingTaskNotifications()
     await injectPlanModeMessages()
 
@@ -593,7 +635,13 @@ async function main() {
       escalatedMaxOutputTokens,
       stopAfterToolNames: ['exit_plan_mode'],
       preflight: (currentMessages, { step, usageAnchor }) =>
-        compactIfNeeded(currentMessages, turnSystem, `Step ${step} preflight`, 'preflight', usageAnchor),
+        compactIfNeeded(
+          currentMessages,
+          turnSystem,
+          `Step ${step} preflight`,
+          'preflight',
+          usageAnchor
+        ),
       contextUsage: (currentMessages, { usageAnchor }) => {
         const snapshot = snapshotContext(currentMessages, turnSystem, usageAnchor)
         return {
@@ -672,7 +720,8 @@ async function main() {
     if (!requestedMode) {
       console.log(`\n  [Mode] 当前模式: ${agentMode}`)
       console.log(`  [Plan] ${planFilePath}`)
-      if (pendingPlanApproval) console.log('  [Plan] 有待确认计划：/approve-plan 或 /revise-plan <反馈>')
+      if (pendingPlanApproval)
+        console.log('  [Plan] 有待确认计划：/approve-plan 或 /revise-plan <反馈>')
       return
     }
 
@@ -732,7 +781,9 @@ async function main() {
 
     if (arg === 'reset') {
       const deleted = await resetTaskGraph(getCurrentTaskOptions())
-      console.log(`\n  [Tasks] 已清空当前会话任务图，删除 ${deleted} 个任务；highwatermark 已保留。`)
+      console.log(
+        `\n  [Tasks] 已清空当前会话任务图，删除 ${deleted} 个任务；highwatermark 已保留。`
+      )
       return
     }
 
@@ -850,7 +901,10 @@ async function main() {
       const hint = skill.frontmatter.argumentHint ? ` ${skill.frontmatter.argumentHint}` : ''
       lines.push(`- /${skill.name}${hint} [${skill.source}, ${state}] ${desc}`)
     }
-    lines.push('', '模型只会在 system-reminder 里看到 visible skills；正文会在调用 Skill 工具或 /<skill-name> 时才加载。')
+    lines.push(
+      '',
+      '模型只会在 system-reminder 里看到 visible skills；正文会在调用 Skill 工具或 /<skill-name> 时才加载。'
+    )
     console.log('\n' + lines.join('\n'))
   }
 
@@ -863,7 +917,11 @@ async function main() {
         return
       }
       const killed = killAsyncAgent(agentId)
-      console.log(killed ? `\n  [Agents] 已请求终止后台任务 ${agentId}` : `\n  [Agents] 未找到运行中的后台任务 ${agentId}`)
+      console.log(
+        killed
+          ? `\n  [Agents] 已请求终止后台任务 ${agentId}`
+          : `\n  [Agents] 未找到运行中的后台任务 ${agentId}`
+      )
       return
     }
     if (args.length > 0) {
@@ -913,7 +971,9 @@ async function main() {
         lines.push(`- ${entry.agentId} [${bits.join(', ')}] ${entry.description}`)
         lines.push(`  type=${entry.agentType} output=${entry.outputFile}`)
         if (entry.worktreePath) {
-          lines.push(`  worktree=${entry.worktreePath} branch=${entry.worktreeBranch ?? '(unknown)'}`)
+          lines.push(
+            `  worktree=${entry.worktreePath} branch=${entry.worktreeBranch ?? '(unknown)'}`
+          )
         }
         if (entry.error) lines.push(`  error=${entry.error}`)
       }
@@ -927,6 +987,93 @@ async function main() {
     lines.push(`  用户级: ${getUserAgentsDir()}/<name>.md`)
     lines.push(`  项目级: ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`)
     lines.push('修改 agent 文件后需要重启 q-code；终止后台任务可用 /agents kill <agent_id>。')
+    if (isAgentTeamsEnabled()) {
+      const active = getActiveTeam()
+      lines.push('')
+      lines.push(
+        active
+          ? `Agent Teams: 已启用，当前活跃团队 "${active.teamName}"（详见 /teams）`
+          : 'Agent Teams: 已启用，无活跃团队。模型可调 TeamCreate 启动一个。'
+      )
+    }
+    console.log('\n' + lines.join('\n'))
+  }
+
+  async function handleTeamsCommand(command: string): Promise<void> {
+    const args = command.slice('/teams'.length).trim().split(/\s+/).filter(Boolean)
+
+    if (!isAgentTeamsEnabled()) {
+      console.log(
+        '\n  [Teams] Agent Teams 未启用。用 --agent-teams 启动 q-code 或设置 Q_CODE_TEAMS=1。'
+      )
+      return
+    }
+
+    if (args[0] === 'clear') {
+      const active = getActiveTeam()
+      if (!active) {
+        console.log('\n  [Teams] 当前没有活跃团队，无需清理。')
+        return
+      }
+      const file = readTeamFile(active.teamName)
+      const stillActive = file?.members.filter((m) => m.name !== TEAM_LEAD_NAME && m.isActive) ?? []
+      if (stillActive.length > 0 && args[1] !== 'force') {
+        console.log(
+          `\n  [Teams] 拒绝清理：还有 ${stillActive.length} 个 teammate 在跑 (${stillActive.map((m) => m.name).join(', ')})。`
+        )
+        console.log('  先 /agents kill <agent_id>，或用 /teams clear force 强制清理（不推荐）。')
+        return
+      }
+      await cleanupTeamDirectory(active.teamName)
+      clearActiveTeam()
+      console.log(`\n  [Teams] 已强制清理团队 "${active.teamName}" 的本地状态。`)
+      return
+    }
+
+    if (args.length > 0) {
+      console.log('\n  [Teams] 用法: /teams、/teams clear、/teams clear force')
+      return
+    }
+
+    const active = getActiveTeam()
+    const allTeams = await listTeamNames()
+    const lines: string[] = []
+
+    if (active) {
+      lines.push(`Active team: ${active.teamName}  (lead: ${active.leadAgentId})`)
+      lines.push(`  file: ${active.teamFilePath}`)
+      const file = readTeamFile(active.teamName)
+      if (file) {
+        if (file.description) lines.push(`  desc: ${file.description}`)
+        const teammates = file.members.filter((m) => m.name !== TEAM_LEAD_NAME)
+        if (teammates.length === 0) {
+          lines.push('  members: (just the lead)')
+        } else {
+          lines.push('  members:')
+          for (const m of teammates) {
+            const status = m.isActive ? 'active' : 'idle'
+            lines.push(
+              `    - ${m.name} [${status}] type=${m.agentType ?? '?'}` +
+                (m.worktreePath ? ` worktree=${m.worktreePath}` : '')
+            )
+          }
+        }
+      } else {
+        lines.push('  (warning) team.json missing on disk — use /teams clear to reset.')
+      }
+    } else {
+      lines.push('No active team. 模型可通过 TeamCreate 启动一个。')
+    }
+
+    if (allTeams.length > 0) {
+      lines.push('')
+      lines.push('已存在的团队目录（可能含旧会话留下的痕迹）:')
+      for (const name of allTeams) lines.push(`  - ${name}`)
+    }
+    lines.push('')
+    lines.push(
+      '命令：/teams clear 清理当前团队（要求无活跃 teammate），/teams clear force 强制清理。'
+    )
     console.log('\n' + lines.join('\n'))
   }
 
@@ -1026,7 +1173,10 @@ async function main() {
     })
   }
 
-  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents。\n')
+  const teamsHint = isAgentTeamsEnabled() ? '；用 /teams 查看 Agent Teams' : ''
+  console.log(
+    `对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents${teamsHint}。\n`
+  )
   ask()
 }
 

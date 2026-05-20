@@ -1,7 +1,7 @@
 import { streamText, type LanguageModelUsage, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection'
 import { isRetryable, calculateDelay, sleep } from './retry'
-import { ToolRegistry } from '../tools/registry'
+import { ToolRegistry, type TeammateIdentity } from '../tools/registry'
 import {
   buildUsageAnchor,
   type TokenUsage,
@@ -76,6 +76,12 @@ export interface AgentLoopOptions {
   stopAfterToolNames?: string[]
   abortSignal?: AbortSignal
   quiet?: boolean
+  /**
+   * Set when the loop is running inside a named teammate (Agent Teams).
+   * Forwarded to every tool execution so SendMessage can resolve the
+   * sender's identity.
+   */
+  teammateIdentity?: TeammateIdentity
 }
 
 export async function agentLoop(
@@ -150,7 +156,10 @@ export async function agentLoop(
         const result = streamText({
           model,
           system,
-          tools: registry.toAISDKFormat({ abortSignal: options.abortSignal }),
+          tools: registry.toAISDKFormat({
+            abortSignal: options.abortSignal,
+            ...(options.teammateIdentity ? { teammateIdentity: options.teammateIdentity } : {})
+          }),
           messages,
           maxOutputTokens: outputTokenLimit,
           maxRetries: 0,
