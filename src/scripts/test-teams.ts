@@ -487,7 +487,7 @@ try {
 
   // P0/D4: 在 lead 眼皮底下 team.json 丢失时，启动路径必须报出明确错误，
   // 而不是静默启动一个不在 lead 名册中的孤儿 teammate。
-  await cleanupTeamDirectory('val-team') // 模拟手动 rm 碍 team.json
+  await cleanupTeamDirectory('val-team') // 模拟手动 rm 掉 team.json
   const orphanResult = await agentTool.execute(
     {
       prompt: 'p',

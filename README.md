@@ -749,6 +749,49 @@ await agentLoop(model, registry, [{ role: 'user', content: 'go' }], 'sys', {
 
 `createMockModel(turns)` 接收一个脚本数组，每一项描述一次 `streamText` 调用应该输出什么；如果脚本耗尽，会自动产生一个空 stop 轮让循环优雅退出。
 
+### 持续集成与 pre-commit
+
+| 触发                        | 命令                       | 耗时      | 内容                                    |
+| --------------------------- | -------------------------- | --------- | --------------------------------------- |
+| 本地 `git commit`           | `pnpm precommit`           | ~6 秒     | typecheck + 单元测试（`tests/unit/**`） |
+| GitHub Actions（push / PR） | `.github/workflows/ci.yml` | ~1-2 分钟 | typecheck + vitest 全部 + legacy 端到端 |
+
+#### 本地 pre-commit hook
+
+仓库使用 [`simple-git-hooks`](https://github.com/toplenboren/simple-git-hooks)（零运行时依赖、配置写在 `package.json`）。`pnpm install` 时会通过 `prepare` 脚本自动把 hook 安装到 `.git/hooks/pre-commit`，每次 commit 前会自动跑：
+
+```bash
+pnpm typecheck && pnpm test:unit
+```
+
+跳过 hook（仅紧急时使用）：
+
+```bash
+SKIP_SIMPLE_GIT_HOOKS=1 git commit -m "..."
+```
+
+或者：
+
+```bash
+git commit -n -m "..."   # 等同于 --no-verify
+```
+
+为什么 pre-commit 只跑单元测试：
+
+- 集成测试要起 git worktree 和真实 fs，几秒到 30 秒不等，pre-commit 太重
+- 单元测试 + typecheck 已能挡掉 90% 的明显 bug，留下的让 CI 兜底
+- 节省的等待时间 = 更频繁的小提交 = 更好的 git 历史
+
+#### GitHub Actions
+
+`.github/workflows/ci.yml` 在 `push main` 与 `pull_request to main` 时触发，按以下顺序跑：
+
+1. `pnpm typecheck`
+2. `pnpm test`（vitest 单元 + 集成）
+3. `pnpm test:legacy`（5 套端到端脚本）
+
+并发策略：同一分支推新 commit 自动取消上一轮 CI（`concurrency` + `cancel-in-progress`）。
+
 ## 辅助系统
 
 ### 项目指令

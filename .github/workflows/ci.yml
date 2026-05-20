@@ -1,0 +1,58 @@
+# q-code 持续集成
+# 触发：推到 main 或者发起 PR 时跑完整测试体系。
+#
+# 阶段顺序按耗时与依赖关系排：
+#   1. typecheck（无副作用、最快、捕获绝大多数明显错误）
+#   2. pnpm test（vitest 单元 + 集成，~3 秒）
+#   3. pnpm test:legacy（5 套端到端脚本，~30 秒，依赖真实 fs/git/MCP 子进程）
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# PR 不断推新 commit 时自动取消上一次跑（节省 CI 时间）。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: 安装依赖（lockfile 严格模式）
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript 类型检查
+        run: pnpm typecheck
+
+      - name: 单元 + 集成测试（vitest）
+        run: pnpm test
+
+      - name: 端到端脚本测试（legacy）
+        run: pnpm test:legacy
+        env:
+          # legacy 脚本会启动子进程（包括 git worktree、MCP stdio server），
+          # 在 CI 容器里默认有 git 但无 GITHUB_PERSONAL_ACCESS_TOKEN —
+          # 显式置空避免触发 GitHub MCP 默认连接失败导致脚本报错。
+          GITHUB_PERSONAL_ACCESS_TOKEN: ''
