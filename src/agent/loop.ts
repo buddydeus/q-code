@@ -63,6 +63,7 @@ export interface AgentLoopOptions {
   ) => { used: number; limit: number; state?: string }
   onUsage?: (turnUsage: TokenUsage, totalUsage: TokenUsage) => void
   onToolEvent?: (event: AgentToolEvent) => void
+  stopAfterToolNames?: string[]
 }
 
 export async function agentLoop(
@@ -104,6 +105,7 @@ export async function agentLoop(
     let hasToolCall = false
     let fullText = ''
     let shouldBreak = false
+    let stopAfterStepReason: string | null = null
     let lastToolCall: { name: string; input: unknown; toolCallId?: string } | null = null
     const toolCallsById = new Map<string, { name: string; input: unknown }>()
     let stepResponse: Awaited<ReturnType<typeof streamText>['response']>
@@ -125,6 +127,7 @@ export async function agentLoop(
         hasToolCall = false
         fullText = ''
         shouldBreak = false
+        stopAfterStepReason = null
         lastToolCall = null
         toolCallsById.clear()
         requestMessageCount = messages.length
@@ -194,6 +197,9 @@ export async function agentLoop(
                     resultLength: measureResultLength(part.output),
                     isError: false
                   })
+                  if (options.stopAfterToolNames?.includes(matched.name)) {
+                    stopAfterStepReason = `${matched.name} 已完成，等待下一条用户指令`
+                  }
                 }
               }
               break
@@ -236,6 +242,7 @@ export async function agentLoop(
         hasToolCall = false
         fullText = ''
         shouldBreak = false
+        stopAfterStepReason = null
         lastToolCall = null
       }
     }
@@ -278,6 +285,10 @@ export async function agentLoop(
     if (totalUsage.totalTokens > tokenBudget) {
       console.log(fmtTurnTokenUsage(totalUsage.totalTokens, tokenBudget))
       console.log(fmtStop('本轮执行预算耗尽，强制停止'))
+      break
+    }
+    if (stopAfterStepReason) {
+      console.log(`  ${stopAfterStepReason}`)
       break
     }
 

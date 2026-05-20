@@ -13,6 +13,8 @@ export interface ToolDefinition {
   searchHint?: string
 }
 
+export type ToolVisibilityMode = 'normal' | 'plan'
+
 // Tool outputs are capped before they enter the model context. The default is
 // intentionally high enough for normal file/search work; noisy integrations
 // such as MCP tools can still opt into a smaller per-tool limit.
@@ -21,6 +23,7 @@ const DEFAULT_MAX_RESULT_CHARS = 100000
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>()
   private mcpClients: Array<MCPClient> = []
+  private visibilityMode: ToolVisibilityMode = 'normal'
 
   private exclusiveLock = false
   private concurrentCount = 0
@@ -32,6 +35,14 @@ export class ToolRegistry {
     for (const tool of tools) {
       this.tools.set(tool.name, tool)
     }
+  }
+
+  setMode(mode: ToolVisibilityMode): void {
+    this.visibilityMode = mode
+  }
+
+  getMode(): ToolVisibilityMode {
+    return this.visibilityMode
   }
 
   async registerMCPServer(serverName: string, client: MCPClient): Promise<string[]> {
@@ -53,7 +64,7 @@ export class ToolRegistry {
         description: `[MCP:${serverName}] ${tool.description}`,
         parameters: tool.inputSchema as Record<string, unknown>,
         isConcurrencySafe: true,
-        isReadOnly: true,
+        isReadOnly: inferMCPToolReadOnly(tool.name, tool.description),
         maxResultChars: 3000,
         shouldDefer: true,
         searchHint: `${serverName} ${tool.name} ${tool.description}`,
@@ -83,8 +94,12 @@ export class ToolRegistry {
     return Array.from(this.tools.values())
   }
 
+  getVisibleTools(): ToolDefinition[] {
+    return this.getAll().filter((tool) => isToolVisibleInMode(tool, this.visibilityMode))
+  }
+
   getActiveTools(): ToolDefinition[] {
-    return this.getAll().filter((tool) => {
+    return this.getVisibleTools().filter((tool) => {
       if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
         return false
       }
@@ -93,7 +108,7 @@ export class ToolRegistry {
   }
 
   getDeferredToolSummary(): string {
-    const deferred = this.getAll().filter((tool) => {
+    const deferred = this.getVisibleTools().filter((tool) => {
       return tool.shouldDefer && !this.discoveredTools.has(tool.name)
     })
 
@@ -121,7 +136,7 @@ export class ToolRegistry {
 
     for (const name of names) {
       const tool = this.tools.get(name)
-      if (tool && tool.name !== 'tool_search') {
+      if (tool && tool.name !== 'tool_search' && isToolVisibleInMode(tool, this.visibilityMode)) {
         results.push(tool)
         this.discoveredTools.add(tool.name)
       }
@@ -134,7 +149,7 @@ export class ToolRegistry {
     let active = 0
     let deferred = 0
 
-    for (const tool of this.tools.values()) {
+    for (const tool of this.getVisibleTools()) {
       const schemaSize = JSON.stringify({
         name: tool.name,
         description: tool.description,
@@ -230,4 +245,55 @@ export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESU
   const dropped = text.length - headSize - tailSize
 
   return `${head}\n\n... [省略 ${dropped} 字符] ...\n\n${tail}`
+}
+
+function isToolVisibleInMode(tool: ToolDefinition, mode: ToolVisibilityMode): boolean {
+  if (mode === 'plan') {
+    // q-code does not have a permission system. Plan mode is enforced by only
+    // exposing read-only tools plus the two plan workflow tools to the model.
+    if (tool.name === 'enter_plan_mode') return false
+    if (tool.name === 'plan_write' || tool.name === 'exit_plan_mode') return true
+    return tool.isReadOnly === true
+  }
+
+  return tool.name !== 'plan_write' && tool.name !== 'exit_plan_mode'
+}
+
+function inferMCPToolReadOnly(name: string, description: unknown): boolean {
+  const text = `${name} ${typeof description === 'string' ? description : ''}`.toLowerCase()
+  const writeSignals = [
+    'add',
+    'approve',
+    'assign',
+    'close',
+    'commit',
+    'create',
+    'delete',
+    'edit',
+    'fork',
+    'merge',
+    'mutate',
+    'open pull',
+    'patch',
+    'post',
+    'publish',
+    'put',
+    'remove',
+    'reopen',
+    'request review',
+    'set',
+    'submit',
+    'unassign',
+    'update',
+    'write'
+  ]
+  if (writeSignals.some((signal) => hasWordSignal(text, signal))) return false
+
+  const readSignals = ['fetch', 'find', 'get', 'list', 'query', 'read', 'search', 'show']
+  return readSignals.some((signal) => hasWordSignal(text, signal))
+}
+
+function hasWordSignal(text: string, signal: string): boolean {
+  const escaped = signal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(^|[^a-z])${escaped}([^a-z]|$)`).test(text)
 }

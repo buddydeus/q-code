@@ -4,12 +4,13 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
 import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
-import { allTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
+import { allTools, createPlanTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
 import {
   coreRules,
   deferredTools,
   agentMdInstructions,
+  modeContext,
   PromptBuilder,
   PromptContext,
   projectMemory,
@@ -30,6 +31,18 @@ import {
   type UsageAnchor
 } from './context/token-budget'
 import { buildMemorySystemContext } from './context/memory/memdir'
+import {
+  getPlanFilePath,
+  planExists,
+  readPlan,
+  writePlan,
+  type PlanFileOptions
+} from './context/plans'
+import {
+  getPlanModeAttachment,
+  getPlanModeExitAttachment
+} from './context/plan-attachments'
+import type { ToolVisibilityMode } from './tools/registry'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -167,6 +180,7 @@ function createSummaryModel() {
 
 async function main() {
   const dumpSystemPrompt = process.argv.includes('--dump-system-prompt')
+  const startInPlanMode = process.argv.includes('--plan')
 
   if (!dumpSystemPrompt) console.log(fmtBanner('1.0.0'))
   await connectMCP({ quiet: dumpSystemPrompt })
@@ -176,6 +190,42 @@ async function main() {
     ? null
     : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
   const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
+  const planOptions: PlanFileOptions = {
+    cwd: store?.cwd ?? process.cwd(),
+    sessionId
+  }
+  const planFilePath = getPlanFilePath(planOptions)
+  let agentMode: ToolVisibilityMode = startInPlanMode ? 'plan' : 'normal'
+  let needsPlanModeExitAttachment = false
+  let pendingPlanApproval = false
+  let pendingPlanSummary = ''
+
+  function setAgentMode(mode: ToolVisibilityMode): void {
+    const previous = agentMode
+    agentMode = mode
+    registry.setMode(mode)
+    if (mode === 'plan') {
+      needsPlanModeExitAttachment = false
+    }
+    if (previous === 'plan' && mode !== 'plan') {
+      needsPlanModeExitAttachment = true
+    }
+  }
+
+  registry.register(
+    ...createPlanTools({
+      getMode: () => agentMode,
+      setMode: (mode) => setAgentMode(mode),
+      getPlanFilePath: () => planFilePath,
+      readPlan: () => readPlan(planOptions),
+      writePlan: (content) => writePlan(planOptions, content),
+      markPlanReady: (summary) => {
+        pendingPlanApproval = true
+        pendingPlanSummary = summary
+      }
+    })
+  )
+  registry.setMode(agentMode)
 
   let messages: ModelMessage[] = []
   if (store && isContinue && store.exists()) {
@@ -205,6 +255,7 @@ async function main() {
   // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()
     .pipe('coreRules', coreRules())
+    .pipe('modeContext', modeContext())
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())
@@ -219,6 +270,8 @@ async function main() {
       deferredToolSummary: registry.getDeferredToolSummary(),
       sessionMessageCount: messages.length,
       sessionId,
+      agentMode,
+      planFilePath,
       runtimeContext,
       agentMdContext,
       memoryContext
@@ -231,6 +284,8 @@ async function main() {
     deferredToolSummary: registry.getDeferredToolSummary(),
     sessionMessageCount: messages.length,
     sessionId,
+    agentMode,
+    planFilePath,
     runtimeContext,
     agentMdContext,
     memoryContext: await buildMemorySystemContext()
@@ -344,7 +399,8 @@ async function main() {
   builder.debug(initialPromptCtx)
 
   const activeTools = registry.getActiveTools()
-  console.log(`活跃工具: ${activeTools.length} 个`)
+  console.log(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
+  if (agentMode === 'plan') console.log(`Plan 文件: ${planFilePath}`)
   console.log(
     `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
       compactTriggerRatio * 100
@@ -375,51 +431,178 @@ async function main() {
         if (!closed) ask()
         return
       }
+      if (trimmed === '/mode' || trimmed.startsWith('/mode ')) {
+        await handleModeCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
+      if (trimmed === '/plan') {
+        await handlePlanCommand()
+        if (!closed) ask()
+        return
+      }
+      if (trimmed === '/approve-plan') {
+        await handleApprovePlanCommand()
+        if (!closed) ask()
+        return
+      }
+      if (trimmed === '/revise-plan' || trimmed.startsWith('/revise-plan ')) {
+        await handleRevisePlanCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
+      if (pendingPlanApproval && !trimmed.startsWith('/')) {
+        console.log('\n  [Plan] 当前有待确认的计划。输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。')
+        if (!closed) ask()
+        return
+      }
 
-      const userMsg: ModelMessage = { role: 'user', content: trimmed }
-      messages.push(userMsg)
-      activeStore.append(userMsg)
-      const turnSystem = await buildSystemPrompt(trimmed)
-
-      const loopResult = await agentLoop(model, registry, messages, turnSystem, {
-        tokenBudget,
-        maxOutputTokens: defaultMaxOutputTokens,
-        escalatedMaxOutputTokens,
-        preflight: (currentMessages, { step, usageAnchor }) =>
-          compactIfNeeded(currentMessages, turnSystem, `Step ${step} preflight`, 'preflight', usageAnchor),
-        contextUsage: (currentMessages, { usageAnchor }) => {
-          const snapshot = snapshotContext(currentMessages, turnSystem, usageAnchor)
-          return {
-            used: snapshot.used,
-            limit: snapshot.limit,
-            state: snapshot.state
-          }
-        },
-        onUsage: (turnUsage, totalUsage) => {
-          activeStore.appendUsage(turnUsage, totalUsage)
-        },
-        onToolEvent: (event) => {
-          activeStore.appendToolEvent({ type: 'tool_event', ...event })
-        }
-      })
-      messages = loopResult.messages
-      activeStore.appendUnpersisted(loopResult.newMessages)
-
-      // Post-turn compaction keeps the next user turn below the configured context threshold.
-      const postTurn = await compactIfNeeded(
-        messages,
-        turnSystem,
-        'Post-turn compaction',
-        'post-turn',
-        loopResult.usageAnchor
-      )
-      messages = postTurn.messages
-      if (postTurn.stopReason) console.log(fmtStop(postTurn.stopReason))
+      await runAgentTurn(trimmed)
     } catch (error) {
       console.log(fmtStop(`本轮执行失败: ${formatErrorMessage(error)}`))
     }
 
     if (!closed) ask()
+  }
+
+  async function runAgentTurn(userContent: string): Promise<void> {
+    await injectPlanModeMessages()
+
+    const userMsg: ModelMessage = { role: 'user', content: userContent }
+    messages.push(userMsg)
+    activeStore.append(userMsg)
+    const turnSystem = await buildSystemPrompt(userContent)
+
+    const loopResult = await agentLoop(model, registry, messages, turnSystem, {
+      tokenBudget,
+      maxOutputTokens: defaultMaxOutputTokens,
+      escalatedMaxOutputTokens,
+      stopAfterToolNames: ['exit_plan_mode'],
+      preflight: (currentMessages, { step, usageAnchor }) =>
+        compactIfNeeded(currentMessages, turnSystem, `Step ${step} preflight`, 'preflight', usageAnchor),
+      contextUsage: (currentMessages, { usageAnchor }) => {
+        const snapshot = snapshotContext(currentMessages, turnSystem, usageAnchor)
+        return {
+          used: snapshot.used,
+          limit: snapshot.limit,
+          state: snapshot.state
+        }
+      },
+      onUsage: (turnUsage, totalUsage) => {
+        activeStore.appendUsage(turnUsage, totalUsage)
+      },
+      onToolEvent: (event) => {
+        activeStore.appendToolEvent({ type: 'tool_event', ...event })
+      }
+    })
+    messages = loopResult.messages
+    activeStore.appendUnpersisted(loopResult.newMessages)
+
+    const postTurnSystem = await buildSystemPrompt()
+    const postTurn = await compactIfNeeded(
+      messages,
+      postTurnSystem,
+      'Post-turn compaction',
+      'post-turn',
+      loopResult.usageAnchor
+    )
+    messages = postTurn.messages
+    if (postTurn.stopReason) console.log(fmtStop(postTurn.stopReason))
+    if (pendingPlanApproval) await printPlanApprovalHint()
+  }
+
+  async function injectPlanModeMessages(): Promise<void> {
+    if (needsPlanModeExitAttachment) {
+      const exitAttachment = getPlanModeExitAttachment(planFilePath, await planExists(planOptions))
+      messages.push(exitAttachment)
+      activeStore.append(exitAttachment)
+      needsPlanModeExitAttachment = false
+    }
+
+    if (agentMode !== 'plan') return
+    const attachment = getPlanModeAttachment(messages, planFilePath)
+    if (!attachment) return
+
+    messages.push(attachment)
+    activeStore.append(attachment)
+  }
+
+  async function handleModeCommand(command: string): Promise<void> {
+    const requestedMode = command.slice('/mode'.length).trim()
+    if (!requestedMode) {
+      console.log(`\n  [Mode] 当前模式: ${agentMode}`)
+      console.log(`  [Plan] ${planFilePath}`)
+      if (pendingPlanApproval) console.log('  [Plan] 有待确认计划：/approve-plan 或 /revise-plan <反馈>')
+      return
+    }
+
+    if (requestedMode !== 'plan' && requestedMode !== 'normal') {
+      console.log('\n  [Mode] 用法: /mode、/mode plan、/mode normal')
+      return
+    }
+
+    setAgentMode(requestedMode)
+    if (requestedMode === 'plan') pendingPlanApproval = false
+    console.log(`\n  [Mode] 已切换到 ${agentMode}`)
+    if (agentMode === 'plan') console.log(`  [Plan] 计划文件: ${planFilePath}`)
+  }
+
+  async function handlePlanCommand(): Promise<void> {
+    const content = await readPlan(planOptions)
+    console.log(`\n  [Plan] ${planFilePath}`)
+    if (!content) {
+      console.log('  当前还没有计划内容。')
+      return
+    }
+
+    console.log('\n' + content)
+  }
+
+  async function handleApprovePlanCommand(): Promise<void> {
+    const content = await readPlan(planOptions)
+    if (!content?.trim()) {
+      console.log(`\n  [Plan] 没有可执行的计划。先进入 /mode plan 并让 Agent 写计划。`)
+      return
+    }
+
+    pendingPlanApproval = false
+    setAgentMode('normal')
+    await runAgentTurn(
+      [
+        '用户已批准以下计划。请现在按计划实施，不要重新请求确认。',
+        `计划文件: ${planFilePath}`,
+        '',
+        content
+      ].join('\n')
+    )
+  }
+
+  async function handleRevisePlanCommand(command: string): Promise<void> {
+    const feedback = command.slice('/revise-plan'.length).trim()
+    if (!feedback) {
+      console.log('\n  [Plan] 用法: /revise-plan <你希望修改计划的反馈>')
+      return
+    }
+
+    pendingPlanApproval = false
+    setAgentMode('plan')
+    await runAgentTurn(
+      [
+        '用户没有批准当前计划，需要继续 Plan Mode。',
+        `反馈: ${feedback}`,
+        '',
+        '请根据反馈继续只读探索，修订计划文件，并再次调用 exit_plan_mode。'
+      ].join('\n')
+    )
+  }
+
+  async function printPlanApprovalHint(): Promise<void> {
+    const content = await readPlan(planOptions)
+    console.log('\n  [Plan] 计划已提交，等待确认。')
+    if (pendingPlanSummary) console.log(`  [Plan] 摘要: ${pendingPlanSummary}`)
+    console.log(`  [Plan] 文件: ${planFilePath}`)
+    if (content?.trim()) console.log('\n' + content)
+    console.log('\n  输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。')
   }
 
   async function handleCompactCommand(command: string): Promise<void> {
@@ -452,7 +635,7 @@ async function main() {
     })
   }
 
-  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话。\n')
+  console.log('对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode。\n')
   ask()
 }
 

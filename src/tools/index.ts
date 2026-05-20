@@ -28,4 +28,5 @@ export const allTools: ToolDefinition[] = [
 ]
 
 export { ToolRegistry, type ToolDefinition, truncateResult } from './registry'
+export { createPlanTools } from './plan-tools'
 export { MCPClient } from './mcp-client'

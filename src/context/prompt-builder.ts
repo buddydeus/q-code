@@ -3,6 +3,8 @@ export interface PromptContext {
   deferredToolSummary: string
   sessionMessageCount: number
   sessionId: string
+  agentMode?: string
+  planFilePath?: string
   runtimeContext?: string
   agentMdContext?: string
   memoryContext?: string
@@ -64,6 +66,19 @@ export function deferredTools(): PipeFn {
   return (ctx) => {
     if (!ctx.deferredToolSummary) return null
     return `如果你需要的工具不在当前列表中，使用 tool_search 工具搜索。${ctx.deferredToolSummary}`
+  }
+}
+
+export function modeContext(): PipeFn {
+  return (ctx) => {
+    if (ctx.agentMode !== 'plan') return null
+    return [
+      '[运行模式] 当前为 Plan Mode。',
+      '只进行只读探索和计划编写，不要修改项目文件或运行会改变环境的命令。',
+      ctx.planFilePath ? `计划文件: ${ctx.planFilePath}` : null
+    ]
+      .filter((line): line is string => line !== null)
+      .join('\n')
   }
 }
 
