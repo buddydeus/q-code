@@ -6,6 +6,7 @@ import {
 import {
   backspace,
   createInputState,
+  deleteForward,
   insertText,
   moveCursor,
   recallNext,
@@ -13,6 +14,7 @@ import {
   renderInputWithCursor,
   submitInput
 } from '../../src/terminal/input'
+import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
 
 describe('terminal state reducer', () => {
@@ -111,7 +113,51 @@ describe('terminal input state', () => {
     expect(state.value).toBe('你好')
     expect(renderInputWithCursor(state.value, state.cursor)).toBe('你█好')
   })
+
+  it('treats x7f delete events as terminal backspace', () => {
+    let state = insertText(createInputState(), 'abc')
+    state = moveCursor(state, -1)
+    const key = editingKey({ delete: true })
+
+    if (shouldBackspace('', key, '\x7f')) {
+      state = backspace(state)
+    } else if (shouldDeleteForward(key, '\x7f')) {
+      state = deleteForward(state)
+    }
+
+    expect(state.value).toBe('ac')
+    expect(renderInputWithCursor(state.value, state.cursor)).toBe('a█c')
+  })
+
+  it('treats ctrl+h as backspace', () => {
+    expect(shouldBackspace('h', editingKey({ ctrl: true }))).toBe(true)
+    expect(shouldDeleteForward(editingKey({ ctrl: true }))).toBe(false)
+  })
+
+  it('keeps ansi delete as forward delete', () => {
+    let state = insertText(createInputState(), 'abc')
+    state = moveCursor(state, -1)
+    const key = editingKey({ delete: true })
+
+    if (shouldBackspace('', key, '\x1b[3~')) {
+      state = backspace(state)
+    } else if (shouldDeleteForward(key, '\x1b[3~')) {
+      state = deleteForward(state)
+    }
+
+    expect(state.value).toBe('ab')
+    expect(renderInputWithCursor(state.value, state.cursor)).toBe('ab█')
+  })
 })
+
+function editingKey(overrides: Partial<Parameters<typeof shouldBackspace>[1]> = {}): Parameters<typeof shouldBackspace>[1] {
+  return {
+    backspace: false,
+    ctrl: false,
+    delete: false,
+    ...overrides
+  }
+}
 
 describe('terminal markdown parser', () => {
   it('parses common markdown blocks used by agent output', () => {

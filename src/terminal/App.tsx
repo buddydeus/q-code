@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useReducer, useState } from 'react'
-import { Box, Text, useApp, useInput, useStdout } from 'ink'
+import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink'
 import type { TerminalEventBus } from './events'
 import {
   createInitialTerminalState,
@@ -20,6 +20,7 @@ import {
   renderInputWithCursor,
   submitInput
 } from './input'
+import { shouldBackspace, shouldDeleteForward } from './keys'
 import { parseMarkdown, type MarkdownBlock } from './markdown'
 
 export interface TerminalAppProps {
@@ -38,7 +39,9 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const [isBusy, setIsBusy] = useState(false)
   const [interruptRequested, setInterruptRequested] = useState(false)
   const { exit } = useApp()
+  const { internal_eventEmitter } = useStdin()
   const { stdout } = useStdout()
+  const lastRawInput = useRef<string>()
   const height = stdout.rows || 30
   const visibleItems = useMemo(
     () => selectVisibleItems(state.transcript, Math.max(8, height - 8)),
@@ -51,7 +54,18 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
     if (!isBusy) setInterruptRequested(false)
   }, [isBusy])
 
+  useEffect(() => {
+    const rememberRawInput = (data: Buffer | string) => {
+      lastRawInput.current = Buffer.isBuffer(data) ? data.toString() : data
+    }
+    internal_eventEmitter.prependListener('input', rememberRawInput)
+    return () => {
+      internal_eventEmitter.removeListener('input', rememberRawInput)
+    }
+  }, [internal_eventEmitter])
+
   useInput((value, key) => {
+    const rawInput = lastRawInput.current
     const isCtrlC = key.ctrl && value === 'c'
     const isMultilineShortcut =
       (key.return && key.shift) || (key.ctrl && (value === 'j' || value === '\n')) || (key.meta && key.return)
@@ -103,11 +117,11 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       return
     }
 
-    if (key.backspace) {
+    if (shouldBackspace(value, key, rawInput)) {
       setInput((current) => backspace(current))
       return
     }
-    if (key.delete) {
+    if (shouldDeleteForward(key, rawInput)) {
       setInput((current) => deleteForward(current))
       return
     }
@@ -210,8 +224,8 @@ function MarkdownText({
   dim?: boolean
   parse?: boolean
 }): React.JSX.Element {
-  if (!parse) return <Text dimColor={dim}>{text}</Text>
   const blocks = useMemo(() => (parse ? parseMarkdown(text) : []), [parse, text])
+  if (!parse) return <Text dimColor={dim}>{text}</Text>
   if (blocks.length === 0) return <Text dimColor={dim}>{text}</Text>
   return (
     <>
