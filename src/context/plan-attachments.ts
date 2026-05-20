@@ -14,8 +14,9 @@ export function buildFullPlanModeText(planFilePath: string): string {
     '',
     '工作流：',
     '1. 探索：使用只读工具理解代码结构、约束和已有模式。',
-    '2. 计划：使用 plan_write 写入完整实施计划。',
-    '3. 退出：计划准备好后调用 exit_plan_mode，等待用户批准。',
+    '2. 跟踪：复杂计划可使用 todo_write 维护会话级任务清单。',
+    '3. 计划：使用 plan_write 写入完整实施计划。',
+    '4. 退出：计划准备好后调用 exit_plan_mode，等待用户批准。',
     '',
     '计划文件结构：',
     '',
@@ -37,6 +38,7 @@ export function buildFullPlanModeText(planFilePath: string): string {
     '规则：',
     '- Plan Mode 下不要修改项目文件。',
     '- 不要运行会改变文件、依赖、服务或环境的 shell 命令。',
+    '- 可以使用 todo_write 更新会话级任务清单。',
     '- 使用 plan_write 写计划文件，不要使用 write_file/edit_file。',
     '- 计划完成后调用 exit_plan_mode，不要只用普通文本请求批准。',
     '',
@@ -49,7 +51,7 @@ export function buildSparsePlanModeText(planFilePath: string): string {
     PLAN_ATTACHMENT_MARKER,
     '',
     '提醒：你仍处于 Plan Mode。',
-    '只能进行只读探索，并使用 plan_write 写计划。',
+    '只能进行只读探索、todo_write 任务跟踪，并使用 plan_write 写计划。',
     `计划文件: ${planFilePath}`,
     '计划准备好后调用 exit_plan_mode。'
   ].join('\n')

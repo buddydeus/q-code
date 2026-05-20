@@ -36,6 +36,7 @@ function createEnterPlanModeTool(controller: PlanToolController): ToolDefinition
     },
     isConcurrencySafe: false,
     isReadOnly: false,
+    allowInPlanMode: true,
     execute: async () => {
       if (controller.getMode() === 'plan') {
         return '已经处于 Plan Mode。'
@@ -65,6 +66,7 @@ function createPlanWriteTool(controller: PlanToolController): ToolDefinition {
     },
     isConcurrencySafe: false,
     isReadOnly: false,
+    allowInPlanMode: true,
     execute: async ({ content }: { content: string }) => {
       if (controller.getMode() !== 'plan') {
         return 'plan_write 只能在 Plan Mode 中使用。'
@@ -98,6 +100,7 @@ function createExitPlanModeTool(controller: PlanToolController): ToolDefinition 
     },
     isConcurrencySafe: false,
     isReadOnly: false,
+    allowInPlanMode: true,
     execute: async ({ summary, plan }: { summary: string; plan?: string }) => {
       if (controller.getMode() !== 'plan') {
         return 'exit_plan_mode 只能在 Plan Mode 中使用。'

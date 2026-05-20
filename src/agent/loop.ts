@@ -49,6 +49,12 @@ export interface AgentToolEvent {
   isError?: boolean
 }
 
+export interface AgentToolResultEvent {
+  name: string
+  toolCallId?: string
+  output: unknown
+}
+
 export interface AgentLoopOptions {
   tokenBudget?: number
   maxOutputTokens?: number
@@ -63,6 +69,7 @@ export interface AgentLoopOptions {
   ) => { used: number; limit: number; state?: string }
   onUsage?: (turnUsage: TokenUsage, totalUsage: TokenUsage) => void
   onToolEvent?: (event: AgentToolEvent) => void
+  onToolResult?: (event: AgentToolResultEvent) => void
   stopAfterToolNames?: string[]
 }
 
@@ -196,6 +203,11 @@ export async function agentLoop(
                     toolCallId: part.toolCallId,
                     resultLength: measureResultLength(part.output),
                     isError: false
+                  })
+                  options.onToolResult?.({
+                    name: matched.name,
+                    toolCallId: part.toolCallId,
+                    output: part.output
                   })
                   if (options.stopAfterToolNames?.includes(matched.name)) {
                     stopAfterStepReason = `${matched.name} 已完成，等待下一条用户指令`

@@ -4,7 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
 import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
-import { allTools, createPlanTools, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
+import { allTools, createPlanTools, createTodoWriteTool, ToolRegistry, type ToolDefinition, MCPClient } from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
 import {
   coreRules,
@@ -16,6 +16,8 @@ import {
   projectMemory,
   runtimeEnvironment,
   sessionContext,
+  todoContext,
+  todoGuide,
   toolGuide
 } from './context/prompt-builder'
 import { SessionStore } from './session/store'
@@ -43,6 +45,7 @@ import {
   getPlanModeExitAttachment
 } from './context/plan-attachments'
 import type { ToolVisibilityMode } from './tools/registry'
+import { clearTodos, formatTodoList, getTodos } from './context/todos'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -225,6 +228,11 @@ async function main() {
       }
     })
   )
+  registry.register(
+    createTodoWriteTool({
+      getSessionId: () => sessionId
+    })
+  )
   registry.setMode(agentMode)
 
   let messages: ModelMessage[] = []
@@ -257,6 +265,8 @@ async function main() {
     .pipe('coreRules', coreRules())
     .pipe('modeContext', modeContext())
     .pipe('toolGuide', toolGuide())
+    .pipe('todoGuide', todoGuide())
+    .pipe('todoContext', todoContext())
     .pipe('deferredTools', deferredTools())
     .pipe('runtimeEnvironment', runtimeEnvironment())
     .pipe('agentMdInstructions', agentMdInstructions())
@@ -272,6 +282,7 @@ async function main() {
       sessionId,
       agentMode,
       planFilePath,
+      todoContext: getCurrentTodoContext(),
       runtimeContext,
       agentMdContext,
       memoryContext
@@ -286,6 +297,7 @@ async function main() {
     sessionId,
     agentMode,
     planFilePath,
+    todoContext: getCurrentTodoContext(),
     runtimeContext,
     agentMdContext,
     memoryContext: await buildMemorySystemContext()
@@ -441,6 +453,11 @@ async function main() {
         if (!closed) ask()
         return
       }
+      if (trimmed === '/todos' || trimmed.startsWith('/todos ')) {
+        handleTodosCommand(trimmed)
+        if (!closed) ask()
+        return
+      }
       if (trimmed === '/approve-plan') {
         await handleApprovePlanCommand()
         if (!closed) ask()
@@ -493,6 +510,11 @@ async function main() {
       },
       onToolEvent: (event) => {
         activeStore.appendToolEvent({ type: 'tool_event', ...event })
+      },
+      onToolResult: (event) => {
+        if (event.name === 'todo_write' && typeof event.output === 'string') {
+          console.log(`\n${event.output}`)
+        }
       }
     })
     messages = loopResult.messages
@@ -558,6 +580,21 @@ async function main() {
     console.log('\n' + content)
   }
 
+  function handleTodosCommand(command: string): void {
+    const arg = command.slice('/todos'.length).trim()
+    if (arg === 'clear') {
+      clearTodos(sessionId)
+      console.log('\n  [Todos] 已清空当前会话任务清单。')
+      return
+    }
+    if (arg) {
+      console.log('\n  [Todos] 用法: /todos 或 /todos clear')
+      return
+    }
+
+    console.log('\n' + formatTodoList(getTodos(sessionId)))
+  }
+
   async function handleApprovePlanCommand(): Promise<void> {
     const content = await readPlan(planOptions)
     if (!content?.trim()) {
@@ -603,6 +640,11 @@ async function main() {
     console.log(`  [Plan] 文件: ${planFilePath}`)
     if (content?.trim()) console.log('\n' + content)
     console.log('\n  输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。')
+  }
+
+  function getCurrentTodoContext(): string | undefined {
+    const todos = getTodos(sessionId)
+    return todos.length > 0 ? formatTodoList(todos) : undefined
   }
 
   async function handleCompactCommand(command: string): Promise<void> {

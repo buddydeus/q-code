@@ -7,6 +7,7 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>
   isConcurrencySafe?: boolean
   isReadOnly?: boolean
+  allowInPlanMode?: boolean
   maxResultChars?: number
   execute: (input: any) => Promise<unknown>
   shouldDefer?: boolean
@@ -250,9 +251,9 @@ export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESU
 function isToolVisibleInMode(tool: ToolDefinition, mode: ToolVisibilityMode): boolean {
   if (mode === 'plan') {
     // q-code does not have a permission system. Plan mode is enforced by only
-    // exposing read-only tools plus the two plan workflow tools to the model.
+    // exposing read-only tools plus explicitly allowed session/planning tools.
     if (tool.name === 'enter_plan_mode') return false
-    if (tool.name === 'plan_write' || tool.name === 'exit_plan_mode') return true
+    if (tool.allowInPlanMode === true) return true
     return tool.isReadOnly === true
   }
 

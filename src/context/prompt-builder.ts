@@ -5,6 +5,7 @@ export interface PromptContext {
   sessionId: string
   agentMode?: string
   planFilePath?: string
+  todoContext?: string
   runtimeContext?: string
   agentMdContext?: string
   memoryContext?: string
@@ -69,12 +70,28 @@ export function deferredTools(): PipeFn {
   }
 }
 
+export function todoGuide(): PipeFn {
+  return () =>
+    [
+      '多步骤任务请主动使用 todo_write 维护会话级任务清单。',
+      '任务清单应保持简短、可执行；每次调用 todo_write 都要传入完整列表。',
+      '通常保持恰好一个任务为 in_progress；完成全部任务后把所有项标记 completed，让清单自动清空。'
+    ].join('\n')
+}
+
+export function todoContext(): PipeFn {
+  return (ctx) => {
+    if (!ctx.todoContext) return null
+    return ['当前会话任务清单：', ctx.todoContext].join('\n\n')
+  }
+}
+
 export function modeContext(): PipeFn {
   return (ctx) => {
     if (ctx.agentMode !== 'plan') return null
     return [
       '[运行模式] 当前为 Plan Mode。',
-      '只进行只读探索和计划编写，不要修改项目文件或运行会改变环境的命令。',
+      '只进行只读探索、任务清单更新和计划编写，不要修改项目文件或运行会改变环境的命令。',
       ctx.planFilePath ? `计划文件: ${ctx.planFilePath}` : null
     ]
       .filter((line): line is string => line !== null)
