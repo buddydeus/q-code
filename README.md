@@ -24,14 +24,14 @@
 外部用户推荐通过 npm 安装：
 
 ```bash
-npm install -g q-code
+npm install -g @q-code-cli/q-code
 q-code
 ```
 
 也可以不全局安装，直接临时运行：
 
 ```bash
-npx q-code
+npx @q-code-cli/q-code
 ```
 
 本地开发时从源码安装依赖：
@@ -122,7 +122,7 @@ pnpm test
 npm pack --dry-run
 ```
 
-确认 npm 登录态和包名后发布：
+确认 npm 登录态和 `q-code-cli` 组织权限后发布：
 
 ```bash
 npm publish --access public

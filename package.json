@@ -1,12 +1,16 @@
 {
-  "name": "q-code",
+  "name": "@q-code-cli/q-code",
   "version": "1.0.0",
   "description": "An AI coding agent CLI with tools, skills, sub-agents, worktree isolation, and MCP support.",
   "type": "module",
   "bin": {
-    "q-code": "./dist/index.js"
+    "q-code": "dist/index.js"
   },
   "main": "./dist/index.js",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "files": [
     "dist",
     "README.md",
