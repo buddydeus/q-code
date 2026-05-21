@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Box, useApp, useInput, useStdin } from 'ink'
+import { Box, Static, useApp, useInput, useStdin } from 'ink'
 import type { TerminalEventBus } from './events'
 import { createInitialTerminalState, terminalReducer } from './state'
 import {
@@ -23,11 +23,13 @@ import {
   StatusBar
 } from './components'
 import { formatErrorMessage } from './utils/format'
-import { hideCompletedTurnTools } from './utils/layout'
+import { splitStaticAndLiveTranscript } from './utils/layout'
 import {
   filterSlashCommandSuggestions,
   type SlashCommandSuggestion
 } from '../slash'
+
+const ASSISTANT_STREAM_FLUSH_MS = 80
 
 export interface TerminalAppProps {
   bus: TerminalEventBus
@@ -50,7 +52,10 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const lastRawInput = useRef<string>()
   const pendingAssistantDelta = useRef('')
   const assistantFlushTimer = useRef<ReturnType<typeof setTimeout>>()
-  const displayTranscript = useMemo(() => hideCompletedTurnTools(state.transcript), [state.transcript])
+  const { staticItems, liveItems } = useMemo(
+    () => splitStaticAndLiveTranscript(state.transcript),
+    [state.transcript]
+  )
   const hasStreamingAssistant = state.activeAssistantId !== undefined
   const slashCommands =
     state.slashCommands.length > 0 ? state.slashCommands : props.slashCommands ?? []
@@ -82,7 +87,7 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       if (event.type === 'assistant_delta') {
         pendingAssistantDelta.current += event.text
         if (!assistantFlushTimer.current) {
-          assistantFlushTimer.current = setTimeout(flushAssistantDelta, 30)
+          assistantFlushTimer.current = setTimeout(flushAssistantDelta, ASSISTANT_STREAM_FLUSH_MS)
         }
         return
       }
@@ -250,7 +255,10 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
-      <ConversationView items={displayTranscript} />
+      <Static items={staticItems}>
+        {(item) => <ConversationView key={item.id} items={[item]} />}
+      </Static>
+      <ConversationView items={liveItems} />
       <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
       <CommandSuggestions suggestions={renderedSlashCommands} />
       <InputPrompt display={renderInputWithCursor(input.value || '', input.cursor)} isBusy={isBusy} />

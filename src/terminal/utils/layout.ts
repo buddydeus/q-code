@@ -27,6 +27,46 @@ export function hideCompletedTurnTools(items: TranscriptItem[]): TranscriptItem[
   return visible
 }
 
+export function splitStaticAndLiveTranscript(items: TranscriptItem[]): {
+  staticItems: TranscriptItem[]
+  liveItems: TranscriptItem[]
+} {
+  const turns: TranscriptItem[][] = []
+  let currentTurn: TranscriptItem[] = []
+
+  for (const item of items) {
+    if (item.role === 'user' && currentTurn.length > 0) {
+      turns.push(currentTurn)
+      currentTurn = []
+    }
+    currentTurn.push(item)
+  }
+  if (currentTurn.length > 0) turns.push(currentTurn)
+
+  let liveTurnIndex = -1
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (isLiveTurn(turns[i])) {
+      liveTurnIndex = i
+      break
+    }
+  }
+  if (liveTurnIndex === -1) {
+    return { staticItems: hideCompletedTurnTools(items), liveItems: [] }
+  }
+
+  const staticItems = hideCompletedTurnTools(turns.slice(0, liveTurnIndex).flat())
+  const liveItems = hideCompletedTurnTools(turns.slice(liveTurnIndex).flat())
+  return { staticItems, liveItems }
+}
+
+function isLiveTurn(items: TranscriptItem[]): boolean {
+  const hasUser = items.some((item) => item.role === 'user')
+  if (!hasUser) return false
+  if (items.some((item) => item.role === 'assistant' && item.isStreaming === true)) return true
+  if (items.some((item) => item.kind === 'tool' && item.status === 'running')) return true
+  return !items.some((item) => item.role === 'assistant' && item.isStreaming !== true)
+}
+
 export function estimateItemRows(item: TranscriptItem, textWidth = 80): number {
   if (item.kind === 'tool') return 1
   const textRows = estimateWrappedRows(item.text, textWidth)

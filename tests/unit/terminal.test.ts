@@ -20,7 +20,8 @@ import { renderMarkdownTable } from '../../src/terminal/table-renderer'
 import {
   estimateItemRows,
   estimateWrappedRows,
-  hideCompletedTurnTools
+  hideCompletedTurnTools,
+  splitStaticAndLiveTranscript
 } from '../../src/terminal/utils/layout'
 import { stringDisplayWidth } from '../../src/terminal/utils/string-width'
 import type { SlashCommandSuggestion } from '../../src/slash'
@@ -419,6 +420,57 @@ describe('terminal layout helpers', () => {
 
     const visible = hideCompletedTurnTools(items)
     expect(visible.map((item) => item.id)).toContain('2')
+  })
+
+  it('splits completed history into static output and keeps current turn live', () => {
+    const items = [
+      transcriptItem('1', 'message', 'user', '第一轮'),
+      transcriptItem('2', 'tool', 'tool', 'Input: {"pattern":"**/*"}'),
+      transcriptItem('3', 'message', 'assistant', '第一轮回答'),
+      transcriptItem('4', 'message', 'user', '第二轮'),
+      { ...transcriptItem('5', 'message', 'assistant', '第二轮流式'), isStreaming: true }
+    ]
+
+    const { staticItems, liveItems } = splitStaticAndLiveTranscript(items)
+
+    expect(staticItems.map((item) => item.id)).toEqual(['1', '3'])
+    expect(liveItems.map((item) => item.id)).toEqual(['4', '5'])
+  })
+
+  it('keeps all history static when no current user turn exists', () => {
+    const items = [
+      transcriptItem('1', 'message', 'system', '欢迎'),
+      transcriptItem('2', 'message', 'assistant', '恢复的历史')
+    ]
+
+    const { staticItems, liveItems } = splitStaticAndLiveTranscript(items)
+
+    expect(staticItems.map((item) => item.id)).toEqual(['1', '2'])
+    expect(liveItems).toEqual([])
+  })
+
+  it('moves the latest turn to static once it has a final assistant answer', () => {
+    const items = [
+      transcriptItem('1', 'message', 'user', '问题'),
+      transcriptItem('2', 'message', 'assistant', '最终回答')
+    ]
+
+    const { staticItems, liveItems } = splitStaticAndLiveTranscript(items)
+
+    expect(staticItems.map((item) => item.id)).toEqual(['1', '2'])
+    expect(liveItems).toEqual([])
+  })
+
+  it('keeps a tool-only in-progress turn live until the assistant answers', () => {
+    const items = [
+      transcriptItem('1', 'message', 'user', '查文件'),
+      { ...transcriptItem('2', 'tool', 'tool', 'Input: {"path":"README.md"}'), status: 'running' as const }
+    ]
+
+    const { staticItems, liveItems } = splitStaticAndLiveTranscript(items)
+
+    expect(staticItems).toEqual([])
+    expect(liveItems.map((item) => item.id)).toEqual(['1', '2'])
   })
 
   it('treats tool calls as one terminal row', () => {
