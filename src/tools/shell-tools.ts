@@ -33,6 +33,10 @@ function runShellCommand(command: string, context: ToolExecutionContext): Promis
         encoding: 'utf-8',
         timeout: 10000,
         maxBuffer: 1024 * 1024,
+        env: {
+          ...process.env,
+          RAYON_NUM_THREADS: process.env.RAYON_NUM_THREADS || '4'
+        },
         signal: context.abortSignal
       },
       (error, stdout, stderr) => {

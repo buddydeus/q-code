@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
-import { resolvePreviewFilePath } from '../../src/tools/utility-tools'
+import {
+  SEARCH_IGNORE_DIRS,
+  SEARCH_IGNORE_GLOBS,
+  resolvePreviewFilePath
+} from '../../src/tools/utility-tools'
 
 describe('start_preview path resolution', () => {
   const root = resolve('/tmp/project/app')
@@ -16,5 +20,21 @@ describe('start_preview path resolution', () => {
     expect(resolvePreviewFilePath(root, '/../secret.txt')).toBeNull()
     expect(resolvePreviewFilePath(root, '/%2e%2e/secret.txt')).toBeNull()
     expect(resolvePreviewFilePath(root, '/%ZZ')).toBeNull()
+  })
+})
+
+describe('search tool defaults', () => {
+  it('skips generated and session directories by default', () => {
+    expect(SEARCH_IGNORE_DIRS).toEqual(
+      expect.arrayContaining([
+        'node_modules',
+        '.git',
+        'dist',
+        'coverage',
+        '.sessions',
+        '.q-code'
+      ])
+    )
+    expect(SEARCH_IGNORE_GLOBS).toContain('.sessions/**')
   })
 })

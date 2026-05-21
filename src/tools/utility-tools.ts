@@ -6,6 +6,20 @@ import type { ToolDefinition, ToolExecutionContext } from './registry'
 import { resolveToolPath, isInsideDirectory } from './path-policy'
 import { safeFetchUrl } from './safe-fetch'
 
+export const SEARCH_IGNORE_DIRS = [
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'coverage',
+  '.sessions',
+  '.q-code',
+  '.playground',
+  '.playwright-mcp'
+] as const
+
+export const SEARCH_IGNORE_GLOBS = SEARCH_IGNORE_DIRS.map((dir) => `${dir}/**`)
+
 export const fetchUrlTool: ToolDefinition = {
   name: 'fetch_url',
   description: '抓取指定 URL 的网页内容并转换为纯文本（自动剥离 HTML 标签）',
@@ -75,7 +89,7 @@ export const globTool: ToolDefinition = {
     }
     const results = await fg(pattern, {
       cwd,
-      ignore: ['node_modules/**', '.git/**'],
+      ignore: SEARCH_IGNORE_GLOBS,
       dot: false,
       onlyFiles: true,
       followSymbolicLinks: false
@@ -115,7 +129,7 @@ export const grepTool: ToolDefinition = {
     }
     const regex = new RegExp(pattern, 'i')
     const matches: string[] = []
-    const SKIP = new Set(['node_modules', '.git', 'dist'])
+    const SKIP = new Set<string>(SEARCH_IGNORE_DIRS)
     const BIN_EXT = new Set(['.png', '.jpg', '.gif', '.woff', '.woff2', '.ico', '.lock'])
 
     function searchFile(filePath: string) {
