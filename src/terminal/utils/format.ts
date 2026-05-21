@@ -1,6 +1,6 @@
 import type { TerminalStatus } from '../events'
 import type { TranscriptItem } from '../state'
-import { animeTheme, statusMood } from '../theme'
+import { animeTheme, statusMood } from '../theme/index'
 
 export function compactPath(path: string, max: number): string {
   if (path.length <= max) return path

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Text } from 'ink'
-import { animeTheme } from '../theme'
+import { animeTheme } from '../theme/index'
 
 export function SpinnerText({ label }: { label: string }): React.JSX.Element {
   return (

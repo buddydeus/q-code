@@ -1,7 +1,7 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import type { SlashCommandSuggestion } from '../../slash'
-import { animeTheme } from '../theme'
+import { animeTheme } from '../theme/index'
 
 export interface RenderedCommandSuggestion extends SlashCommandSuggestion {
   isSelected?: boolean

@@ -1,7 +1,7 @@
 import React from 'react'
 import { Text } from 'ink'
 import type { TerminalContextUsage } from '../state'
-import { animeTheme } from '../theme'
+import { animeTheme } from '../theme/index'
 
 export function ContextMeter({ usage }: { usage?: TerminalContextUsage }): React.JSX.Element {
   if (!usage) return <Text dimColor>context pending</Text>

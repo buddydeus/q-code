@@ -1,7 +1,7 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import { compactPath } from '../utils/format'
-import { animeTheme } from '../theme'
+import { animeTheme } from '../theme/index'
 
 export function Header({
   title,

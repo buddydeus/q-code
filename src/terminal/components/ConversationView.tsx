@@ -4,7 +4,7 @@ import type { TranscriptItem } from '../state'
 import { clipTextForDisplay, roleColor, roleLabel } from '../utils/format'
 import { MarkdownText } from './MarkdownText'
 import { ToolCallItem } from './ToolCallList'
-import { animeTheme } from '../theme'
+import { animeTheme, formatPromptGlyph } from '../theme/index'
 
 export function ConversationView({ items }: { items: TranscriptItem[] }): React.JSX.Element {
   return (
@@ -27,7 +27,7 @@ function TranscriptLine({ item }: { item: TranscriptItem }): React.JSX.Element {
   if (item.role === 'user') {
     return (
       <Box marginTop={1}>
-        <Text color={animeTheme.mint} bold>❯ </Text>
+        <Text color={animeTheme.mint} bold>{formatPromptGlyph()}</Text>
         <Text>{clipTextForDisplay(item.text)}</Text>
       </Box>
     )
