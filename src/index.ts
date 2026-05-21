@@ -128,6 +128,23 @@ import {
   previewTerminalValue,
   stripAnsi
 } from './runtime/cli-utils'
+import {
+  formatCliHelp,
+  formatCliVersion,
+  getEarlyCliCommand,
+  getPackageVersion
+} from './runtime/cli-info'
+
+const packageVersion = getPackageVersion()
+const earlyCliCommand = getEarlyCliCommand(process.argv.slice(2))
+if (earlyCliCommand === 'version') {
+  console.log(formatCliVersion(packageVersion))
+  process.exit(0)
+}
+if (earlyCliCommand === 'help') {
+  console.log(formatCliHelp(packageVersion))
+  process.exit(0)
+}
 
 applyRuntimeConfig()
 
@@ -233,7 +250,7 @@ async function main() {
     setStatus('Interrupting current turn', 'error')
   }
 
-  if (!dumpSystemPrompt && !useTui) console.log(fmtBanner('1.0.0'))
+  if (!dumpSystemPrompt && !useTui) console.log(fmtBanner(packageVersion))
   const isContinue = process.argv.includes('--continue')
   const requestedSessionId = getStringArg('--session')
   const store = dumpSystemPrompt
