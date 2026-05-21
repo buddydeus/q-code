@@ -107,10 +107,20 @@
 
 ## 6. 当前迭代范围
 
-本次先完成 Phase 1 的基础可运行版本：
+当前已推进到 Client、MCP Server、管理端的最小闭环：
 
-- 写入实施计划文档。
-- 实现 `src/infra/` 配置同步骨架。
-- 接入启动同步与 `/infra` 命令。
-- 更新环境变量文档。
-- 跑 `pnpm typecheck`，必要时补最小单元测试。
+- Client 端保留 infra 默认关闭，用户通过 `Q_CODE_INFRA_ENABLED=true` 自行选择是否集成配置中心。
+- `q-code` 已能通过 `.q-code/settings.json` 连接独立 `knowledge-mcp-server`。
+- 独立 MCP Server 已提供知识检索、历史需求、平台资产和候选知识提交工具。
+- 管理端已提供概览、知识维护和候选审核。
+- 新增 `/infra candidate`，可从 q-code 显式提交候选知识到 MCP Server，进入管理端审核队列。
+
+### 6.1 当前验证命令
+
+```powershell
+pnpm typecheck
+pnpm vitest run tests/unit/infra.test.ts tests/unit/infra-candidate.test.ts
+pnpm test:infra-candidate
+```
+
+其中 `pnpm test:infra-candidate` 依赖 `knowledge-mcp-server` 已在 `http://127.0.0.1:8787/mcp` 启动，并且当前项目 `.q-code/settings.json` 已配置 `enterprise_kb`。

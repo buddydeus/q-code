@@ -3,7 +3,6 @@ import { Box, Text } from 'ink'
 import type { TerminalState } from '../state'
 import { statusLabel } from '../utils/format'
 import { animeTheme, statusColor } from '../theme/index'
-import { ContextMeter } from './ContextMeter'
 import { SpinnerText } from './SpinnerText'
 
 export function StatusBar({
@@ -25,12 +24,6 @@ export function StatusBar({
         <Text color={statusColor(state.status)}>  ✧ 状态: {statusLabel(state.status, state.statusText)}</Text>
         <Text color={animeTheme.textDim}>{tokens ? `魔力 ${tokens}` : ''}</Text>
       </Box>
-      {state.contextUsage ? (
-        <Box>
-          <Text color={animeTheme.textDim}>  记忆槽: </Text>
-          <ContextMeter usage={state.contextUsage} />
-        </Box>
-      ) : null}
       {showSpinner ? (
         <Box>
           <SpinnerText label={statusLabel(state.status, state.statusText)} />

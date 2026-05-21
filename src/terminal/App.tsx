@@ -51,7 +51,7 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const pendingAssistantDelta = useRef('')
   const assistantFlushTimer = useRef<ReturnType<typeof setTimeout>>()
   const displayTranscript = useMemo(() => hideCompletedTurnTools(state.transcript), [state.transcript])
-  const hasStreamingAssistant = state.streamingText.length > 0
+  const hasStreamingAssistant = state.activeAssistantId !== undefined
   const slashCommands =
     state.slashCommands.length > 0 ? state.slashCommands : props.slashCommands ?? []
   const filteredSlashCommands = useMemo(
@@ -252,19 +252,6 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
       <ConversationView items={displayTranscript} />
       <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
-      {state.streamingText ? (
-        <ConversationView
-          items={[
-            {
-              id: 'streaming-assistant',
-              kind: 'message',
-              role: 'assistant',
-              text: state.streamingText,
-              isStreaming: true
-            }
-          ]}
-        />
-      ) : null}
       <CommandSuggestions suggestions={renderedSlashCommands} />
       <InputPrompt display={renderInputWithCursor(input.value || '', input.cursor)} isBusy={isBusy} />
     </Box>

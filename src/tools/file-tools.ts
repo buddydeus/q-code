@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
 
-const DEFAULT_READ_MAX_LINES = 300
+const DEFAULT_READ_MAX_LINES = 500
 const MAX_READ_MAX_LINES = 2000
 const DEFAULT_READ_MAX_CHARS = 20000
 const MAX_READ_MAX_CHARS = 100000
@@ -31,7 +31,7 @@ interface ReadFileInput {
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
   description:
-    '按行范围读取指定路径的文本文件。默认读取前 300 行；读取大文件时请用 startLine/endLine 或 maxLines 分段查看',
+    '按行范围读取指定路径的文本文件。默认读取前 500 行；读取大文件时请用 startLine/endLine 或 maxLines 分段查看',
   parameters: {
     type: 'object',
     properties: {

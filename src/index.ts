@@ -116,6 +116,7 @@ import {
 import {
   formatInfraStatus,
   formatInfraSyncResult,
+  submitInfraKnowledgeCandidate,
   syncInfraConfig,
   type InfraSyncResult
 } from './infra'
@@ -1080,7 +1081,7 @@ async function main() {
       command('/mcp', '查看 MCP server 和工具', '/mcp [tools|reconnect]', 'Tools', (input) =>
         handleMcpCommand(input.raw)
       ),
-      command('/infra', '查看或同步企业 AI 基建配置', '/infra [status|sync]', 'Tools', (input) =>
+      command('/infra', '查看、同步或提交企业 AI 基建知识', '/infra [status|sync|candidate]', 'Tools', (input) =>
         handleInfraCommand(input.raw)
       ),
       command('/hooks', '查看 hooks 配置和加载状态', '/hooks', 'Tools', (input) =>
@@ -1309,7 +1310,19 @@ async function main() {
       return
     }
 
-    print('\n  [Infra] 用法: /infra、/infra status、/infra sync')
+    if (subcommand === 'candidate') {
+      const candidateArgs = command.slice('/infra'.length).trim().replace(/^candidate(?:\s+|$)/, '')
+      const result = await submitInfraKnowledgeCandidate({
+        cwd: activeStore.cwd,
+        registry,
+        args: candidateArgs
+      })
+      print(`\n  [Infra] ${result.message.replace(/\n/g, '\n  ')}`)
+      if (result.toolName) print(`  [Infra] tool: ${result.toolName}`)
+      return
+    }
+
+    print('\n  [Infra] 用法: /infra、/infra status、/infra sync、/infra candidate <候选知识>')
   }
 
   function handleHooksCommand(command: string): void {

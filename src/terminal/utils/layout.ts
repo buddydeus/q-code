@@ -1,4 +1,5 @@
 import type { TranscriptItem } from '../state'
+import { stringDisplayWidth } from './string-width'
 
 const MIN_TEXT_WIDTH = 20
 
@@ -39,15 +40,7 @@ export function estimatePromptRows(value: string, width: number): number {
 export function estimateWrappedRows(text: string, width: number): number {
   const effectiveWidth = Math.max(MIN_TEXT_WIDTH, width)
   return text.split('\n').reduce((rows, line) => {
-    const columns = Math.max(1, stringWidthApprox(line))
+    const columns = Math.max(1, stringDisplayWidth(line))
     return rows + Math.max(1, Math.ceil(columns / effectiveWidth))
   }, 0)
-}
-
-function stringWidthApprox(text: string): number {
-  let width = 0
-  for (const char of text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')) {
-    width += char.charCodeAt(0) > 0xff ? 2 : 1
-  }
-  return width
 }

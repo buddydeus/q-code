@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react'
 import { Box, Text } from 'ink'
-import { parseMarkdown, type MarkdownBlock, type TableAlignment } from '../markdown'
+import { parseMarkdown, type MarkdownBlock } from '../markdown'
+import { renderMarkdownTable } from '../table-renderer'
 
 const STREAMING_PARSE_CHAR_LIMIT = 12000
 const STREAMING_PREVIEW_HEAD = 2500
@@ -88,76 +89,22 @@ function MarkdownTable({
   block: Extract<MarkdownBlock, { type: 'table' }>
   dim: boolean
 }): React.JSX.Element {
-  const widths = computeColumnWidths(block)
-  const header = renderTableRow(block.headers, widths, block.alignments)
-  const rule = renderRule(widths, block.alignments)
+  const table = renderMarkdownTable(block)
 
   return (
     <Box flexDirection="column" marginY={1} flexShrink={1}>
-      <Text color="cyan" bold wrap="truncate-end">{header}</Text>
-      <Text dimColor>{rule}</Text>
-      {block.rows.map((row, index) => (
+      <Text dimColor>{table.top}</Text>
+      <Text color="cyan" bold wrap="truncate-end">{table.header}</Text>
+      <Text dimColor>{table.separator}</Text>
+      {table.rows.map((row, index) => (
         <Text key={index} dimColor={dim} wrap="truncate-end">
-          {renderTableRow(row, widths, block.alignments)}
+          {row}
         </Text>
       ))}
-      {block.omittedRows ? (
-        <Text dimColor>{`│ ... omitted ${block.omittedRows} rows while rendering ... │`}</Text>
-      ) : null}
+      {table.omitted ? <Text dimColor>{table.omitted}</Text> : null}
+      <Text dimColor>{table.bottom}</Text>
     </Box>
   )
-}
-
-function computeColumnWidths(block: Extract<MarkdownBlock, { type: 'table' }>): number[] {
-  const columnCount = block.headers.length
-  const widths = block.headers.map((cell) => cell.length)
-  for (const row of block.rows) {
-    for (let i = 0; i < columnCount; i++) {
-      widths[i] = Math.max(widths[i] ?? 0, (row[i] ?? '').length)
-    }
-  }
-  return widths.map((width) => Math.max(3, Math.min(width, 42)))
-}
-
-function renderTableRow(
-  cells: string[],
-  widths: number[],
-  alignments: TableAlignment[]
-): string {
-  return `│ ${widths
-    .map((width, index) => alignCell(cells[index] ?? '', width, alignments[index] ?? 'left'))
-    .join(' │ ')} │`
-}
-
-function renderRule(widths: number[], alignments: TableAlignment[]): string {
-  return `├─${widths
-    .map((width, index) => {
-      const line = '─'.repeat(width)
-      const alignment = alignments[index] ?? 'left'
-      if (alignment === 'center') return `:${line.slice(1, -1)}:`
-      if (alignment === 'right') return `${line.slice(0, -1)}:`
-      return line
-    })
-    .join('─┼─')}─┤`
-}
-
-function alignCell(text: string, width: number, alignment: TableAlignment): string {
-  const clipped = clipCell(text, width)
-  const padding = width - clipped.length
-  if (padding <= 0) return clipped
-  if (alignment === 'right') return `${' '.repeat(padding)}${clipped}`
-  if (alignment === 'center') {
-    const left = Math.floor(padding / 2)
-    const right = padding - left
-    return `${' '.repeat(left)}${clipped}${' '.repeat(right)}`
-  }
-  return `${clipped}${' '.repeat(padding)}`
-}
-
-function clipCell(text: string, width: number): string {
-  if (text.length <= width) return text
-  if (width <= 1) return text.slice(0, width)
-  return `${text.slice(0, width - 1)}…`
 }
 
 function previewStreamingText(text: string): string {

@@ -1,3 +1,5 @@
+import { Lexer, lexer, type Token, type Tokens } from 'marked'
+
 export type MarkdownBlock =
   | { type: 'heading'; depth: number; text: string }
   | { type: 'paragraph'; text: string }
@@ -18,209 +20,146 @@ export type TableAlignment = 'left' | 'center' | 'right'
 export const MAX_MARKDOWN_TABLE_ROWS = 300
 
 export function parseMarkdown(markdown: string): MarkdownBlock[] {
-  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  return tokensToBlocks(lexer(markdown, { gfm: true, breaks: false }))
+}
+
+export function stripInlineMarkdown(text: string): string {
+  return renderInlineTokens(Lexer.lexInline(text, { gfm: true, breaks: false }))
+}
+
+function tokensToBlocks(tokens: Token[]): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = []
-  let i = 0
 
-  while (i < lines.length) {
-    const line = lines[i] ?? ''
-    if (!line.trim()) {
-      i++
-      continue
-    }
-
-    const fence = line.match(/^```([A-Za-z0-9_-]+)?\s*$/)
-    if (fence) {
-      const codeLines: string[] = []
-      i++
-      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? '')) {
-        codeLines.push(lines[i] ?? '')
-        i++
-      }
-      if (i < lines.length) i++
-      blocks.push({
-        type: 'code',
-        ...(fence[1] ? { language: fence[1] } : {}),
-        code: codeLines.join('\n')
-      })
-      continue
-    }
-
-    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/)
-    if (heading) {
-      blocks.push({
-        type: 'heading',
-        depth: heading[1]!.length,
-        text: stripInlineMarkdown(heading[2]!)
-      })
-      i++
-      continue
-    }
-
-    if (/^ {0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) {
-      blocks.push({ type: 'rule' })
-      i++
-      continue
-    }
-
-    if (/^>\s?/.test(line)) {
-      const quoteLines: string[] = []
-      while (i < lines.length && /^>\s?/.test(lines[i] ?? '')) {
-        quoteLines.push((lines[i] ?? '').replace(/^>\s?/, ''))
-        i++
-      }
-      blocks.push({ type: 'quote', text: quoteLines.join('\n').trim() })
-      continue
-    }
-
-    const table = parseTableAt(lines, i)
-    if (table) {
-      blocks.push(table.block)
-      i = table.nextIndex
-      continue
-    }
-
-    if (isListLine(line)) {
-      const ordered = isOrderedListLine(line)
-      const items: string[] = []
-      while (i < lines.length && isListLine(lines[i] ?? '') && isOrderedListLine(lines[i] ?? '') === ordered) {
-        items.push(stripInlineMarkdown((lines[i] ?? '').replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')))
-        i++
-      }
-      blocks.push({ type: 'list', ordered, items })
-      continue
-    }
-
-    const paragraphLines: string[] = []
-    while (i < lines.length && lines[i]?.trim() && !startsBlock(lines[i] ?? '')) {
-      paragraphLines.push(lines[i] ?? '')
-      i++
-    }
-    blocks.push({ type: 'paragraph', text: paragraphLines.map(stripInlineMarkdown).join(' ') })
+  for (const token of tokens) {
+    const block = tokenToBlock(token)
+    if (block) blocks.push(block)
   }
 
   return blocks
 }
 
-export function stripInlineMarkdown(text: string): string {
-  return text
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+function tokenToBlock(token: Token): MarkdownBlock | null {
+  switch (token.type) {
+    case 'space':
+    case 'def':
+      return null
+    case 'heading':
+      return { type: 'heading', depth: token.depth, text: renderInlineTokens(token.tokens ?? []) }
+    case 'paragraph':
+      return { type: 'paragraph', text: renderInlineTokens(token.tokens ?? []) }
+    case 'text':
+      return { type: 'paragraph', text: renderInlineTokens(token.tokens ?? [token]) }
+    case 'blockquote':
+      return { type: 'quote', text: renderBlocksAsText(tokensToBlocks(token.tokens ?? [])) }
+    case 'list':
+      return {
+        type: 'list',
+        ordered: token.ordered,
+        items: token.items.map((item: Tokens.ListItem) => renderListItem(item))
+      }
+    case 'table':
+      if (!isTableToken(token)) return null
+      return tableTokenToBlock(token)
+    case 'code':
+      return {
+        type: 'code',
+        ...(token.lang ? { language: token.lang.trim() } : {}),
+        code: token.text
+      }
+    case 'hr':
+      return { type: 'rule' }
+    case 'html':
+      return token.text.trim() ? { type: 'paragraph', text: token.text.trim() } : null
+    default:
+      return tokenHasInlineTokens(token) ? { type: 'paragraph', text: renderInlineTokens(token.tokens) } : null
+  }
 }
 
-function startsBlock(line: string): boolean {
+function tableTokenToBlock(token: Tokens.Table): MarkdownBlock {
+  const rows = token.rows.slice(0, MAX_MARKDOWN_TABLE_ROWS)
+  const omittedRows = Math.max(0, token.rows.length - rows.length)
+
+  return {
+    type: 'table',
+    headers: token.header.map(renderTableCell),
+    rows: rows.map((row) => row.map(renderTableCell)),
+    alignments: token.align.map((alignment) => alignment ?? 'left'),
+    ...(omittedRows > 0 ? { omittedRows } : {})
+  }
+}
+
+function renderTableCell(cell: Tokens.TableCell): string {
+  return renderInlineTokens(cell.tokens).trim()
+}
+
+function renderListItem(item: Tokens.ListItem): string {
+  const blocks = tokensToBlocks(item.tokens)
+  const text = renderBlocksAsText(blocks)
+  const checkbox = item.task ? `${item.checked ? '[x]' : '[ ]'} ` : ''
+  return `${checkbox}${text}`.trim()
+}
+
+function renderBlocksAsText(blocks: MarkdownBlock[]): string {
+  return blocks.map(renderBlockAsText).filter(Boolean).join('\n').trim()
+}
+
+function renderBlockAsText(block: MarkdownBlock): string {
+  switch (block.type) {
+    case 'heading':
+    case 'paragraph':
+    case 'quote':
+      return block.text
+    case 'list':
+      return block.items.join('\n')
+    case 'table':
+      return [block.headers.join(' | '), ...block.rows.map((row) => row.join(' | '))].join('\n')
+    case 'code':
+      return block.code
+    case 'rule':
+      return ''
+  }
+}
+
+function renderInlineTokens(tokens: Token[]): string {
+  return tokens.map(renderInlineToken).join('')
+}
+
+function renderInlineToken(token: Token): string {
+  switch (token.type) {
+    case 'text':
+    case 'escape':
+    case 'codespan':
+      return token.text
+    case 'strong':
+    case 'em':
+    case 'del':
+      if (!token.tokens) return token.text
+      return renderInlineTokens(token.tokens)
+    case 'link': {
+      const label = token.tokens ? renderInlineTokens(token.tokens) || token.text : token.text
+      return token.href ? `${label} (${token.href})` : label
+    }
+    case 'image':
+      return token.href ? `${token.text} (${token.href})` : token.text
+    case 'br':
+      return '\n'
+    case 'html':
+      return token.text
+    default:
+      if (tokenHasInlineTokens(token)) return renderInlineTokens(token.tokens)
+      return 'text' in token && typeof token.text === 'string' ? token.text : ''
+  }
+}
+
+function isTableToken(token: Token): token is Tokens.Table {
   return (
-    /^```/.test(line) ||
-    /^(#{1,6})\s+/.test(line) ||
-    /^>\s?/.test(line) ||
-    isListLine(line) ||
-    /^ {0,3}([-*_])(\s*\1){2,}\s*$/.test(line)
+    token.type === 'table' &&
+    Array.isArray((token as Partial<Tokens.Table>).header) &&
+    Array.isArray((token as Partial<Tokens.Table>).rows) &&
+    Array.isArray((token as Partial<Tokens.Table>).align)
   )
 }
 
-function isListLine(line: string): boolean {
-  return /^\s*(?:[-*+]|\d+[.)])\s+/.test(line)
-}
-
-function isOrderedListLine(line: string): boolean {
-  return /^\s*\d+[.)]\s+/.test(line)
-}
-
-function parseTableAt(
-  lines: string[],
-  index: number
-): { block: Extract<MarkdownBlock, { type: 'table' }>; nextIndex: number } | null {
-  const headerLine = lines[index] ?? ''
-  const separatorLine = lines[index + 1] ?? ''
-  if (!looksLikeTableRow(headerLine)) return null
-  if (!isTableSeparator(separatorLine)) return null
-
-  const headers = splitTableRow(headerLine).map(stripInlineMarkdown)
-  const separatorCells = splitTableRow(separatorLine)
-  if (headers.length === 0 || separatorCells.length === 0) return null
-
-  const columnCount = Math.max(headers.length, separatorCells.length)
-  const alignments = normalizeCells(separatorCells, columnCount).map(parseAlignment)
-  const rows: string[][] = []
-  let omittedRows = 0
-  let i = index + 2
-
-  while (i < lines.length) {
-    const line = lines[i] ?? ''
-    if (!line.trim() || !looksLikeTableRow(line)) break
-    if (rows.length < MAX_MARKDOWN_TABLE_ROWS) {
-      rows.push(normalizeCells(splitTableRow(line).map(stripInlineMarkdown), columnCount))
-    } else {
-      omittedRows++
-    }
-    i++
-  }
-
-  return {
-    block: {
-      type: 'table',
-      headers: normalizeCells(headers, columnCount),
-      rows,
-      alignments,
-      ...(omittedRows > 0 ? { omittedRows } : {})
-    },
-    nextIndex: i
-  }
-}
-
-function looksLikeTableRow(line: string): boolean {
-  return line.includes('|') && splitTableRow(line).length > 1
-}
-
-function isTableSeparator(line: string): boolean {
-  if (!looksLikeTableRow(line)) return false
-  const cells = splitTableRow(line)
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')))
-}
-
-function splitTableRow(line: string): string[] {
-  let text = line.trim()
-  if (text.startsWith('|')) text = text.slice(1)
-  if (text.endsWith('|')) text = text.slice(0, -1)
-
-  const cells: string[] = []
-  let current = ''
-  let escaped = false
-
-  for (const char of text) {
-    if (escaped) {
-      current += char
-      escaped = false
-      continue
-    }
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-    if (char === '|') {
-      cells.push(current.trim())
-      current = ''
-      continue
-    }
-    current += char
-  }
-  cells.push(current.trim())
-  return cells
-}
-
-function normalizeCells(cells: string[], count: number): string[] {
-  if (cells.length === count) return cells
-  if (cells.length > count) return cells.slice(0, count)
-  return [...cells, ...Array.from({ length: count - cells.length }, () => '')]
-}
-
-function parseAlignment(cell: string): TableAlignment {
-  const value = cell.replace(/\s+/g, '')
-  if (value.startsWith(':') && value.endsWith(':')) return 'center'
-  if (value.endsWith(':')) return 'right'
-  return 'left'
+function tokenHasInlineTokens(token: Token): token is Token & { tokens: Token[] } {
+  return Array.isArray((token as { tokens?: unknown }).tokens)
 }

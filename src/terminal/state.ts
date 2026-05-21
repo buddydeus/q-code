@@ -34,7 +34,6 @@ export interface TerminalState {
   contextUsage?: TerminalContextUsage
   usage?: TerminalUsage
   slashCommands: SlashCommandSuggestion[]
-  streamingText: string
   activeAssistantId?: string
   activeToolIds: Record<string, string>
   nextId: number
@@ -49,7 +48,6 @@ export function createInitialTerminalState(): TerminalState {
     status: 'idle',
     statusText: 'Ready',
     slashCommands: [],
-    streamingText: '',
     activeToolIds: {},
     nextId: 1
   }
@@ -58,11 +56,30 @@ export function createInitialTerminalState(): TerminalState {
 export function terminalReducer(state: TerminalState, event: TerminalEvent): TerminalState {
   switch (event.type) {
     case 'message': {
-      return appendItem(
-        {
+      if (event.role === 'assistant' && isDuplicateFinalAssistantMessage(state, event.text)) {
+        return state
+      }
+      if (event.role === 'assistant' && state.activeAssistantId) {
+        return {
           ...state,
-          streamingText: event.role === 'assistant' ? '' : state.streamingText
-        },
+          status: state.status === 'thinking' ? 'idle' : state.status,
+          statusText: state.status === 'thinking' ? 'Ready' : state.statusText,
+          activeAssistantId: undefined,
+          transcript: state.transcript.map((item) =>
+            item.id === state.activeAssistantId
+              ? {
+                  ...item,
+                  text: event.text,
+                  isStreaming: false,
+                  source: event.source,
+                  agentId: event.agentId
+                }
+              : item
+          )
+        }
+      }
+      return appendItem(
+        state,
         {
           kind: 'message',
           role: event.role,
@@ -75,28 +92,49 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
     }
 
     case 'assistant_delta': {
-      return {
+      if (state.activeAssistantId) {
+        return {
+          ...state,
+          status: 'thinking',
+          statusText: 'Assistant streaming',
+          transcript: state.transcript.map((item) =>
+            item.id === state.activeAssistantId ? { ...item, text: item.text + event.text } : item
+          )
+        }
+      }
+
+      const next = appendItem({
         ...state,
         status: 'thinking',
-        statusText: 'Assistant streaming',
-        streamingText: state.streamingText + event.text
-      }
+        statusText: 'Assistant streaming'
+      }, {
+        kind: 'message',
+        role: 'assistant',
+        text: event.text,
+        isStreaming: true
+      })
+      const item = next.transcript[next.transcript.length - 1]
+      return item ? { ...next, activeAssistantId: item.id } : next
     }
 
     case 'assistant_done': {
-      const doneState = {
+      if (!state.activeAssistantId) {
+        return {
+          ...state,
+          status: state.status === 'thinking' ? 'idle' : state.status,
+          statusText: state.status === 'thinking' ? 'Ready' : state.statusText
+        }
+      }
+
+      return {
         ...state,
         status: state.status === 'thinking' ? 'idle' : state.status,
         statusText: state.status === 'thinking' ? 'Ready' : state.statusText,
-        streamingText: ''
+        activeAssistantId: undefined,
+        transcript: state.transcript.map((item) =>
+          item.id === state.activeAssistantId ? { ...item, isStreaming: false } : item
+        )
       }
-      if (!state.streamingText) return doneState
-      return appendItem(doneState, {
-        kind: 'message',
-        role: 'assistant',
-        text: state.streamingText,
-        isStreaming: false
-      })
     }
 
     case 'tool_call': {
@@ -233,7 +271,7 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
       return {
         ...state,
         transcript: [],
-        streamingText: '',
+        activeAssistantId: undefined,
         activeToolIds: {},
         status: 'idle',
         statusText: 'Ready'
@@ -261,6 +299,11 @@ function appendItem(
     nextId: state.nextId + 1,
     transcript
   }
+}
+
+function isDuplicateFinalAssistantMessage(state: TerminalState, text: string): boolean {
+  const last = state.transcript[state.transcript.length - 1]
+  return last?.role === 'assistant' && last.isStreaming !== true && last.text === text
 }
 
 function formatToolInput(input: unknown): string {

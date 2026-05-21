@@ -16,11 +16,13 @@ import {
 } from '../../src/terminal/input'
 import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
+import { renderMarkdownTable } from '../../src/terminal/table-renderer'
 import {
   estimateItemRows,
   estimateWrappedRows,
   hideCompletedTurnTools
 } from '../../src/terminal/utils/layout'
+import { stringDisplayWidth } from '../../src/terminal/utils/string-width'
 import type { SlashCommandSuggestion } from '../../src/slash'
 
 describe('terminal state reducer', () => {
@@ -29,16 +31,19 @@ describe('terminal state reducer', () => {
     state = terminalReducer(state, { type: 'assistant_delta', text: 'hello' })
     state = terminalReducer(state, { type: 'assistant_delta', text: ' world' })
 
-    expect(state.transcript).toHaveLength(0)
-    expect(state.streamingText).toBe('hello world')
+    expect(state.transcript).toHaveLength(1)
+    expect(state.transcript[0]?.role).toBe('assistant')
+    expect(state.transcript[0]?.text).toBe('hello world')
+    expect(state.transcript[0]?.isStreaming).toBe(true)
+    expect(state.activeAssistantId).toBe(state.transcript[0]?.id)
 
     state = terminalReducer(state, { type: 'assistant_done' })
 
     expect(state.transcript).toHaveLength(1)
     expect(state.transcript[0]?.role).toBe('assistant')
     expect(state.transcript[0]?.text).toBe('hello world')
+    expect(state.transcript[0]?.isStreaming).toBe(false)
     expect(state.activeAssistantId).toBeUndefined()
-    expect(state.streamingText).toBe('')
   })
 
   it('replaces an active assistant stream with a final assistant message', () => {
@@ -51,7 +56,6 @@ describe('terminal state reducer', () => {
     expect(state.transcript[0]?.text).toBe('final answer')
     expect(state.transcript[0]?.isStreaming).toBe(false)
     expect(state.activeAssistantId).toBeUndefined()
-    expect(state.streamingText).toBe('')
   })
 
   it('does not duplicate assistant text when done is emitted after a final assistant message', () => {
@@ -62,7 +66,19 @@ describe('terminal state reducer', () => {
 
     expect(state.transcript).toHaveLength(1)
     expect(state.transcript[0]?.text).toBe('final answer')
-    expect(state.streamingText).toBe('')
+    expect(state.transcript[0]?.isStreaming).toBe(false)
+    expect(state.activeAssistantId).toBeUndefined()
+  })
+
+  it('does not duplicate an assistant final message after streaming is completed', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, { type: 'assistant_delta', text: 'final answer' })
+    state = terminalReducer(state, { type: 'assistant_done' })
+    state = terminalReducer(state, { type: 'message', role: 'assistant', text: 'final answer' })
+
+    expect(state.transcript).toHaveLength(1)
+    expect(state.transcript[0]?.text).toBe('final answer')
+    expect(state.transcript[0]?.isStreaming).toBe(false)
   })
 
   it('links tool call and result by toolCallId', () => {
@@ -287,6 +303,37 @@ describe('terminal markdown parser', () => {
     ])
   })
 
+  it('uses marked tokenization for table alignment and inline table content', () => {
+    const blocks = parseMarkdown(
+      [
+        '| 名称 | 状态 | 数量 |',
+        '|:-----|:----:|-----:|',
+        '| **alpha** | [ok](https://example.com) | `42` |'
+      ].join('\n')
+    )
+
+    expect(blocks).toEqual([
+      {
+        type: 'table',
+        headers: ['名称', '状态', '数量'],
+        alignments: ['left', 'center', 'right'],
+        rows: [['alpha', 'ok (https://example.com)', '42']]
+      }
+    ])
+  })
+
+  it('renders task list markers from marked list items', () => {
+    const blocks = parseMarkdown(['- [x] 已完成', '- [ ] 待处理'].join('\n'))
+
+    expect(blocks).toEqual([
+      {
+        type: 'list',
+        ordered: false,
+        items: ['[x] 已完成', '[ ] 待处理']
+      }
+    ])
+  })
+
   it('caps very large markdown tables before they reach Ink rendering', () => {
     const rows = Array.from({ length: 350 }, (_, index) => `| pkg-${index} | desc-${index} |`)
     const blocks = parseMarkdown(['| 包名 | 作用 |', '|------|------|', ...rows].join('\n'))
@@ -301,12 +348,42 @@ describe('terminal markdown parser', () => {
       expect(blocks[0].rows).toHaveLength(300)
     }
   })
+
+  it('renders markdown tables as bordered terminal tables with wide text alignment', () => {
+    const blocks = parseMarkdown(
+      [
+        '| 属性 | 说明 |',
+        '|------|------|',
+        '| currentStage | 当前阶段索引 |',
+        '| maxStage | 最大阶段数，当 `currentStage >= maxStage` 时 Jig 结束 |',
+        '| initialStage | 起始阶段（默认 0） |'
+      ].join('\n')
+    )
+
+    expect(blocks[0]?.type).toBe('table')
+    if (blocks[0]?.type !== 'table') return
+
+    const table = renderMarkdownTable(blocks[0])
+    const lines = [table.top, table.header, table.separator, ...table.rows, table.bottom]
+
+    expect(table.top).toMatch(/^┌─+┬─+┐$/)
+    expect(table.header).toContain('│ 属性')
+    expect(table.header).toContain('│ 说明')
+    expect(table.separator).toMatch(/^├─+┼─+┤$/)
+    expect(table.rows[1]).toContain('最大阶段数，当 currentStage >= maxStage 时 Jig 结束')
+    expect(table.bottom).toMatch(/^└─+┴─+┘$/)
+    expect(new Set(lines.map(stringDisplayWidth)).size).toBe(1)
+  })
 })
 
 describe('terminal layout helpers', () => {
   it('estimates wrapped rows for long terminal lines', () => {
     expect(estimateWrappedRows('x'.repeat(45), 20)).toBe(3)
     expect(estimateWrappedRows(['short', 'x'.repeat(41)].join('\n'), 20)).toBe(4)
+  })
+
+  it('estimates wrapped rows with wide characters', () => {
+    expect(estimateWrappedRows('属性说明'.repeat(6), 20)).toBe(3)
   })
 
   it('clears transcript while preserving slash command suggestions', () => {
