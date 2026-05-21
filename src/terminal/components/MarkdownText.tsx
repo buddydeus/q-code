@@ -5,11 +5,13 @@ import { parseMarkdown, type MarkdownBlock } from '../markdown'
 export function MarkdownText({
   text,
   dim = false,
-  parse = true
+  parse = true,
+  streaming = false
 }: {
   text: string
   dim?: boolean
   parse?: boolean
+  streaming?: boolean
 }): React.JSX.Element {
   const blocks = useMemo(() => (parse ? parseMarkdown(text) : []), [parse, text])
   if (!parse) return <Text dimColor={dim}>{text}</Text>
@@ -17,7 +19,7 @@ export function MarkdownText({
   return (
     <Box flexDirection="column" flexShrink={1}>
       {blocks.map((block, index) => (
-        <MarkdownBlockView key={index} block={block} dim={dim} />
+        <MarkdownBlockView key={index} block={block} dim={dim} streaming={streaming} />
       ))}
     </Box>
   )
@@ -25,10 +27,12 @@ export function MarkdownText({
 
 function MarkdownBlockView({
   block,
-  dim
+  dim,
+  streaming
 }: {
   block: MarkdownBlock
   dim: boolean
+  streaming: boolean
 }): React.JSX.Element {
   switch (block.type) {
     case 'heading':
@@ -53,7 +57,13 @@ function MarkdownBlockView({
       )
     case 'code':
       return (
-        <Box flexDirection="column" borderStyle="single" borderColor="gray" paddingX={1} flexShrink={1}>
+        <Box
+          flexDirection="column"
+          borderStyle="single"
+          borderColor={streaming ? 'gray' : 'blue'}
+          paddingX={1}
+          flexShrink={1}
+        >
           {block.language ? <Text color="gray">{block.language}</Text> : null}
           <Text color="green" wrap="truncate-end">{block.code || ' '}</Text>
         </Box>

@@ -14,6 +14,7 @@ export function StatusBar({
   isBusy: boolean
   hasStreamingAssistant: boolean
 }): React.JSX.Element {
+  const showSpinner = isBusy && !hasStreamingAssistant && state.status !== 'idle'
   const tokens = state.usage
     ? `tokens ${state.usage.totalTokens} (${state.usage.inputTokens}/${state.usage.outputTokens})`
     : ''
@@ -29,7 +30,7 @@ export function StatusBar({
           <ContextMeter usage={state.contextUsage} />
         </Box>
       ) : null}
-      {isBusy && !hasStreamingAssistant ? (
+      {showSpinner ? (
         <Box>
           <SpinnerText label={statusLabel(state.status, state.statusText)} />
         </Box>

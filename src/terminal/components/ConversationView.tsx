@@ -39,7 +39,7 @@ function TranscriptLine({ item }: { item: TranscriptItem }): React.JSX.Element {
           <Text color="magenta">▎</Text>
         </Box>
         <Box flexDirection="column" flexShrink={1}>
-          <MarkdownText text={item.text} parse={!item.isStreaming} />
+          <MarkdownText text={item.text} streaming={item.isStreaming === true} />
         </Box>
       </Box>
     )

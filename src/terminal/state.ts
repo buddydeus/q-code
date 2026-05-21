@@ -34,6 +34,7 @@ export interface TerminalState {
   contextUsage?: TerminalContextUsage
   usage?: TerminalUsage
   slashCommands: SlashCommandSuggestion[]
+  streamingText: string
   activeAssistantId?: string
   activeToolIds: Record<string, string>
   nextId: number
@@ -48,6 +49,7 @@ export function createInitialTerminalState(): TerminalState {
     status: 'idle',
     statusText: 'Ready',
     slashCommands: [],
+    streamingText: '',
     activeToolIds: {},
     nextId: 1
   }
@@ -56,32 +58,16 @@ export function createInitialTerminalState(): TerminalState {
 export function terminalReducer(state: TerminalState, event: TerminalEvent): TerminalState {
   switch (event.type) {
     case 'message': {
-      if (event.role === 'assistant' && state.activeAssistantId) {
-        return {
-          ...state,
-          activeAssistantId: undefined,
-          transcript: state.transcript.map((item) =>
-            item.id === state.activeAssistantId
-              ? {
-                  ...item,
-                  text: event.text,
-                  isStreaming: false,
-                  source: event.source ?? item.source,
-                  agentId: event.agentId ?? item.agentId
-                }
-              : item
-          )
-        }
-      }
       return appendItem(
         {
           ...state,
-          activeAssistantId: event.role === 'assistant' ? undefined : state.activeAssistantId
+          streamingText: event.role === 'assistant' ? '' : state.streamingText
         },
         {
           kind: 'message',
           role: event.role,
           text: event.text,
+          isStreaming: event.role === 'assistant' ? false : undefined,
           source: event.source,
           agentId: event.agentId
         }
@@ -89,45 +75,29 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
     }
 
     case 'assistant_delta': {
-      const activeId = state.activeAssistantId
-      if (!activeId) {
-        const next = appendItem(state, {
-          kind: 'message',
-          role: 'assistant',
-          text: event.text,
-          isStreaming: true,
-          source: event.source,
-          agentId: event.agentId
-        })
-        const item = next.transcript[next.transcript.length - 1]
-        return {
-          ...next,
-          status: 'thinking',
-          statusText: 'Assistant streaming',
-          activeAssistantId: item?.id
-        }
-      }
-
       return {
         ...state,
         status: 'thinking',
         statusText: 'Assistant streaming',
-        transcript: state.transcript.map((item) =>
-          item.id === activeId ? { ...item, text: item.text + event.text, isStreaming: true } : item
-        )
+        streamingText: state.streamingText + event.text
       }
     }
 
-    case 'assistant_done':
-      return {
+    case 'assistant_done': {
+      const doneState = {
         ...state,
         status: state.status === 'thinking' ? 'idle' : state.status,
         statusText: state.status === 'thinking' ? 'Ready' : state.statusText,
-        activeAssistantId: undefined,
-        transcript: state.transcript.map((item) =>
-          item.id === state.activeAssistantId ? { ...item, isStreaming: false } : item
-        )
+        streamingText: ''
       }
+      if (!state.streamingText) return doneState
+      return appendItem(doneState, {
+        kind: 'message',
+        role: 'assistant',
+        text: state.streamingText,
+        isStreaming: false
+      })
+    }
 
     case 'tool_call': {
       const title = event.name
@@ -263,7 +233,7 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
       return {
         ...state,
         transcript: [],
-        activeAssistantId: undefined,
+        streamingText: '',
         activeToolIds: {},
         status: 'idle',
         statusText: 'Ready'

@@ -48,8 +48,10 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const { exit } = useApp()
   const { internal_eventEmitter } = useStdin()
   const lastRawInput = useRef<string>()
+  const pendingAssistantDelta = useRef('')
+  const assistantFlushTimer = useRef<ReturnType<typeof setTimeout>>()
   const displayTranscript = useMemo(() => hideCompletedTurnTools(state.transcript), [state.transcript])
-  const hasStreamingAssistant = displayTranscript.some((item) => item.role === 'assistant' && item.isStreaming)
+  const hasStreamingAssistant = state.streamingText.length > 0
   const slashCommands =
     state.slashCommands.length > 0 ? state.slashCommands : props.slashCommands ?? []
   const filteredSlashCommands = useMemo(
@@ -67,7 +69,48 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   )
   const showSlashCommands = filteredSlashCommands.length > 0
 
-  useEffect(() => props.bus.subscribe(dispatch), [props.bus])
+  useEffect(() => {
+    const flushAssistantDelta = () => {
+      assistantFlushTimer.current = undefined
+      if (!pendingAssistantDelta.current) return
+      const text = pendingAssistantDelta.current
+      pendingAssistantDelta.current = ''
+      dispatch({ type: 'assistant_delta', text })
+    }
+
+    const unsubscribe = props.bus.subscribe((event) => {
+      if (event.type === 'assistant_delta') {
+        pendingAssistantDelta.current += event.text
+        if (!assistantFlushTimer.current) {
+          assistantFlushTimer.current = setTimeout(flushAssistantDelta, 30)
+        }
+        return
+      }
+
+      if (event.type === 'assistant_done' || event.type === 'clear') {
+        if (assistantFlushTimer.current) {
+          clearTimeout(assistantFlushTimer.current)
+          assistantFlushTimer.current = undefined
+        }
+        if (pendingAssistantDelta.current) {
+          const text = pendingAssistantDelta.current
+          pendingAssistantDelta.current = ''
+          dispatch({ type: 'assistant_delta', text })
+        }
+      }
+
+      dispatch(event)
+    })
+
+    return () => {
+      unsubscribe()
+      if (assistantFlushTimer.current) {
+        clearTimeout(assistantFlushTimer.current)
+        assistantFlushTimer.current = undefined
+      }
+      pendingAssistantDelta.current = ''
+    }
+  }, [props.bus])
 
   useEffect(() => {
     if (!isBusy) setInterruptRequested(false)
@@ -209,6 +252,19 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
       <ConversationView items={displayTranscript} />
       <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
+      {state.streamingText ? (
+        <ConversationView
+          items={[
+            {
+              id: 'streaming-assistant',
+              kind: 'message',
+              role: 'assistant',
+              text: state.streamingText,
+              isStreaming: true
+            }
+          ]}
+        />
+      ) : null}
       <CommandSuggestions suggestions={renderedSlashCommands} />
       <InputPrompt display={renderInputWithCursor(input.value || '', input.cursor)} isBusy={isBusy} />
     </Box>

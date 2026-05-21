@@ -28,12 +28,17 @@ describe('terminal state reducer', () => {
     let state = createInitialTerminalState()
     state = terminalReducer(state, { type: 'assistant_delta', text: 'hello' })
     state = terminalReducer(state, { type: 'assistant_delta', text: ' world' })
+
+    expect(state.transcript).toHaveLength(0)
+    expect(state.streamingText).toBe('hello world')
+
     state = terminalReducer(state, { type: 'assistant_done' })
 
     expect(state.transcript).toHaveLength(1)
     expect(state.transcript[0]?.role).toBe('assistant')
     expect(state.transcript[0]?.text).toBe('hello world')
     expect(state.activeAssistantId).toBeUndefined()
+    expect(state.streamingText).toBe('')
   })
 
   it('replaces an active assistant stream with a final assistant message', () => {
@@ -46,6 +51,18 @@ describe('terminal state reducer', () => {
     expect(state.transcript[0]?.text).toBe('final answer')
     expect(state.transcript[0]?.isStreaming).toBe(false)
     expect(state.activeAssistantId).toBeUndefined()
+    expect(state.streamingText).toBe('')
+  })
+
+  it('does not duplicate assistant text when done is emitted after a final assistant message', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, { type: 'assistant_delta', text: 'partial' })
+    state = terminalReducer(state, { type: 'message', role: 'assistant', text: 'final answer' })
+    state = terminalReducer(state, { type: 'assistant_done' })
+
+    expect(state.transcript).toHaveLength(1)
+    expect(state.transcript[0]?.text).toBe('final answer')
+    expect(state.streamingText).toBe('')
   })
 
   it('links tool call and result by toolCallId', () => {
@@ -239,6 +256,12 @@ describe('terminal markdown parser', () => {
     const blocks = parseMarkdown('See [README](README.md).')
 
     expect(blocks).toEqual([{ type: 'paragraph', text: 'See README (README.md).' }])
+  })
+
+  it('treats an unfinished fenced code block as code while streaming', () => {
+    const blocks = parseMarkdown(['```ts', 'const value = 1'].join('\n'))
+
+    expect(blocks).toEqual([{ type: 'code', language: 'ts', code: 'const value = 1' }])
   })
 })
 
