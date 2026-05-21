@@ -57,6 +57,7 @@ export interface AgentToolResultEvent {
   toolCallId?: string
   input?: unknown
   output: unknown
+  resultLength?: number
 }
 
 export interface AgentLoopOptions {
@@ -286,7 +287,8 @@ export async function agentLoop(
                     name: matched.name,
                     toolCallId: part.toolCallId,
                     input: matched.input,
-                    output: part.output
+                    output: part.output,
+                    resultLength: measureResultLength(part.output)
                   })
                   if (options.stopAfterToolNames?.includes(matched.name)) {
                     stopAfterStepReason = `${matched.name} 已完成，等待下一条用户指令`

@@ -16,6 +16,7 @@ import {
 } from '../../src/terminal/input'
 import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
+import { estimateWrappedRows } from '../../src/terminal/App'
 
 describe('terminal state reducer', () => {
   it('streams assistant deltas into one transcript item', () => {
@@ -48,9 +49,31 @@ describe('terminal state reducer', () => {
     expect(state.transcript).toHaveLength(1)
     expect(state.transcript[0]?.title).toBe('read_file')
     expect(state.transcript[0]?.status).toBe('done')
-    expect(state.transcript[0]?.text).toContain('README.md')
-    expect(state.transcript[0]?.text).toContain('Result: ok')
+    expect(state.transcript[0]?.text).toContain('Input: {"path":"README.md"}')
+    expect(state.transcript[0]?.text).toContain('Result: terminal output hidden')
     expect(state.activeToolIds).toEqual({})
+  })
+
+  it('limits tool result previews to at most two lines', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'tool_call',
+      name: 'shell',
+      toolCallId: 'call-1',
+      input: { command: 'long-output' }
+    })
+    state = terminalReducer(state, {
+      type: 'tool_result',
+      name: 'shell',
+      toolCallId: 'call-1',
+      output: ['line 1', 'line 2', 'line 3'].join('\n'),
+      resultLength: 20
+    })
+
+    const text = state.transcript[0]?.text ?? ''
+    const resultLines = text.split('\n').filter((line) => line.startsWith('Result:') || line.startsWith('... truncated'))
+    expect(text).toContain('Input: {"command":"long-output"}')
+    expect(resultLines).toHaveLength(2)
   })
 
   it('keeps thinking status after a tool result while the turn continues', () => {
@@ -199,5 +222,12 @@ describe('terminal markdown parser', () => {
     const blocks = parseMarkdown('See [README](README.md).')
 
     expect(blocks).toEqual([{ type: 'paragraph', text: 'See README (README.md).' }])
+  })
+})
+
+describe('terminal layout helpers', () => {
+  it('estimates wrapped rows for long terminal lines', () => {
+    expect(estimateWrappedRows('x'.repeat(45), 20)).toBe(3)
+    expect(estimateWrappedRows(['short', 'x'.repeat(41)].join('\n'), 20)).toBe(4)
   })
 })

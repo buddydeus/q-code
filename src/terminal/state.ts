@@ -38,6 +38,7 @@ export interface TerminalState {
 }
 
 const MAX_TRANSCRIPT_ITEMS = 400
+const NOISY_SUCCESS_TOOL_RESULTS = new Set(['read_file', 'grep'])
 
 export function createInitialTerminalState(): TerminalState {
   return {
@@ -135,7 +136,12 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
 
     case 'tool_result': {
       const toolItemId = event.toolCallId ? state.activeToolIds[event.toolCallId] : undefined
-      const resultText = formatToolResult(event.output, event.resultLength, event.isError)
+      const resultText = formatToolResult(
+        event.name,
+        event.output,
+        event.resultLength,
+        event.isError
+      )
       const status = event.isError ? 'error' : 'done'
       const nextActiveToolIds = { ...state.activeToolIds }
       if (event.toolCallId) delete nextActiveToolIds[event.toolCallId]
@@ -251,17 +257,25 @@ function appendItem(
 }
 
 function formatToolInput(input: unknown): string {
-  if (input === undefined) return ''
-  const text = stringifyUnknown(input)
-  return truncate(text, 900)
+  if (input === undefined) return 'Input: {}'
+  return `Input: ${truncateSingleLine(stringifyCompact(input), 900)}`
 }
 
-function formatToolResult(output: unknown, resultLength: number | undefined, isError: boolean | undefined): string {
+function formatToolResult(
+  name: string,
+  output: unknown,
+  resultLength: number | undefined,
+  isError: boolean | undefined
+): string {
   const prefix = isError ? 'Error' : 'Result'
+  if (!isError && NOISY_SUCCESS_TOOL_RESULTS.has(name)) {
+    const length = resultLength === undefined ? '' : ` (${resultLength} chars)`
+    return `${prefix}: terminal output hidden${length}`
+  }
   if (output === undefined) {
     return resultLength === undefined ? prefix : `${prefix}: ${resultLength} chars`
   }
-  return `${prefix}: ${truncate(stringifyUnknown(output), 1200)}`
+  return formatTwoLinePreview(prefix, stringifyUnknown(output), resultLength)
 }
 
 function stringifyUnknown(value: unknown): string {
@@ -273,7 +287,33 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-function truncate(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text
-  return `${text.slice(0, maxChars - 24)}\n... truncated ...`
+function stringifyCompact(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function formatTwoLinePreview(
+  prefix: string,
+  text: string,
+  resultLength: number | undefined
+): string {
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = normalized.split('\n')
+  const firstLine = lines[0] ?? ''
+  const display = `${prefix}: ${truncateSingleLine(firstLine, 220)}`
+  const length = resultLength ?? normalized.length
+  const isTruncated = lines.length > 1 || firstLine.length > 220 || length > firstLine.length
+  if (!isTruncated) return display
+  const moreLines = lines.length > 1 ? `, ${lines.length - 1} more lines` : ''
+  return `${display}\n... truncated ${length} chars${moreLines}`
+}
+
+function truncateSingleLine(text: string, maxChars: number): string {
+  const singleLine = text.replace(/\s+/g, ' ').trim()
+  if (singleLine.length <= maxChars) return singleLine
+  return `${singleLine.slice(0, maxChars - 16)}... truncated`
 }

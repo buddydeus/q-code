@@ -24,6 +24,10 @@ function baseCtx(extra: Partial<PromptContext> = {}): PromptContext {
   }
 }
 
+function toSlashPath(path: string): string {
+  return path.replace(/\\/g, '/')
+}
+
 describe('JIT Context 工具成本阶梯与 prompt discipline', () => {
   it('ToolRegistry 按 contextCost 生成当前 active 工具成本阶梯', () => {
     const registry = new ToolRegistry({ quiet: true })
@@ -129,8 +133,9 @@ describe('Context Offloading', () => {
     expect(result.offloaded).toBe(1)
     expect(result.warnings).toEqual([])
     expect(result.entries[0]?.originalChars).toBe(largeOutput.length)
-    expect(result.entries[0]?.filePath).toContain('/.sessions/projects/')
-    expect(result.entries[0]?.filePath).toContain('/offloads/jit-session/')
+    const filePath = toSlashPath(result.entries[0]!.filePath)
+    expect(filePath).toContain('/.sessions/projects/')
+    expect(filePath).toContain('/offloads/jit-session/')
     expect(existsSync(result.entries[0]!.filePath)).toBe(true)
     expect(readFileSync(result.entries[0]!.filePath, 'utf-8')).toBe(largeOutput)
 
@@ -175,11 +180,12 @@ describe('Context Offloading', () => {
     })
 
     expect(result.offloaded).toBe(1)
+    const filePath = toSlashPath(result.entries[0]!.filePath)
     const offloadDir = join(
       home.cwd,
       '.sessions',
       'projects',
-      result.entries[0]!.filePath.split('/.sessions/projects/')[1]!.split('/offloads/')[0]!,
+      filePath.split('/.sessions/projects/')[1]!.split('/offloads/')[0]!,
       'offloads',
       'atomic-session'
     )

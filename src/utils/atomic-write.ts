@@ -8,6 +8,10 @@ import {
 } from 'node:fs'
 import { open, rename, unlink } from 'node:fs/promises'
 
+const RENAME_MAX_ATTEMPTS = process.platform === 'win32' ? 40 : 1
+const RENAME_RETRY_DELAY_MS = 10
+const RENAME_MAX_RETRY_DELAY_MS = 250
+
 /**
  * 原子写入 JSON：即使在写入过程中崩溃，也尽量保证文件可恢复。
  *
@@ -37,7 +41,7 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
     await handle.close()
   }
   try {
-    await rename(tmpPath, filePath)
+    await renameWithRetry(tmpPath, filePath)
   } catch (error) {
     // rename 失败时尽力清理 tmp 文件。
     await unlink(tmpPath).catch(() => undefined)
@@ -70,4 +74,26 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
     }
     throw error
   }
+}
+
+async function renameWithRetry(tmpPath: string, filePath: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(tmpPath, filePath)
+      return
+    } catch (error) {
+      if (attempt >= RENAME_MAX_ATTEMPTS || !isTransientRenameError(error)) throw error
+      await sleep(Math.min(RENAME_RETRY_DELAY_MS * attempt, RENAME_MAX_RETRY_DELAY_MS))
+    }
+  }
+}
+
+function isTransientRenameError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = (error as { code?: unknown }).code
+  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

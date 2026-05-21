@@ -830,6 +830,7 @@ async function main() {
             name: event.name,
             output: previewTerminalValue(event.output),
             toolCallId: event.toolCallId,
+            resultLength: event.resultLength,
             isError: false
           })
           if (event.name === 'todo_write' && typeof event.output === 'string') {
