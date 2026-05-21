@@ -63,7 +63,7 @@ import {
 } from './context/plans'
 import { getPlanModeAttachment, getPlanModeExitAttachment } from './context/plan-attachments'
 import type { ToolVisibilityMode } from './tools/registry'
-import { clearTodos, formatTodoList, getTodos } from './context/todos'
+import { clearTodos, formatTodoList, getTodos, subscribeTodos, type TodoItem } from './context/todos'
 import {
   formatTaskList,
   getTaskGraphDir,
@@ -90,7 +90,12 @@ import { bootstrapAgents } from './agents/bootstrap'
 import { formatAgentsSystemReminder } from './agents/prompt-injection'
 import { getAllAgents } from './agents/registry'
 import { getProjectAgentsDir, getUserAgentsDir } from './agents/load-agents-dir'
-import { getAllAsyncAgents, killAsyncAgent } from './agents/async-agent-store'
+import {
+  getAllAsyncAgents,
+  killAsyncAgent,
+  subscribeAsyncAgents,
+  type AsyncAgentEntry
+} from './agents/async-agent-store'
 import { drainPendingNotifications, pendingNotificationCount } from './agents/notification-store'
 import { clearActiveTeam, getActiveTeam } from './agents/team-context'
 import {
@@ -244,6 +249,40 @@ async function main() {
     text: string,
     status: Extract<TerminalEvent, { type: 'status' }>['status'] = 'idle'
   ): void => emitTerminal({ type: 'status', status, text })
+  const emitTodoProgress = (todos: readonly TodoItem[]): void => {
+    emitTerminal({
+      type: 'progress',
+      items: todos.map((todo) => ({
+        content: todo.content,
+        status: todo.status,
+        activeForm: todo.activeForm
+      }))
+    })
+  }
+  const emitBackgroundAgents = (): void => {
+    emitTerminal({
+      type: 'background_agents',
+      agents: getAllAsyncAgents().map(formatTerminalBackgroundAgent)
+    })
+  }
+  const emitTaskProgress = async (): Promise<void> => {
+    if (taskMode === 'todo') {
+      emitTodoProgress(getTodos(sessionId))
+      return
+    }
+    const tasks = await listTasks({
+      cwd: store?.cwd ?? process.cwd(),
+      sessionId
+    })
+    emitTerminal({
+      type: 'progress',
+      items: tasks.map((task) => ({
+        content: task.subject,
+        status: task.status,
+        activeForm: task.activeForm
+      }))
+    })
+  }
   const interruptActiveTurn = (): void => {
     if (!activeTurnAbortController) return
     activeTurnAbortController.abort(new Error('用户中断了当前任务'))
@@ -387,6 +426,10 @@ async function main() {
   )
   registry.register(createSkillTool({ getSessionId: () => sessionId }))
   registry.setMode(agentMode)
+  const unsubscribeTodos = subscribeTodos((changedSessionId, todos) => {
+    if (changedSessionId === sessionId) emitTodoProgress(todos)
+  })
+  const unsubscribeAsyncAgents = subscribeAsyncAgents(() => emitBackgroundAgents())
 
   let messages: ModelMessage[] = []
   if (store && isContinue && store.exists()) {
@@ -542,7 +585,8 @@ async function main() {
           type: 'context_usage',
           used: before.used,
           limit: before.limit,
-          state: before.state
+          state: before.state,
+          detail: `上下文接近阈值 ${before.used}/${before.limit}`
         })
       }
       return { messages: currentMessages, usageAnchor }
@@ -579,6 +623,12 @@ async function main() {
       print(
         `  [Context offload] 卸载了 ${offload.offloaded} 个大工具结果 (${totalChars} chars)`
       )
+      emitTerminal({
+        type: 'context_offload',
+        offloaded: offload.offloaded,
+        chars: totalChars,
+        files: offload.entries.map((entry) => entry.filePath)
+      })
     }
     for (const warning of offload.warnings) {
       print(`  [Context offload] 跳过卸载: ${warning}`)
@@ -630,7 +680,8 @@ async function main() {
       type: 'context_usage',
       used: after.used,
       limit: contextLimitTokens,
-      state: after.state
+      state: after.state,
+      detail: `压缩后上下文 ${after.used}/${contextLimitTokens}`
     })
     setStatus('Ready')
     return {
@@ -661,6 +712,8 @@ async function main() {
 
   if (useTui) {
     registry.setQuiet(true)
+    void emitTaskProgress()
+    emitBackgroundAgents()
     terminal = startTerminalRuntime({
       title: 'q-code',
       sessionId,
@@ -710,6 +763,8 @@ async function main() {
   async function closeCli(): Promise<void> {
     if (closed) return
     closed = true
+    unsubscribeTodos()
+    unsubscribeAsyncAgents()
     await emitHook(
       createHookEvent(
         { sessionId, cwd: activeStore.cwd },
@@ -799,6 +854,14 @@ async function main() {
     messages.push(...userMessages)
     activeStore.appendAll(userMessages)
     const turnSystem = await buildSystemPrompt(userQuery)
+    const jitSummary = registry.getJitToolSummary()
+    if (jitSummary) {
+      const firstLine = jitSummary.split('\n')[0]
+      emitTerminal({
+        type: 'jit_context',
+        text: `工具成本阶梯已生成${firstLine ? `：${firstLine}` : ''}`
+      })
+    }
     setStatus('Thinking', 'thinking')
     const turnAbortController = new AbortController()
     activeTurnAbortController = turnAbortController
@@ -829,7 +892,8 @@ async function main() {
             type: 'context_usage',
             used: snapshot.used,
             limit: snapshot.limit,
-            state: snapshot.state
+            state: snapshot.state,
+            detail: `JIT 快照 ${snapshot.used}/${snapshot.limit}`
           })
           return {
             used: snapshot.used,
@@ -848,11 +912,14 @@ async function main() {
         onToolEvent: (event) => {
           activeStore.appendToolEvent({ type: 'tool_event', ...event })
           if (event.phase === 'start') {
+            const tool = registry.get(event.name)
             emitTerminal({
               type: 'tool_call',
               name: event.name,
               input: event.input,
-              toolCallId: event.toolCallId
+              toolCallId: event.toolCallId,
+              contextCost: tool?.contextCost,
+              resultShape: tool?.resultShape
             })
           } else if (event.isError) {
             emitTerminal({
@@ -875,9 +942,11 @@ async function main() {
           })
           if (event.name === 'todo_write' && typeof event.output === 'string') {
             print(`\n${event.output}`)
+            void emitTaskProgress()
           }
           if (event.name.startsWith('task_') && typeof event.output === 'string') {
             print(`\n${event.output}`)
+            void emitTaskProgress()
           }
           const filePaths = extractToolFilePaths(event.name, event.input)
           const activated = activateConditionalSkillsForPaths(filePaths, activeStore.cwd)
@@ -1646,6 +1715,27 @@ async function main() {
     await terminal.waitUntilExit()
   } else {
     ask()
+  }
+}
+
+function formatTerminalBackgroundAgent(entry: AsyncAgentEntry): Extract<
+  TerminalEvent,
+  { type: 'background_agents' }
+>['agents'][number] {
+  return {
+    agentId: entry.agentId,
+    agentType: entry.agentType,
+    description: entry.description,
+    status: entry.status,
+    isolated: entry.isolated,
+    ...(entry.worktreePath ? { worktreePath: entry.worktreePath } : {}),
+    ...(entry.worktreeBranch ? { worktreeBranch: entry.worktreeBranch } : {}),
+    ...(entry.lastToolName ? { lastToolName: entry.lastToolName } : {}),
+    toolUseCount: entry.toolUseCount,
+    ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
+    ...(entry.durationMs !== undefined ? { durationMs: entry.durationMs } : {}),
+    outputFile: entry.outputFile,
+    ...(entry.error ? { error: entry.error } : {})
   }
 }
 

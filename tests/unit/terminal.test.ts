@@ -5,13 +5,19 @@ import {
 } from '../../src/terminal/state'
 import {
   backspace,
+  clearOrRestoreInput,
   createInputState,
   deleteForward,
+  getInputCursorPosition,
   insertText,
   moveCursor,
+  normalizePastedText,
   recallNext,
   recallPrevious,
+  renderInputValue,
+  renderPromptInputRows,
   renderInputWithCursor,
+  searchHistoryPrevious,
   submitInput
 } from '../../src/terminal/input'
 import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
@@ -182,6 +188,76 @@ describe('terminal state reducer', () => {
     expect(state.transcript).toHaveLength(1)
     expect(state.transcript[0]?.kind).toBe('context')
   })
+
+  it('tracks JIT context and context offloading in terminal state', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, { type: 'jit_context', text: '工具成本阶梯已生成' })
+    state = terminalReducer(state, {
+      type: 'context_offload',
+      offloaded: 2,
+      chars: 24000,
+      files: ['/tmp/a.txt']
+    })
+
+    expect(state.status).toBe('compacting')
+    expect(state.jitMessages.at(-1)).toContain('上下文卸载')
+    expect(state.transcript[0]?.kind).toBe('context')
+    expect(state.transcript[0]?.meta?.offloadFiles).toEqual(['/tmp/a.txt'])
+  })
+
+  it('tracks task progress and background agents separately from transcript', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'progress',
+      items: [
+        { content: '读代码', status: 'completed' },
+        { content: '补测试', activeForm: '正在补测试', status: 'in_progress' }
+      ]
+    })
+    state = terminalReducer(state, {
+      type: 'background_agents',
+      agents: [
+        {
+          agentId: 'agent-1',
+          agentType: 'reviewer',
+          description: 'review',
+          status: 'running',
+          isolated: true,
+          worktreeBranch: 'codex/agent-1'
+        }
+      ]
+    })
+
+    expect(state.progressItems).toHaveLength(2)
+    expect(state.backgroundAgents[0]?.worktreeBranch).toBe('codex/agent-1')
+    expect(state.transcript).toHaveLength(0)
+  })
+
+  it('stores tool context cost metadata and recovery hints', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'tool_call',
+      name: 'bash',
+      input: { command: 'bad' },
+      toolCallId: 'call-1',
+      contextCost: 'high',
+      resultShape: 'command-output'
+    })
+    state = terminalReducer(state, {
+      type: 'tool_result',
+      name: 'bash',
+      toolCallId: 'call-1',
+      isError: true,
+      resultLength: 10
+    })
+
+    expect(state.status).toBe('recovering')
+    expect(state.transcript[0]?.meta).toMatchObject({
+      contextCost: 'high',
+      resultShape: 'command-output',
+      recoveryHint: expect.stringContaining('bash')
+    })
+  })
 })
 
 describe('terminal input state', () => {
@@ -210,6 +286,51 @@ describe('terminal input state', () => {
 
     expect(state.value).toBe('你好')
     expect(renderInputWithCursor(state.value, state.cursor)).toBe('你█好')
+    expect(getInputCursorPosition(state.value, state.cursor)).toEqual({ row: 0, column: 2 })
+  })
+
+  it('renders input value without fake cursor for IME anchoring', () => {
+    expect(renderInputValue('')).toBe(' ')
+    expect(renderInputValue('hello')).toBe('hello')
+    expect(renderPromptInputRows('a\nb')).toEqual([
+      { prefix: '❯ ', text: 'a' },
+      { prefix: '  │ ', text: 'b' }
+    ])
+    expect(getInputCursorPosition('a\n你b', 3)).toEqual({ row: 1, column: 2 })
+    expect(getInputCursorPosition('abcd', 4, 3)).toEqual({ row: 1, column: 1 })
+  })
+
+  it('normalizes pasted CRLF text into multiline input', () => {
+    const state = insertText(createInputState(), 'one\r\ntwo\rthree')
+
+    expect(normalizePastedText('one\r\ntwo\rthree')).toBe('one\ntwo\nthree')
+    expect(state.value).toBe('one\ntwo\nthree')
+  })
+
+  it('supports reversible escape clear', () => {
+    let state = insertText(createInputState(), 'keep this')
+    state = clearOrRestoreInput(state)
+
+    expect(state.value).toBe('')
+    expect(state.clearedValue).toBe('keep this')
+
+    state = clearOrRestoreInput(state)
+    expect(state.value).toBe('keep this')
+    expect(state.cursor).toBe('keep this'.length)
+    expect(state.clearedValue).toBeUndefined()
+  })
+
+  it('searches command history with a stable query', () => {
+    let state = createInputState(['pnpm test', 'pnpm typecheck', 'git status'])
+    state = insertText(state, 'pnpm')
+    state = searchHistoryPrevious(state)
+
+    expect(state.value).toBe('pnpm typecheck')
+    expect(state.historySearchQuery).toBe('pnpm')
+
+    state = searchHistoryPrevious(state)
+    expect(state.value).toBe('pnpm test')
+    expect(state.historySearchQuery).toBe('pnpm')
   })
 
   it('treats x7f delete events as terminal backspace', () => {

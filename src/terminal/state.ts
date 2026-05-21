@@ -1,4 +1,10 @@
-import type { TerminalEvent, TerminalRole, TerminalStatus } from './events'
+import type {
+  TerminalBackgroundAgentItem,
+  TerminalEvent,
+  TerminalProgressItem,
+  TerminalRole,
+  TerminalStatus
+} from './events'
 import type { SlashCommandSuggestion } from '../slash'
 
 export type TranscriptItemKind = 'message' | 'tool' | 'usage' | 'context'
@@ -13,6 +19,17 @@ export interface TranscriptItem {
   isStreaming?: boolean
   source?: string
   agentId?: string
+  meta?: TranscriptItemMeta
+}
+
+export interface TranscriptItemMeta {
+  toolName?: string
+  resultLength?: number
+  resultShape?: string
+  contextCost?: string
+  durationMs?: number
+  recoveryHint?: string
+  offloadFiles?: string[]
 }
 
 export interface TerminalContextUsage {
@@ -34,6 +51,9 @@ export interface TerminalState {
   contextUsage?: TerminalContextUsage
   usage?: TerminalUsage
   slashCommands: SlashCommandSuggestion[]
+  progressItems: TerminalProgressItem[]
+  backgroundAgents: TerminalBackgroundAgentItem[]
+  jitMessages: string[]
   activeAssistantId?: string
   activeToolIds: Record<string, string>
   nextId: number
@@ -48,6 +68,9 @@ export function createInitialTerminalState(): TerminalState {
     status: 'idle',
     statusText: 'Ready',
     slashCommands: [],
+    progressItems: [],
+    backgroundAgents: [],
+    jitMessages: [],
     activeToolIds: {},
     nextId: 1
   }
@@ -149,7 +172,12 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           text,
           status: 'running',
           source: event.source,
-          agentId: event.agentId
+          agentId: event.agentId,
+          meta: {
+            toolName: event.name,
+            contextCost: event.contextCost,
+            resultShape: event.resultShape
+          }
         }
       )
       const item = next.transcript[next.transcript.length - 1]
@@ -172,22 +200,37 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
         event.isError
       )
       const status = event.isError ? 'error' : 'done'
+      const recoveryHint = event.isError ? formatRecoveryHint(event.name) : undefined
       const nextActiveToolIds = { ...state.activeToolIds }
       if (event.toolCallId) delete nextActiveToolIds[event.toolCallId]
 
       if (toolItemId) {
         return {
           ...state,
-          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'thinking',
+          status: event.isError
+            ? 'recovering'
+            : Object.keys(nextActiveToolIds).length > 0
+              ? 'running_tool'
+              : 'thinking',
           statusText:
-            Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Thinking',
+            event.isError
+              ? `Recovering from ${event.name}`
+              : Object.keys(nextActiveToolIds).length > 0
+                ? state.statusText
+                : 'Thinking',
           activeToolIds: nextActiveToolIds,
           transcript: state.transcript.map((item) =>
             item.id === toolItemId
               ? {
                   ...item,
                   status,
-                  text: item.text ? `${item.text}\n${resultText}` : resultText
+                  text: item.text ? `${item.text}\n${resultText}` : resultText,
+                  meta: {
+                    ...item.meta,
+                    toolName: event.name,
+                    resultLength: event.resultLength,
+                    ...(recoveryHint ? { recoveryHint } : {})
+                  }
                 }
               : item
           )
@@ -209,7 +252,12 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           text: resultText,
           status,
           source: event.source,
-          agentId: event.agentId
+          agentId: event.agentId,
+          meta: {
+            toolName: event.name,
+            resultLength: event.resultLength,
+            ...(recoveryHint ? { recoveryHint } : {})
+          }
         }
       )
     }
@@ -228,7 +276,8 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           used: event.used,
           limit: event.limit,
           state: event.state
-        }
+        },
+        jitMessages: event.detail ? pushRecent(state.jitMessages, event.detail, 4) : state.jitMessages
       }
       const shouldLogContext =
         event.state !== undefined &&
@@ -240,6 +289,32 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
         text: `上下文 ${event.used}/${event.limit} tokens (${Math.round((event.used / event.limit) * 100)}%) ${event.state}`
       })
     }
+
+    case 'context_offload': {
+      const text = `上下文卸载: ${event.offloaded} 个大工具结果，释放 ${event.chars} chars`
+      return appendItem(
+        {
+          ...state,
+          status: 'compacting',
+          statusText: 'Context offloading',
+          jitMessages: pushRecent(state.jitMessages, text, 4)
+        },
+        {
+          kind: 'context',
+          text,
+          meta: {
+            resultLength: event.chars,
+            offloadFiles: event.files
+          }
+        }
+      )
+    }
+
+    case 'jit_context':
+      return {
+        ...state,
+        jitMessages: pushRecent(state.jitMessages, event.text, 4)
+      }
 
     case 'usage':
       return {
@@ -273,6 +348,8 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
         transcript: [],
         activeAssistantId: undefined,
         activeToolIds: {},
+        progressItems: [],
+        backgroundAgents: [],
         status: 'idle',
         statusText: 'Ready'
       }
@@ -282,7 +359,23 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
         ...state,
         slashCommands: event.commands
       }
+
+    case 'progress':
+      return {
+        ...state,
+        progressItems: event.items
+      }
+
+    case 'background_agents':
+      return {
+        ...state,
+        backgroundAgents: event.agents
+      }
   }
+}
+
+function pushRecent(items: readonly string[], item: string, max: number): string[] {
+  return [...items.filter((entry) => entry !== item), item].slice(-max)
 }
 
 function appendItem(
@@ -326,6 +419,10 @@ function formatToolResult(
     return resultLength === undefined ? prefix : `${prefix}: ${resultLength} chars`
   }
   return formatTwoLinePreview(prefix, stringifyUnknown(output), resultLength)
+}
+
+function formatRecoveryHint(name: string): string {
+  return `建议：检查 ${name} 的输入、权限或路径；必要时换一个更小的查询重试。`
 }
 
 function stringifyUnknown(value: unknown): string {

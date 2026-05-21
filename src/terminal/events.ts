@@ -2,7 +2,31 @@ import type { TokenUsage } from '../context/token-budget'
 import type { SlashCommandSuggestion } from '../slash'
 
 export type TerminalRole = 'assistant' | 'user' | 'system' | 'tool' | 'error'
-export type TerminalStatus = 'idle' | 'thinking' | 'running_tool' | 'compacting' | 'error'
+export type TerminalStatus = 'idle' | 'thinking' | 'running_tool' | 'compacting' | 'recovering' | 'error'
+
+export type TerminalProgressStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface TerminalProgressItem {
+  content: string
+  status: TerminalProgressStatus
+  activeForm?: string
+}
+
+export interface TerminalBackgroundAgentItem {
+  agentId: string
+  agentType: string
+  description: string
+  status: 'running' | 'completed' | 'failed' | 'killed'
+  isolated?: boolean
+  worktreePath?: string
+  worktreeBranch?: string
+  lastToolName?: string
+  toolUseCount?: number
+  totalTokens?: number
+  durationMs?: number
+  outputFile?: string
+  error?: string
+}
 
 export interface TerminalBaseEvent {
   source?: string
@@ -28,6 +52,8 @@ export type TerminalEvent =
       name: string
       input?: unknown
       toolCallId?: string
+      contextCost?: string
+      resultShape?: string
     })
   | (TerminalBaseEvent & {
       type: 'tool_result'
@@ -47,11 +73,30 @@ export type TerminalEvent =
       used: number
       limit: number
       state?: string
+      detail?: string
+    })
+  | (TerminalBaseEvent & {
+      type: 'context_offload'
+      offloaded: number
+      chars: number
+      files?: string[]
+    })
+  | (TerminalBaseEvent & {
+      type: 'jit_context'
+      text: string
     })
   | (TerminalBaseEvent & {
       type: 'usage'
       turnUsage: TokenUsage
       totalUsage: TokenUsage
+    })
+  | (TerminalBaseEvent & {
+      type: 'progress'
+      items: TerminalProgressItem[]
+    })
+  | (TerminalBaseEvent & {
+      type: 'background_agents'
+      agents: TerminalBackgroundAgentItem[]
     })
   | (TerminalBaseEvent & {
       type: 'error'

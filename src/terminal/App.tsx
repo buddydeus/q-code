@@ -4,6 +4,7 @@ import type { TerminalEventBus } from './events'
 import { createInitialTerminalState, terminalReducer } from './state'
 import {
   backspace,
+  clearOrRestoreInput,
   createInputState,
   deleteForward,
   insertText,
@@ -11,7 +12,7 @@ import {
   newline,
   recallNext,
   recallPrevious,
-  renderInputWithCursor,
+  searchHistoryPrevious,
   submitInput
 } from './input'
 import { shouldBackspace, shouldDeleteForward } from './keys'
@@ -162,6 +163,11 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       return
     }
 
+    if (key.ctrl && value === 'r') {
+      setInput((current) => searchHistoryPrevious(current))
+      return
+    }
+
     if (showSlashCommands) {
       if (key.upArrow) {
         setSelectedCommandIndex((current) =>
@@ -244,7 +250,7 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       return
     }
     if (key.escape) {
-      setInput((current) => ({ ...current, value: '', cursor: 0 }))
+      setInput((current) => clearOrRestoreInput(current))
       return
     }
     if (value && !key.ctrl && !key.meta) {
@@ -258,7 +264,13 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       <ConversationView items={visibleTranscript} />
       <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
       <CommandSuggestions suggestions={renderedSlashCommands} />
-      <InputPrompt display={renderInputWithCursor(input.value || '', input.cursor)} isBusy={isBusy} />
+      <InputPrompt
+        value={input.value}
+        cursor={input.cursor}
+        isBusy={isBusy}
+        isHistorySearch={input.historySearchQuery !== undefined}
+        hasUndoClear={!input.value && input.clearedValue !== undefined}
+      />
     </Box>
   )
 }
