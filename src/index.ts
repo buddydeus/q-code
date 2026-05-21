@@ -1,7 +1,7 @@
-import 'dotenv/config'
 import { type ModelMessage } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { getRequiredEnv, normalizeBaseURL } from './utils'
+import { applyRuntimeConfig } from './config/runtime-config'
 import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
 import { startTerminalRuntime, type TerminalRuntime } from './terminal/runtime'
@@ -128,6 +128,8 @@ import {
   previewTerminalValue,
   stripAnsi
 } from './runtime/cli-utils'
+
+applyRuntimeConfig()
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)

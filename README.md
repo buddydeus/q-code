@@ -42,7 +42,23 @@ pnpm install
 
 ### 配置
 
-复制环境变量模板并填写：
+npm 全局安装后推荐使用 `~/.q-code/config.toml`，在任意目录运行 `q-code` 都能读取：
+
+```toml
+[openai]
+api_key = "sk-..."
+base_url = "https://api.openai.com/v1"
+model = "gpt-5.4"
+
+[summary]
+api_key = "sk-..."
+base_url = "https://api.openai.com/v1"
+model = "gpt-5.4"
+```
+
+也可以在项目内使用 `.q-code/config.toml` 覆盖全局配置。配置优先级为：环境变量 > 项目 `.q-code/config.toml` > 全局 `~/.q-code/config.toml` > 项目 `.env` > 内置默认值。
+
+本地开发仍可复制环境变量模板并填写：
 
 ```bash
 cp .env.example .env
@@ -50,12 +66,12 @@ cp .env.example .env
 
 | 变量                           | 必填 | 说明                                                          |
 | ------------------------------ | ---- | ------------------------------------------------------------- |
-| `OPENAI_BASE_URL`              | ✅   | OpenAI 兼容 API 地址                                          |
+| `OPENAI_BASE_URL`              | ❌   | OpenAI 兼容 API 地址，默认 `https://api.openai.com/v1`         |
 | `OPENAI_API_KEY`               | ✅   | API Key                                                       |
-| `OPENAI_MODEL`                 | ✅   | 主模型名称                                                    |
-| `SUMMARY_BASE_URL`             | ✅   | 摘要模型 API 地址                                             |
-| `SUMMARY_API_KEY`              | ✅   | 摘要模型 API Key                                              |
-| `SUMMARY_MODEL`                | ✅   | 摘要模型名称（可用更廉价的模型）                              |
+| `OPENAI_MODEL`                 | ❌   | 主模型名称，默认 `gpt-5.4`                                    |
+| `SUMMARY_BASE_URL`             | ❌   | 摘要模型 API 地址，默认复用 `OPENAI_BASE_URL`                  |
+| `SUMMARY_API_KEY`              | ❌   | 摘要模型 API Key，默认复用 `OPENAI_API_KEY`                    |
+| `SUMMARY_MODEL`                | ❌   | 摘要模型名称，默认复用 `OPENAI_MODEL`                          |
 | `TOKEN_BUDGET`                 | ❌   | 单轮执行 token 预算，默认 256000                              |
 | `CONTEXT_LIMIT_TOKENS`         | ❌   | 上下文窗口上限，默认 256000                                   |
 | `MAX_STEPS`                    | ❌   | 单轮 Agent 最大步数，默认 88                                 |
