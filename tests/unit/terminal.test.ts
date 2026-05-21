@@ -16,7 +16,7 @@ import {
 } from '../../src/terminal/input'
 import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
-import { estimateWrappedRows } from '../../src/terminal/App'
+import { estimateWrappedRows, selectVisibleItems } from '../../src/terminal/utils/layout'
 
 describe('terminal state reducer', () => {
   it('streams assistant deltas into one transcript item', () => {
@@ -230,4 +230,26 @@ describe('terminal layout helpers', () => {
     expect(estimateWrappedRows('x'.repeat(45), 20)).toBe(3)
     expect(estimateWrappedRows(['short', 'x'.repeat(41)].join('\n'), 20)).toBe(4)
   })
+
+  it('keeps recent user and assistant messages ahead of system noise', () => {
+    const items = [
+      transcriptItem('1', 'message', 'user', '真正的问题'),
+      transcriptItem('2', 'message', 'assistant', '最终回答'),
+      transcriptItem('3', 'tool', 'tool', 'Input: {}\nResult: ok'),
+      transcriptItem('4', 'message', 'system', '输入 /approve-plan 执行')
+    ]
+
+    const visible = selectVisibleItems(items, 6, 80)
+    expect(visible.map((item) => item.text)).toContain('真正的问题')
+    expect(visible.map((item) => item.text)).toContain('最终回答')
+  })
 })
+
+function transcriptItem(
+  id: string,
+  kind: 'message' | 'tool' | 'usage' | 'context',
+  role: 'assistant' | 'user' | 'system' | 'tool' | 'error',
+  text: string
+) {
+  return { id, kind, role, text }
+}
