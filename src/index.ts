@@ -921,14 +921,6 @@ async function main() {
               contextCost: tool?.contextCost,
               resultShape: tool?.resultShape
             })
-          } else if (event.isError) {
-            emitTerminal({
-              type: 'tool_result',
-              name: event.name,
-              toolCallId: event.toolCallId,
-              resultLength: event.resultLength,
-              isError: event.isError
-            })
           }
         },
         onToolResult: (event) => {
@@ -938,7 +930,7 @@ async function main() {
             output: previewTerminalValue(event.output),
             toolCallId: event.toolCallId,
             resultLength: event.resultLength,
-            isError: false
+            isError: event.isError === true
           })
           if (event.name === 'todo_write' && typeof event.output === 'string') {
             print(`\n${event.output}`)

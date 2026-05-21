@@ -4,7 +4,7 @@ import {
   getInputCursorPosition,
   renderPromptInputRows
 } from '../input'
-import { animeTheme } from '../theme/index'
+import { animeTheme, formatPromptGlyph } from '../theme/index'
 
 export function InputPrompt({
   value,
@@ -33,18 +33,14 @@ export function InputPrompt({
       {isHistorySearch ? (
         <Text color={animeTheme.sky}>  Ctrl+R 历史搜索中</Text>
       ) : null}
-      {rows.map((row, index) => (
-        <Box key={index}>
-          <Text color={animeTheme.mint} bold>{row.prefix}</Text>
-          {index === 0 ? (
-            <Box ref={inputRef}>
-              <Text>{row.text}</Text>
-            </Box>
-          ) : (
-            <Text>{row.text}</Text>
-          )}
+      <Box>
+        <Text color={animeTheme.mint} bold>{formatPromptGlyph()}</Text>
+        <Box ref={inputRef} flexDirection="column" flexShrink={1}>
+          {rows.map((row, index) => (
+            <Text key={index}>{row.text}</Text>
+          ))}
         </Box>
-      ))}
+      </Box>
     </Box>
   )
 }

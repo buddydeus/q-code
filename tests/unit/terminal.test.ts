@@ -157,6 +157,30 @@ describe('terminal state reducer', () => {
     expect(state.activeToolIds).toEqual({})
   })
 
+  it('renders failed tool results once with the error output', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'tool_call',
+      name: 'bash',
+      toolCallId: 'call-1',
+      input: { command: 'bad' }
+    })
+    state = terminalReducer(state, {
+      type: 'tool_result',
+      name: 'bash',
+      toolCallId: 'call-1',
+      output: 'command failed',
+      resultLength: 14,
+      isError: true
+    })
+
+    expect(state.transcript).toHaveLength(1)
+    expect(state.transcript[0]?.status).toBe('error')
+    expect(state.transcript[0]?.text).toContain('Input: {"command":"bad"}')
+    expect(state.transcript[0]?.text).toContain('Error: command failed')
+    expect(state.activeToolIds).toEqual({})
+  })
+
   it('keeps normal context usage out of transcript noise', () => {
     let state = createInitialTerminalState()
     state = terminalReducer(state, {
@@ -293,11 +317,20 @@ describe('terminal input state', () => {
     expect(renderInputValue('')).toBe(' ')
     expect(renderInputValue('hello')).toBe('hello')
     expect(renderPromptInputRows('a\nb')).toEqual([
-      { prefix: '❯ ', text: 'a' },
-      { prefix: '  │ ', text: 'b' }
+      { text: 'a' },
+      { text: 'b' }
     ])
     expect(getInputCursorPosition('a\n你b', 3)).toEqual({ row: 1, column: 2 })
     expect(getInputCursorPosition('abcd', 4, 3)).toEqual({ row: 1, column: 1 })
+  })
+
+  it('positions the cursor after ZWJ emoji graphemes by display width', () => {
+    let state = createInputState()
+    state = insertText(state, '🧑‍💻x')
+    state = moveCursor(state, -1)
+
+    expect(renderInputWithCursor(state.value, state.cursor)).toBe('🧑‍💻█x')
+    expect(getInputCursorPosition(state.value, state.cursor)).toEqual({ row: 0, column: 2 })
   })
 
   it('normalizes pasted CRLF text into multiline input', () => {
@@ -505,6 +538,11 @@ describe('terminal markdown parser', () => {
     expect(table.rows[1]).toContain('最大阶段数，当 currentStage >= maxStage 时 Jig 结束')
     expect(table.bottom).toMatch(/^└─+┴─+┘$/)
     expect(new Set(lines.map(stringDisplayWidth)).size).toBe(1)
+  })
+
+  it('treats ZWJ emoji as one terminal cell cluster while measuring text', () => {
+    expect(stringDisplayWidth('🧑‍💻')).toBe(2)
+    expect(stringDisplayWidth('👍🏽')).toBe(2)
   })
 })
 

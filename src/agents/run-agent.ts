@@ -135,22 +135,13 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
           ...(event.toolCallId ? { toolCallId: event.toolCallId } : {})
         })
       }
-      if (event.phase === 'done' && event.isError) {
-        params.onProgress?.({
-          type: 'tool_result',
-          toolName: event.name,
-          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
-          isError: true,
-          output: '(tool error)'
-        })
-      }
     },
     onToolResult: (event) => {
       params.onProgress?.({
         type: 'tool_result',
         toolName: event.name,
         ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
-        isError: false,
+        isError: event.isError === true,
         output: event.output
       })
     },

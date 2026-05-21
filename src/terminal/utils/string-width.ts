@@ -1,7 +1,7 @@
 export function stringDisplayWidth(text: string): number {
   let width = 0
-  for (const char of stripAnsi(text)) {
-    width += charDisplayWidth(char)
+  for (const char of splitGraphemes(stripAnsi(text))) {
+    width += graphemeDisplayWidth(char)
   }
   return width
 }
@@ -30,8 +30,8 @@ export function clipDisplayWidth(text: string, width: number): string {
 
   let output = ''
   let used = 0
-  for (const char of text) {
-    const charWidth = charDisplayWidth(char)
+  for (const char of splitGraphemes(text)) {
+    const charWidth = graphemeDisplayWidth(char)
     if (used + charWidth > width - 1) break
     output += char
     used += charWidth
@@ -43,12 +43,32 @@ function stripAnsi(text: string): string {
   return text.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
 }
 
+export function splitGraphemes(value: string): string[] {
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    const Segmenter = Intl.Segmenter
+    const segmenter = new Segmenter(undefined, { granularity: 'grapheme' })
+    return Array.from(segmenter.segment(value), (segment) => segment.segment)
+  }
+  return Array.from(value)
+}
+
+export function graphemeDisplayWidth(value: string): number {
+  if (!value) return 0
+  if (value.includes('\u200d')) return 2
+  let width = 0
+  for (const char of Array.from(value)) {
+    width += charDisplayWidth(char)
+  }
+  return width
+}
+
 function charDisplayWidth(char: string): number {
   const codePoint = char.codePointAt(0)
   if (codePoint === undefined) return 0
   if (codePoint === 0) return 0
   if (codePoint === 0x200d) return 0
   if (codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0)) return 0
+  if (codePoint >= 0x1f3fb && codePoint <= 0x1f3ff) return 0
   if (isCombining(codePoint)) return 0
   return isWide(codePoint) ? 2 : 1
 }

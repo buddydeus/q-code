@@ -63,6 +63,7 @@ export interface AgentToolResultEvent {
   input?: unknown
   output: unknown
   resultLength?: number
+  isError?: boolean
 }
 
 export interface AgentLoopOptions {
@@ -309,7 +310,8 @@ export async function agentLoop(
                     toolCallId: part.toolCallId,
                     input: matched.input,
                     output: normalized.text,
-                    resultLength: normalized.text.length
+                    resultLength: normalized.text.length,
+                    isError: normalized.isError
                   })
                   if (options.stopAfterToolNames?.includes(matched.name)) {
                     stopAfterStepReason = `${matched.name} 已完成，等待下一条用户指令`
@@ -331,6 +333,13 @@ export async function agentLoop(
                 phase: 'done',
                 name: part.toolName,
                 toolCallId: part.toolCallId,
+                resultLength: measureResultLength(part.error),
+                isError: true
+              })
+              options.onToolResult?.({
+                name: part.toolName,
+                toolCallId: part.toolCallId,
+                output: formatUnknownError(part.error),
                 resultLength: measureResultLength(part.error),
                 isError: true
               })

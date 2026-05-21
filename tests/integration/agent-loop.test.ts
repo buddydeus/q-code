@@ -310,6 +310,31 @@ describe('agentLoop 集成（mock model + mock tools）', () => {
     expect(events.filter((e) => e === 'usage').length).toBeGreaterThanOrEqual(1)
   })
 
+  it('工具 envelope 错误会作为错误结果回调一次', async () => {
+    const probe = makeMockTool('p', () => ({
+      ok: false,
+      error: 'probe failed'
+    }))
+    const registry = makeRegistry(probe)
+    const { model } = createMockModel([
+      { tools: [{ name: 'p', input: {}, toolCallId: 'call-p' }] },
+      { text: 'done', finishReason: 'stop' }
+    ])
+
+    const toolEvents: string[] = []
+    const results: Array<{ output: unknown; isError?: boolean }> = []
+    await agentLoop(model, registry, [{ role: 'user', content: 'q' }], 'sys', {
+      quiet: true,
+      onToolEvent: (event) => toolEvents.push(`${event.phase}:${event.isError === true}`),
+      onToolResult: (event) => results.push({ output: event.output, isError: event.isError })
+    })
+
+    expect(toolEvents).toEqual(['start:false', 'done:true'])
+    expect(results).toHaveLength(1)
+    expect(results[0]?.isError).toBe(true)
+    expect(results[0]?.output).toContain('probe failed')
+  })
+
   it('单轮多工具调用：每个 tool 都被分发执行', async () => {
     // ToolRegistry 自己的并发锁在 unit/tool-registry.test.ts 测试。
     // 这里只验证 agent loop 把同一轮内的多个 tool-call 都正确分发出去。
