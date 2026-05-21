@@ -271,6 +271,22 @@ describe('terminal layout helpers', () => {
 
     expect(estimateItemRows(item, 20)).toBe(1)
   })
+
+  it('keeps the previous conversation visible after a new prompt starts', () => {
+    const items = hideCompletedTurnTools([
+      transcriptItem('1', 'message', 'user', '再看看skills'),
+      transcriptItem('2', 'tool', 'tool', 'Input: {"pattern":"**/SKILL.md"}\nResult: ok'),
+      transcriptItem('3', 'message', 'assistant', '上一轮最终回答'),
+      transcriptItem('4', 'message', 'user', '读取 src/agents/types.ts 看结构')
+    ])
+
+    const visible = selectVisibleItems(items, 8, 80)
+    expect(visible.map((item) => item.text)).toEqual([
+      '再看看skills',
+      '上一轮最终回答',
+      '读取 src/agents/types.ts 看结构'
+    ])
+  })
 })
 
 function transcriptItem(
