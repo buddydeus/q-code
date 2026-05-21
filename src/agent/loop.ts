@@ -29,7 +29,7 @@ const MAX_RETRIES = 3
 const DEFAULT_TOKEN_BUDGET = 256000
 const DEFAULT_MAX_OUTPUT_TOKENS = 8000
 const DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS = 64000
-const TOOL_STEP_IDLE_TIMEOUT_MS = 250
+const DEFAULT_TOOL_STEP_IDLE_TIMEOUT_MS = Number(process.env.TOOL_STEP_IDLE_TIMEOUT_MS?.trim() || 5000)
 const STREAM_IDLE = Symbol('stream-idle')
 
 export interface AgentLoopResult {
@@ -84,6 +84,7 @@ export interface AgentLoopOptions {
   hooks?: HookRunner
   agent?: HookAgentContext
   quiet?: boolean
+  toolStepIdleTimeoutMs?: number
   /**
    * Set when the loop is running inside a named teammate (Agent Teams).
    * Forwarded to every tool execution so SendMessage can resolve the
@@ -127,6 +128,7 @@ export async function agentLoop(
     options.maxSteps ?? (Number(process.env.MAX_STEPS?.trim() || '') || DEFAULT_MAX_STEPS)
   const escalatedMaxOutputTokens =
     options.escalatedMaxOutputTokens ?? DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS
+  const toolStepIdleTimeoutMs = normalizeIdleTimeout(options.toolStepIdleTimeoutMs)
   const newMessages: ModelMessage[] = []
   const taskStart = Date.now()
   const quiet = options.quiet === true
@@ -211,7 +213,11 @@ export async function agentLoop(
           throwIfAborted(options.abortSignal)
           const nextPromise = stream.next()
           nextPromise.catch(() => {})
-          const next = await waitForStreamPart(nextPromise, shouldCloseToolStep(outstandingToolCallIds, hasToolCall))
+          const next = await waitForStreamPart(
+            nextPromise,
+            shouldCloseToolStep(outstandingToolCallIds, hasToolCall),
+            toolStepIdleTimeoutMs
+          )
           if (next === STREAM_IDLE) {
             stepAbortController.abort(new Error('tool step completed without provider finish'))
             await stream.return?.().catch(() => undefined)
@@ -474,12 +480,13 @@ function shouldCloseToolStep(
 
 async function waitForStreamPart<T>(
   nextPromise: Promise<IteratorResult<T>>,
-  shouldUseIdleTimeout: boolean
+  shouldUseIdleTimeout: boolean,
+  idleTimeoutMs: number
 ): Promise<IteratorResult<T> | typeof STREAM_IDLE> {
   if (!shouldUseIdleTimeout) return nextPromise
   let timer: NodeJS.Timeout | undefined
   const idlePromise = new Promise<typeof STREAM_IDLE>((resolve) => {
-    timer = setTimeout(() => resolve(STREAM_IDLE), TOOL_STEP_IDLE_TIMEOUT_MS)
+    timer = setTimeout(() => resolve(STREAM_IDLE), idleTimeoutMs)
   })
 
   try {
@@ -487,6 +494,12 @@ async function waitForStreamPart<T>(
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+function normalizeIdleTimeout(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_TOOL_STEP_IDLE_TIMEOUT_MS
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_TOOL_STEP_IDLE_TIMEOUT_MS
+  return value
 }
 
 function buildStepMessages(

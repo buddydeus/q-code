@@ -9,9 +9,10 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
+import { resolveToolPath } from './path-policy'
 
 const DEFAULT_READ_MAX_LINES = 500
 const MAX_READ_MAX_LINES = 2000
@@ -78,7 +79,7 @@ export const readFileTool: ToolDefinition = {
 }
 
 async function readFileRange(input: ReadFileInput, context: ToolExecutionContext): Promise<string> {
-  const resolved = resolve(context.cwd, input.path)
+  const resolved = resolveToolPath(context.cwd, input.path)
   if (!existsSync(resolved)) return `文件不存在: ${input.path}`
 
   const stat = statSync(resolved)
@@ -357,8 +358,12 @@ export const writeFileTool: ToolDefinition = {
   resultShape: 'mutation',
   jitHint: '写入前确认目标路径和完整内容',
   execute: async ({ path, content }: { path: string; content: string }, context: ToolExecutionContext) => {
-    writeFileSync(resolve(context.cwd, path), content, 'utf-8')
-    return `已写入 ${content.length} 字符到 ${path}`
+    try {
+      writeFileSync(resolveToolPath(context.cwd, path), content, 'utf-8')
+      return `已写入 ${content.length} 字符到 ${path}`
+    } catch (err) {
+      return `写入失败: ${err instanceof Error ? err.message : err}`
+    }
   }
 }
 
@@ -379,13 +384,17 @@ export const listDirectoryTool: ToolDefinition = {
   resultShape: 'paths',
   jitHint: '用于先看目录轮廓',
   execute: async ({ path = '.' }: { path?: string }, context: ToolExecutionContext) => {
-    const resolved = resolve(context.cwd, path)
-    return readdirSync(resolved)
-      .map((name) => {
-        const stat = statSync(join(resolved, name))
-        return `${stat.isDirectory() ? '[DIR]' : '[FILE]'} ${name}`
-      })
-      .join('\n')
+    try {
+      const resolved = resolveToolPath(context.cwd, path)
+      return readdirSync(resolved)
+        .map((name) => {
+          const stat = statSync(join(resolved, name))
+          return `${stat.isDirectory() ? '[DIR]' : '[FILE]'} ${name}`
+        })
+        .join('\n')
+    } catch (err) {
+      return `列出目录失败: ${err instanceof Error ? err.message : err}`
+    }
   }
 }
 
@@ -409,7 +418,12 @@ export const editFileTool: ToolDefinition = {
   resultShape: 'mutation',
   jitHint: '修改前先 read_file 获取精确上下文',
   execute: async ({ path, old_string, new_string }, context: ToolExecutionContext) => {
-    const resolved = resolve(context.cwd, path)
+    let resolved: string
+    try {
+      resolved = resolveToolPath(context.cwd, path)
+    } catch (err) {
+      return `编辑失败: ${err instanceof Error ? err.message : err}`
+    }
     if (!existsSync(resolved)) return `文件不存在: ${path}`
 
     const content = readFileSync(resolved, 'utf-8')

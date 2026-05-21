@@ -149,11 +149,73 @@ describe('agentLoop 集成（mock model + mock tools）', () => {
     const text: string[] = []
     await agentLoop(model, registry, [{ role: 'user', content: '分析一下代码结构' }], 'sys', {
       quiet: true,
+      toolStepIdleTimeoutMs: 20,
       onText: (delta) => text.push(delta)
     })
 
     expect(callCount).toBe(2)
     expect(text.join('')).toContain('代码结构分析完成')
+  })
+
+  it('工具结果后延迟到达的文本和 finish 不会被过早 idle timeout 截断', async () => {
+    const probe = makeMockTool('task_list', () => 'Tasks: 当前没有任务。')
+    const registry = makeRegistry(probe)
+    let callCount = 0
+    const model = new MockLanguageModelV3({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        callCount++
+        return {
+          stream: new ReadableStream({
+            async start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] })
+              controller.enqueue({ type: 'response-metadata', id: 'mock-1', modelId: 'mock-model' })
+              controller.enqueue({
+                type: 'tool-input-start',
+                id: 'call-task-list',
+                toolName: 'task_list'
+              })
+              controller.enqueue({
+                type: 'tool-input-delta',
+                id: 'call-task-list',
+                delta: '{}'
+              })
+              controller.enqueue({ type: 'tool-input-end', id: 'call-task-list' })
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId: 'call-task-list',
+                toolName: 'task_list',
+                input: '{}'
+              })
+              await new Promise((resolve) => setTimeout(resolve, 80))
+              controller.enqueue({ type: 'text-start', id: 'text-after-tool' })
+              controller.enqueue({ type: 'text-delta', id: 'text-after-tool', delta: '延迟文本' })
+              controller.enqueue({ type: 'text-end', id: 'text-after-tool' })
+              controller.enqueue({
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+              } as any)
+              controller.close()
+            }
+          }),
+          request: { body: '' },
+          response: { headers: {} }
+        }
+      }
+    })
+
+    const text: string[] = []
+    await agentLoop(model, registry, [{ role: 'user', content: '分析一下代码结构' }], 'sys', {
+      quiet: true,
+      toolStepIdleTimeoutMs: 200,
+      stopAfterToolNames: ['task_list'],
+      onText: (delta) => text.push(delta)
+    })
+
+    expect(callCount).toBe(1)
+    expect(text.join('')).toContain('延迟文本')
   })
 
   it('stopAfterToolNames：相同 tool-call 重复时由检测器 + stopAfter 共同保证不卡死', async () => {

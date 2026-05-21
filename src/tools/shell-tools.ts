@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
 
 export const bashTool: ToolDefinition = {
@@ -19,25 +19,45 @@ export const bashTool: ToolDefinition = {
   jitHint: '优先运行聚焦命令，避免一次性输出海量日志',
   maxResultChars: 3000,
   execute: async ({ command }: { command: string }, context: ToolExecutionContext) => {
-    try {
-      execSync('echo test', { cwd: context.cwd, stdio: 'ignore' })
-    } catch {
-      return `[bash 不可用] 当前环境（WebContainer）不支持 shell 命令。本地终端运行 pnpm start 可使用 bash 工具。`
-    }
+    return runShellCommand(command, context)
+  }
+}
 
-    try {
-      const output = execSync(command, {
+function runShellCommand(command: string, context: ToolExecutionContext): Promise<string> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      'bash',
+      ['-lc', command],
+      {
         cwd: context.cwd,
         encoding: 'utf-8',
         timeout: 10000,
         maxBuffer: 1024 * 1024,
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      return output || '(命令执行成功，无输出)'
-    } catch (err: any) {
-      const stderr = err.stderr || ''
-      const stdout = err.stdout || ''
-      return `命令执行失败 (exit ${err.status || 1}):\n${stderr || stdout || err.message}`
-    }
-  }
+        signal: context.abortSignal
+      },
+      (error, stdout, stderr) => {
+        if (!error) {
+          resolve(stdout || '(命令执行成功，无输出)')
+          return
+        }
+
+        const message = error.message.includes('ENOENT')
+          ? '[bash 不可用] 当前环境不支持 shell 命令。本地终端运行 pnpm start 可使用 bash 工具。'
+          : `命令执行失败 (exit ${getExitCode(error)}):\n${stderr || stdout || error.message}`
+        resolve(message)
+      }
+    )
+
+    context.abortSignal?.addEventListener(
+      'abort',
+      () => {
+        child.kill()
+      },
+      { once: true }
+    )
+  })
+}
+
+function getExitCode(error: Error & { code?: string | number | null }): string | number {
+  return error.code ?? 1
 }

@@ -3,6 +3,8 @@ import { extname, join, relative, resolve } from 'node:path'
 import { createServer, type Server } from 'node:http'
 import fg from 'fast-glob'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
+import { resolveToolPath, isInsideDirectory } from './path-policy'
+import { safeFetchUrl } from './safe-fetch'
 
 export const fetchUrlTool: ToolDefinition = {
   name: 'fetch_url',
@@ -23,7 +25,7 @@ export const fetchUrlTool: ToolDefinition = {
   maxResultChars: 1500, // 网页通常很长，截断兜底
   execute: async ({ url }: { url: string }) => {
     try {
-      const res = await fetch(url, {
+      const res = await safeFetchUrl(url, {
         headers: { 'User-Agent': 'Mozilla/5.0 SuperAgent' },
         signal: AbortSignal.timeout(10000)
       })
@@ -65,8 +67,14 @@ export const globTool: ToolDefinition = {
     { pattern, path = '.' }: { pattern: string; path?: string },
     context: ToolExecutionContext
   ) => {
+    let cwd: string
+    try {
+      cwd = resolveToolPath(context.cwd, path)
+    } catch (err) {
+      return `路径错误: ${err instanceof Error ? err.message : err}`
+    }
     const results = await fg(pattern, {
-      cwd: resolve(context.cwd, path),
+      cwd,
       ignore: ['node_modules/**', '.git/**'],
       dot: false,
       onlyFiles: true,
@@ -99,7 +107,12 @@ export const grepTool: ToolDefinition = {
     { pattern, path = '.' }: { pattern: string; path?: string },
     context: ToolExecutionContext
   ) => {
-    const baseDir = resolve(context.cwd, path)
+    let baseDir: string
+    try {
+      baseDir = resolveToolPath(context.cwd, path)
+    } catch (err) {
+      return `路径错误: ${err instanceof Error ? err.message : err}`
+    }
     const regex = new RegExp(pattern, 'i')
     const matches: string[] = []
     const SKIP = new Set(['node_modules', '.git', 'dist'])
@@ -196,12 +209,17 @@ export const startPreviewTool: ToolDefinition = {
     if (!existsSync(root)) return '错误：app/ 目录不存在'
 
     previewServer = createServer((req, res) => {
-      const urlPath = (req.url?.split('?')[0] || '/').replace(/\/$/, '/index.html')
-      const filePath = join(root, urlPath === '/' ? '/index.html' : urlPath)
       try {
-        if (!filePath.startsWith(root)) {
+        const filePath = resolvePreviewFilePath(root, req.url)
+        if (!filePath) {
           res.writeHead(403)
           res.end()
+          return
+        }
+        const stat = statSync(filePath)
+        if (!stat.isFile()) {
+          res.writeHead(404)
+          res.end('Not Found')
           return
         }
         res.writeHead(200, {
@@ -221,4 +239,19 @@ export const startPreviewTool: ToolDefinition = {
       })
     })
   }
+}
+
+export function resolvePreviewFilePath(root: string, rawUrl: string | undefined): string | null {
+  const rawPath = rawUrl?.split('?')[0] || '/'
+  let decodedPath: string
+  try {
+    decodedPath = decodeURIComponent(rawPath)
+  } catch {
+    return null
+  }
+
+  const normalizedPath = decodedPath.replace(/\/$/, '/index.html')
+  const relativePath = normalizedPath === '/' ? 'index.html' : `.${normalizedPath}`
+  const filePath = resolve(root, relativePath)
+  return isInsideDirectory(root, filePath) ? filePath : null
 }

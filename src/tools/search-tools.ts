@@ -1,5 +1,6 @@
 import type { ToolDefinition } from './registry'
 import TurndownService from 'turndown'
+import { safeFetchUrl } from './safe-fetch'
 
 // ── Tavily（自动挡）──────────────────────────────
 
@@ -133,7 +134,7 @@ export const webFetchTool: ToolDefinition = {
   maxResultChars: 3000,
   execute: async ({ url }: { url: string }) => {
     try {
-      const res = await fetch(url, {
+      const res = await safeFetchUrl(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; SuperAgent/1.0)',
           Accept: 'text/html,application/xhtml+xml'
