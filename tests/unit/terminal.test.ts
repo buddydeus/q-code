@@ -53,6 +53,26 @@ describe('terminal state reducer', () => {
     expect(state.activeToolIds).toEqual({})
   })
 
+  it('keeps thinking status after a tool result while the turn continues', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'tool_call',
+      name: 'task_list',
+      toolCallId: 'call-1',
+      input: {}
+    })
+    state = terminalReducer(state, {
+      type: 'tool_result',
+      name: 'task_list',
+      toolCallId: 'call-1',
+      output: 'Tasks: 当前没有任务。'
+    })
+
+    expect(state.status).toBe('thinking')
+    expect(state.statusText).toBe('Thinking')
+    expect(state.activeToolIds).toEqual({})
+  })
+
   it('keeps normal context usage out of transcript noise', () => {
     let state = createInitialTerminalState()
     state = terminalReducer(state, {

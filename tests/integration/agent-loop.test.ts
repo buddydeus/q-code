@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelMessage } from 'ai'
+import { MockLanguageModelV3, simulateReadableStream } from 'ai/test'
 import { agentLoop } from '../../src/agent/loop'
 import { ToolRegistry } from '../../src/tools/registry'
 import { createMockModel } from '../_helpers/mock-model'
@@ -65,6 +66,94 @@ describe('agentLoop 集成（mock model + mock tools）', () => {
     // tool 结果必须回到 messages（role: tool） + 终态 assistant 消息
     const toolMsgs = result.messages.filter((m) => m.role === 'tool')
     expect(toolMsgs.length).toBeGreaterThan(0)
+  })
+
+  it('工具调用轮结束后会继续下一步', async () => {
+    const probe = makeMockTool('task_list', () => 'Tasks: 当前没有任务。')
+    const registry = makeRegistry(probe)
+    const { model, callCount } = createMockModel([
+      { tools: [{ name: 'task_list', input: {}, toolCallId: 'call-task-list' }] },
+      { text: '代码结构分析完成。', finishReason: 'stop' }
+    ])
+
+    const text: string[] = []
+    await agentLoop(model, registry, [{ role: 'user', content: '分析一下代码结构' }], 'sys', {
+      quiet: true,
+      onText: (delta) => text.push(delta)
+    })
+
+    expect(callCount()).toBe(2)
+    expect(text.join('')).toContain('代码结构分析完成')
+  })
+
+  it('provider 在工具结果后不发送 finish 时也会收束本步并继续', async () => {
+    const probe = makeMockTool('task_list', () => 'Tasks: 当前没有任务。')
+    const registry = makeRegistry(probe)
+    let callCount = 0
+    const model = new MockLanguageModelV3({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        callCount++
+        if (callCount === 1) {
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] })
+                controller.enqueue({ type: 'response-metadata', id: 'mock-1', modelId: 'mock-model' })
+                controller.enqueue({
+                  type: 'tool-input-start',
+                  id: 'call-task-list',
+                  toolName: 'task_list'
+                })
+                controller.enqueue({
+                  type: 'tool-input-delta',
+                  id: 'call-task-list',
+                  delta: '{}'
+                })
+                controller.enqueue({ type: 'tool-input-end', id: 'call-task-list' })
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallId: 'call-task-list',
+                  toolName: 'task_list',
+                  input: '{}'
+                })
+              }
+            }),
+            request: { body: '' },
+            response: { headers: {} }
+          }
+        }
+
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'response-metadata', id: 'mock-2', modelId: 'mock-model' },
+              { type: 'text-start', id: 'text-2' },
+              { type: 'text-delta', id: 'text-2', delta: '代码结构分析完成。' },
+              { type: 'text-end', id: 'text-2' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+              }
+            ] as any[]
+          }),
+          request: { body: '' },
+          response: { headers: {} }
+        }
+      }
+    })
+
+    const text: string[] = []
+    await agentLoop(model, registry, [{ role: 'user', content: '分析一下代码结构' }], 'sys', {
+      quiet: true,
+      onText: (delta) => text.push(delta)
+    })
+
+    expect(callCount).toBe(2)
+    expect(text.join('')).toContain('代码结构分析完成')
   })
 
   it('stopAfterToolNames：相同 tool-call 重复时由检测器 + stopAfter 共同保证不卡死', async () => {

@@ -28,6 +28,8 @@ const MAX_RETRIES = 3
 const DEFAULT_TOKEN_BUDGET = 256000
 const DEFAULT_MAX_OUTPUT_TOKENS = 8000
 const DEFAULT_ESCALATED_MAX_OUTPUT_TOKENS = 64000
+const TOOL_STEP_IDLE_TIMEOUT_MS = 250
+const STREAM_IDLE = Symbol('stream-idle')
 
 export interface AgentLoopResult {
   messages: ModelMessage[]
@@ -85,6 +87,25 @@ export interface AgentLoopOptions {
   teammateIdentity?: TeammateIdentity
 }
 
+interface ToolCallMessagePart {
+  type: 'tool-call'
+  toolCallId: string
+  toolName: string
+  input: unknown
+}
+
+interface ToolResultMessagePart {
+  type: 'tool-result'
+  toolCallId: string
+  toolName: string
+  output: ToolResultOutput
+}
+
+type ToolResultOutput =
+  | { type: 'text'; value: string }
+  | { type: 'json'; value: unknown }
+  | { type: 'error-text'; value: string }
+
 export async function agentLoop(
   model: any,
   registry: ToolRegistry,
@@ -131,7 +152,7 @@ export async function agentLoop(
     let stopAfterStepReason: string | null = null
     let lastToolCall: { name: string; input: unknown; toolCallId?: string } | null = null
     const toolCallsById = new Map<string, { name: string; input: unknown }>()
-    let stepResponse: Awaited<ReturnType<typeof streamText>['response']>
+    let stepMessages: ModelMessage[] = []
     let stepUsage: LanguageModelUsage | undefined
     let stepFinishReason: string | undefined
     let discardedUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
@@ -153,24 +174,44 @@ export async function agentLoop(
         stopAfterStepReason = null
         lastToolCall = null
         toolCallsById.clear()
+        stepMessages = []
+        stepUsage = undefined
+        stepFinishReason = undefined
         requestMessageCount = messages.length
         requestToolSchemaTokens = registry.countTokenEstimate().active
+        const stepAbortController = new AbortController()
+        const abortSignal = mergeAbortSignals(options.abortSignal, stepAbortController.signal)
+        const toolCallParts: ToolCallMessagePart[] = []
+        const toolResultParts: ToolResultMessagePart[] = []
+        const outstandingToolCallIds = new Set<string>()
         const result = streamText({
           model,
           system,
           tools: registry.toAISDKFormat({
-            abortSignal: options.abortSignal,
+            abortSignal,
             ...(options.teammateIdentity ? { teammateIdentity: options.teammateIdentity } : {})
           }),
           messages,
           maxOutputTokens: outputTokenLimit,
           maxRetries: 0,
-          ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+          ...(abortSignal ? { abortSignal } : {}),
           onError: () => {}
         })
 
-        for await (const part of result.fullStream) {
+        const stream = result.fullStream[Symbol.asyncIterator]()
+        while (true) {
           throwIfAborted(options.abortSignal)
+          const nextPromise = stream.next()
+          nextPromise.catch(() => {})
+          const next = await waitForStreamPart(nextPromise, shouldCloseToolStep(outstandingToolCallIds, hasToolCall))
+          if (next === STREAM_IDLE) {
+            stepAbortController.abort(new Error('tool step completed without provider finish'))
+            await stream.return?.().catch(() => undefined)
+            break
+          }
+          if (next.done) break
+
+          const part = next.value
           switch (part.type) {
             case 'text-delta':
               if (!firstTokenAt) firstTokenAt = Date.now()
@@ -187,6 +228,13 @@ export async function agentLoop(
                 input: part.input,
                 toolCallId: part.toolCallId
               }
+              toolCallParts.push({
+                type: 'tool-call',
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                input: part.input
+              })
+              outstandingToolCallIds.add(part.toolCallId)
               toolCallsById.set(part.toolCallId, { name: part.toolName, input: part.input })
               if (!quiet) console.log(`  ${fmtToolCall(part.toolName, part.input)}`)
               options.onToolEvent?.({
@@ -219,6 +267,13 @@ export async function agentLoop(
               {
                 const matched = toolCallsById.get(part.toolCallId) ?? lastToolCall
                 if (matched) {
+                  outstandingToolCallIds.delete(part.toolCallId)
+                  toolResultParts.push({
+                    type: 'tool-result',
+                    toolCallId: part.toolCallId,
+                    toolName: matched.name,
+                    output: toToolResultOutput(part.output)
+                  })
                   recordResult(matched.name, matched.input, part.output)
                   options.onToolEvent?.({
                     phase: 'done',
@@ -242,6 +297,13 @@ export async function agentLoop(
 
             case 'tool-error':
               if (!quiet) console.log(`  ${fmtToolResult(part.error)}`)
+              outstandingToolCallIds.delete(part.toolCallId)
+              toolResultParts.push({
+                type: 'tool-result',
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                output: { type: 'error-text', value: formatUnknownError(part.error) }
+              })
               options.onToolEvent?.({
                 phase: 'done',
                 name: part.toolName,
@@ -250,12 +312,23 @@ export async function agentLoop(
                 isError: true
               })
               break
+
+            case 'finish-step':
+              stepUsage = part.usage
+              stepFinishReason = part.finishReason
+              break
+
+            case 'finish':
+              stepUsage = stepUsage ?? part.totalUsage
+              stepFinishReason = stepFinishReason ?? part.finishReason
+              break
+
+            case 'error':
+              throw part.error
           }
         }
 
-        stepResponse = await result.response
-        stepUsage = await result.usage
-        stepFinishReason = await result.finishReason
+        stepMessages = buildStepMessages(fullText, toolCallParts, toolResultParts)
         if (
           stepFinishReason === 'length' &&
           !hasToolCall &&
@@ -289,8 +362,8 @@ export async function agentLoop(
       break
     }
 
-    messages.push(...stepResponse!.messages)
-    newMessages.push(...stepResponse!.messages)
+    messages.push(...stepMessages)
+    newMessages.push(...stepMessages)
 
     // 只把执行 token 作为本轮成本/死循环硬保护；主显示使用当前上下文占用。
     const anchorUsage = usageFromLanguageModelUsage(stepUsage)
@@ -359,6 +432,88 @@ function createAbortError(signal: AbortSignal): Error {
   const error = new Error(message)
   error.name = 'AbortError'
   return error
+}
+
+function mergeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined)
+  if (activeSignals.length === 0) return undefined
+  if (activeSignals.length === 1) return activeSignals[0]
+
+  const controller = new AbortController()
+  const abort = (signal: AbortSignal): void => {
+    if (controller.signal.aborted) return
+    controller.abort(signal.reason)
+  }
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abort(signal)
+      break
+    }
+    signal.addEventListener('abort', () => abort(signal), { once: true })
+  }
+
+  return controller.signal
+}
+
+function shouldCloseToolStep(
+  outstandingToolCallIds: Set<string>,
+  hasToolCall: boolean
+): boolean {
+  return hasToolCall && outstandingToolCallIds.size === 0
+}
+
+async function waitForStreamPart<T>(
+  nextPromise: Promise<IteratorResult<T>>,
+  shouldUseIdleTimeout: boolean
+): Promise<IteratorResult<T> | typeof STREAM_IDLE> {
+  if (!shouldUseIdleTimeout) return nextPromise
+  let timer: NodeJS.Timeout | undefined
+  const idlePromise = new Promise<typeof STREAM_IDLE>((resolve) => {
+    timer = setTimeout(() => resolve(STREAM_IDLE), TOOL_STEP_IDLE_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([nextPromise, idlePromise])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function buildStepMessages(
+  text: string,
+  toolCallParts: ToolCallMessagePart[],
+  toolResultParts: ToolResultMessagePart[]
+): ModelMessage[] {
+  const messages: ModelMessage[] = []
+  const assistantContent: Array<{ type: 'text'; text: string } | ToolCallMessagePart> = []
+  if (text) assistantContent.push({ type: 'text', text })
+  assistantContent.push(...toolCallParts)
+
+  if (assistantContent.length > 0) {
+    messages.push({
+      role: 'assistant',
+      content: assistantContent
+    } as ModelMessage)
+  }
+
+  if (toolResultParts.length > 0) {
+    messages.push({
+      role: 'tool',
+      content: toolResultParts
+    } as ModelMessage)
+  }
+
+  return messages
+}
+
+function toToolResultOutput(value: unknown): ToolResultOutput {
+  if (typeof value === 'string') return { type: 'text', value }
+  return { type: 'json', value: value ?? null }
+}
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function normalizePreflightResult(

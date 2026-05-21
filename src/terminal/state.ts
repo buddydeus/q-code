@@ -143,8 +143,9 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
       if (toolItemId) {
         return {
           ...state,
-          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'idle',
-          statusText: Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Ready',
+          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'thinking',
+          statusText:
+            Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Thinking',
           activeToolIds: nextActiveToolIds,
           transcript: state.transcript.map((item) =>
             item.id === toolItemId
@@ -161,8 +162,9 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
       return appendItem(
         {
           ...state,
-          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'idle',
-          statusText: Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Ready',
+          status: Object.keys(nextActiveToolIds).length > 0 ? 'running_tool' : 'thinking',
+          statusText:
+            Object.keys(nextActiveToolIds).length > 0 ? state.statusText : 'Thinking',
           activeToolIds: nextActiveToolIds
         },
         {
