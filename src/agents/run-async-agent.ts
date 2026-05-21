@@ -13,6 +13,7 @@ import { appendTaskOutput, previewToolResult } from './task-output'
 import { cleanupWorktreeIfClean, type WorktreeInfo } from './worktree'
 import type { AgentDefinition } from './types'
 import type { TeammateIdentity, ToolDefinition } from '../tools/registry'
+import type { HookRunner } from '../hooks'
 
 export interface RunAsyncAgentLifecycleParams {
   entry: AsyncAgentEntry
@@ -25,6 +26,8 @@ export interface RunAsyncAgentLifecycleParams {
   tokenBudget?: number
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
+  sessionId?: string
+  hooks?: HookRunner
   worktreeInfo?: WorktreeInfo
   /**
    * Present when this async run is a named teammate in an Agent Teams
@@ -57,6 +60,8 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
       tokenBudget: params.tokenBudget,
       maxOutputTokens: params.maxOutputTokens,
       escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
+      sessionId: params.sessionId,
+      hooks: params.hooks,
       ...(params.worktreeInfo ? { cwdOverride: params.worktreeInfo.worktreePath } : {}),
       ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
       abortSignal: entry.abortController.signal,

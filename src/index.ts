@@ -107,6 +107,18 @@ import {
   type SlashCommand,
   type SlashCommandInput
 } from './slash'
+import {
+  DefaultHookRunner,
+  createHookEvent,
+  loadHookConfigs,
+  type HookRunner
+} from './hooks'
+import {
+  formatInfraStatus,
+  formatInfraSyncResult,
+  syncInfraConfig,
+  type InfraSyncResult
+} from './infra'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -266,7 +278,33 @@ async function main() {
   }
 
   if (!dumpSystemPrompt && !useTui) console.log(fmtBanner('1.0.0'))
-  const mcpBootstrapPromise = connectMCP({ quiet: dumpSystemPrompt || useTui, cwd: process.cwd() })
+  const isContinue = process.argv.includes('--continue')
+  const requestedSessionId = getStringArg('--session')
+  const store = dumpSystemPrompt
+    ? null
+    : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
+  const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
+  const runtimeCwd = store?.cwd ?? process.cwd()
+  let lastInfraSync: InfraSyncResult | undefined
+  if (!dumpSystemPrompt) {
+    lastInfraSync = await syncInfraConfig(runtimeCwd).catch((error) => ({
+      status: 'failed' as const,
+      state: {
+        clientId: 'unknown',
+        enabled: true,
+        status: 'failed' as const,
+        lastSyncAt: new Date().toISOString(),
+        lastError: formatErrorMessage(error)
+      },
+      message: `企业配置同步失败: ${formatErrorMessage(error)}`,
+      usedCache: false,
+      wroteConfig: false
+    }))
+    if (!useTui || lastInfraSync.status !== 'disabled') {
+      print(`  [Infra] ${lastInfraSync.message}`)
+    }
+  }
+  const mcpBootstrapPromise = connectMCP({ quiet: dumpSystemPrompt || useTui, cwd: runtimeCwd })
   if (dumpSystemPrompt) {
     await mcpBootstrapPromise
   } else {
@@ -286,12 +324,16 @@ async function main() {
       if (useTui) emitTerminal({ type: 'error', text: `[MCP] 启动失败: ${formatErrorMessage(error)}` })
     })
   }
-  const isContinue = process.argv.includes('--continue')
-  const requestedSessionId = getStringArg('--session')
-  const store = dumpSystemPrompt
-    ? null
-    : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
-  const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
+  const hooksBootstrap = await loadHookConfigs(store?.cwd ?? process.cwd()).catch((error) => ({
+    hooks: [],
+    errors: [`[Hooks] 启动失败: ${formatErrorMessage(error)}`],
+    userSettingsPath: '',
+    projectSettingsPath: ''
+  }))
+  const hooks: HookRunner = new DefaultHookRunner(hooksBootstrap.hooks)
+  if (!dumpSystemPrompt) {
+    for (const error of hooksBootstrap.errors) print(`  [Hooks config] ${error}`)
+  }
   const skillsBootstrap = await bootstrapSkills(store?.cwd ?? process.cwd()).catch((error) => {
     if (!dumpSystemPrompt) print(`  [Skills] 启动失败: ${formatErrorMessage(error)}`)
     return { skillCount: 0, conditionalCount: 0, warnings: [] }
@@ -406,7 +448,8 @@ async function main() {
       getMaxOutputTokens: () => defaultMaxOutputTokens,
       getEscalatedMaxOutputTokens: () => escalatedMaxOutputTokens,
       getSessionId: () => sessionId,
-      getCwd: () => activeStore.cwd
+      getCwd: () => activeStore.cwd,
+      getHooks: () => hooks
     })
   )
 
@@ -668,6 +711,7 @@ async function main() {
   print(
     `SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`
   )
+  print(`Hooks: ${hooks.list().length} 个已加载`)
   print(
     `任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`
   )
@@ -681,9 +725,27 @@ async function main() {
   const rl = useTui ? null : createInterface({ input: process.stdin, output: process.stdout })
   let closed = false
 
+  await emitHook(
+    createHookEvent(
+      { sessionId, cwd: activeStore.cwd },
+      {
+        event: 'session_start'
+      }
+    )
+  )
+
   async function closeCli(): Promise<void> {
     if (closed) return
     closed = true
+    await emitHook(
+      createHookEvent(
+        { sessionId, cwd: activeStore.cwd },
+        {
+          event: 'session_end',
+          reason: 'closed'
+        }
+      )
+    )
     await closeMcpSubsystem()
     rl?.close()
     terminal?.instance.unmount()
@@ -745,6 +807,22 @@ async function main() {
     injectPendingTaskNotifications()
     await injectPlanModeMessages()
 
+    const promptHook = await hooks.run(
+      createHookEvent(
+        { sessionId, cwd: activeStore.cwd },
+        {
+          event: 'user_prompt_submit',
+          prompt: userQuery
+        }
+      )
+    )
+    reportHookWarnings(promptHook.warnings)
+    if (promptHook.blocked) {
+      print(`\n  [Hooks] 输入已被阻止: ${promptHook.reason ?? '未提供原因'}`)
+      setStatus('Ready')
+      return
+    }
+
     messages.push(...userMessages)
     activeStore.appendAll(userMessages)
     const turnSystem = await buildSystemPrompt(userQuery)
@@ -760,6 +838,9 @@ async function main() {
         maxSteps,
         quiet: useTui,
         abortSignal: turnAbortController.signal,
+        sessionId,
+        hooks,
+        agent: { kind: 'main' },
         stopAfterToolNames: ['exit_plan_mode'],
         preflight: (currentMessages, { step, usageAnchor }) =>
           compactIfNeeded(
@@ -847,12 +928,35 @@ async function main() {
       )
       messages = postTurn.messages
       if (postTurn.stopReason) print(fmtStop(postTurn.stopReason))
+      await emitHook(
+        createHookEvent(
+          { sessionId, cwd: activeStore.cwd },
+          {
+            event: 'stop',
+            reason: postTurn.stopReason ?? 'completed'
+          }
+        )
+      )
       if (pendingPlanApproval) await printPlanApprovalHint()
       setStatus('Ready')
     } finally {
       if (activeTurnAbortController === turnAbortController) {
         activeTurnAbortController = undefined
       }
+    }
+  }
+
+  async function emitHook(event: Parameters<HookRunner['run']>[0]): Promise<void> {
+    const result = await hooks.run(event)
+    reportHookWarnings(result.warnings)
+    if (result.blocked) {
+      print(`\n  [Hooks] ${event.event} 被阻止: ${result.reason ?? '未提供原因'}`)
+    }
+  }
+
+  function reportHookWarnings(warnings: string[]): void {
+    for (const warning of warnings) {
+      print(`\n  [Hooks] ${warning}`)
     }
   }
 
@@ -975,6 +1079,12 @@ async function main() {
       ),
       command('/mcp', '查看 MCP server 和工具', '/mcp [tools|reconnect]', 'Tools', (input) =>
         handleMcpCommand(input.raw)
+      ),
+      command('/infra', '查看或同步企业 AI 基建配置', '/infra [status|sync]', 'Tools', (input) =>
+        handleInfraCommand(input.raw)
+      ),
+      command('/hooks', '查看 hooks 配置和加载状态', '/hooks', 'Tools', (input) =>
+        handleHooksCommand(input.raw)
       ),
       command('/skills', '列出已加载 skills', '/skills', 'Tools', (input) =>
         handleSkillsCommand(input.raw)
@@ -1176,6 +1286,56 @@ async function main() {
     }
 
     print('\n  [MCP] 用法: /mcp、/mcp tools <serverName>、/mcp reconnect <serverName>')
+  }
+
+  async function handleInfraCommand(command: string): Promise<void> {
+    const args = command.slice('/infra'.length).trim().split(/\s+/).filter(Boolean)
+    const subcommand = args[0] ?? 'status'
+
+    if (subcommand === 'status') {
+      print('\n' + (await formatInfraStatus(activeStore.cwd)))
+      return
+    }
+
+    if (subcommand === 'sync') {
+      print('\n  [Infra] 正在同步企业配置...')
+      lastInfraSync = await syncInfraConfig(activeStore.cwd, { force: true })
+      print('\n' + formatInfraSyncResult(lastInfraSync))
+      if (lastInfraSync.wroteConfig) {
+        print('\n  [Infra] 配置已写入。正在刷新 MCP 连接；Skills/Agents 需要重启后完整重载。')
+        await connectMCP({ quiet: true, cwd: activeStore.cwd })
+        print('  [Infra] MCP 已刷新。')
+      }
+      return
+    }
+
+    print('\n  [Infra] 用法: /infra、/infra status、/infra sync')
+  }
+
+  function handleHooksCommand(command: string): void {
+    const arg = command.slice('/hooks'.length).trim()
+    if (arg) {
+      print('\n  [Hooks] 用法: /hooks')
+      return
+    }
+
+    const lines = [hooks.describe()]
+    if (hooksBootstrap.errors.length > 0) {
+      lines.push('', '配置警告:')
+      for (const error of hooksBootstrap.errors) lines.push(`  - ${error}`)
+    }
+    if (hooksBootstrap.userSettingsPath || hooksBootstrap.projectSettingsPath) {
+      lines.push('', '配置位置:')
+      if (hooksBootstrap.userSettingsPath) lines.push(`  用户级: ${hooksBootstrap.userSettingsPath}`)
+      if (hooksBootstrap.projectSettingsPath) {
+        lines.push(`  项目级: ${hooksBootstrap.projectSettingsPath}`)
+      }
+    }
+    lines.push(
+      '',
+      '协议: hook 命令从 stdin 接收 JSON；stdout 可返回 {"action":"continue|warn|block|modify", ...}。'
+    )
+    print('\n' + lines.join('\n'))
   }
 
   function handleSkillsCommand(command: string): void {

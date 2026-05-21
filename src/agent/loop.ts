@@ -2,6 +2,7 @@ import { streamText, type LanguageModelUsage, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection'
 import { isRetryable, calculateDelay, sleep } from './retry'
 import { ToolRegistry, type TeammateIdentity } from '../tools/registry'
+import type { HookAgentContext, HookRunner } from '../hooks'
 import {
   buildUsageAnchor,
   type TokenUsage,
@@ -79,6 +80,9 @@ export interface AgentLoopOptions {
   onToolResult?: (event: AgentToolResultEvent) => void
   stopAfterToolNames?: string[]
   abortSignal?: AbortSignal
+  sessionId?: string
+  hooks?: HookRunner
+  agent?: HookAgentContext
   quiet?: boolean
   /**
    * Set when the loop is running inside a named teammate (Agent Teams).
@@ -190,6 +194,9 @@ export async function agentLoop(
           system,
           tools: registry.toAISDKFormat({
             abortSignal,
+            ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+            ...(options.hooks ? { hooks: options.hooks } : {}),
+            ...(options.agent ? { agent: options.agent } : {}),
             ...(options.teammateIdentity ? { teammateIdentity: options.teammateIdentity } : {})
           }),
           messages,

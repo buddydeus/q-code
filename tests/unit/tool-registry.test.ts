@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ToolRegistry, truncateResult } from '../../src/tools/registry'
 import { makeMockTool, makeRecordingTool } from '../_helpers/mock-tool'
+import { DefaultHookRunner } from '../../src/hooks'
 
 /**
  * ToolRegistry 是工具可见性与并发控制的心脏。测试覆盖：
@@ -222,6 +223,48 @@ describe('ToolRegistry 工具注册表与并发控制', () => {
       expect(typeof result).toBe('string')
       expect((result as string).length).toBeLessThan(2000)
       expect(result).toContain('[省略')
+    })
+
+    it('pre_tool_use hook 可以改写工具输入', async () => {
+      const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
+      const { tool, calls } = makeRecordingTool('probe')
+      const hooks = new DefaultHookRunner([
+        {
+          name: 'rewrite-input',
+          type: 'handler',
+          event: 'pre_tool_use',
+          scope: 'runtime',
+          handler: () => ({ action: 'modify', input: { value: 'rewritten' } })
+        }
+      ])
+      registry.register(tool)
+
+      const tools = registry.toAISDKFormat({ sessionId: 's1', hooks })
+      await tools.probe.execute({ value: 'raw' }, { toolCallId: 'tc1', messages: [] })
+
+      expect(calls[0]?.input).toEqual({ value: 'rewritten' })
+    })
+
+    it('pre_tool_use hook 可以阻断工具执行', async () => {
+      const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
+      const { tool, calls } = makeRecordingTool('probe')
+      const hooks = new DefaultHookRunner([
+        {
+          name: 'deny',
+          type: 'handler',
+          event: 'pre_tool_use',
+          scope: 'runtime',
+          handler: () => ({ action: 'block', reason: 'policy denied' })
+        }
+      ])
+      registry.register(tool)
+
+      const tools = registry.toAISDKFormat({ sessionId: 's1', hooks })
+      const result = await tools.probe.execute({ value: 'raw' }, { toolCallId: 'tc1', messages: [] })
+
+      expect(calls).toHaveLength(0)
+      expect(result).toContain('[hook blocked] probe 未执行')
+      expect(result).toContain('policy denied')
     })
   })
 })

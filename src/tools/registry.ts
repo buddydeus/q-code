@@ -1,5 +1,11 @@
 import { jsonSchema } from 'ai'
 import { fmtLockAcquire } from '../utils/logger'
+import {
+  createPostToolUseEvent,
+  createPreToolUseEvent,
+  type HookAgentContext,
+  type HookRunner
+} from '../hooks'
 
 export type ToolContextCost = 'low' | 'medium' | 'high'
 
@@ -43,6 +49,9 @@ export interface TeammateIdentity {
 export interface ToolExecutionContext {
   cwd: string
   abortSignal?: AbortSignal
+  sessionId?: string
+  hooks?: HookRunner
+  agent?: HookAgentContext
   /**
    * Set when the tool runs inside a named teammate's loop (Agent Teams).
    * Tools like SendMessage use it to resolve the sender's identity;
@@ -294,7 +303,7 @@ export class ToolRegistry {
       result[tool.name] = {
         description: tool.description,
         inputSchema: jsonSchema(tool.parameters as any),
-        execute: async (input: any) => {
+        execute: async (input: any, executionOptions?: unknown) => {
           if (isSafe) {
             await registry.acquireConcurrent()
             if (!registry.quiet) console.log(fmtLockAcquire(tool.name, true))
@@ -303,11 +312,63 @@ export class ToolRegistry {
             if (!registry.quiet) console.log(fmtLockAcquire(tool.name, false))
           }
           try {
-            const raw = await executeFn(input, {
-              cwd: context.cwd ?? registry.cwd,
+            const toolCallId = getExecutionToolCallId(executionOptions)
+            const cwd = context.cwd ?? registry.cwd
+            let effectiveInput = input
+            if (context.hooks && context.sessionId) {
+              const pre = await context.hooks.run(
+                createPreToolUseEvent(
+                  {
+                    sessionId: context.sessionId,
+                    cwd,
+                    agent: context.agent ?? hookAgentFromTeammate(context.teammateIdentity)
+                  },
+                  {
+                    name: tool.name,
+                    input,
+                    ...(toolCallId ? { toolCallId } : {})
+                  }
+                ),
+                { signal: context.abortSignal }
+              )
+              if (pre.blocked) {
+                return formatHookBlockedResult(tool.name, pre.reason)
+              }
+              if (pre.input !== undefined) {
+                effectiveInput = pre.input
+              }
+            }
+
+            const toolContext: ToolExecutionContext = {
+              cwd,
               ...(context.abortSignal ? { abortSignal: context.abortSignal } : {}),
+              ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+              ...(context.hooks ? { hooks: context.hooks } : {}),
+              ...(context.agent ? { agent: context.agent } : {}),
               ...(context.teammateIdentity ? { teammateIdentity: context.teammateIdentity } : {})
-            })
+            }
+            const raw = await executeFn(effectiveInput, toolContext)
+            if (context.hooks && context.sessionId) {
+              const post = await context.hooks.run(
+                createPostToolUseEvent(
+                  {
+                    sessionId: context.sessionId,
+                    cwd,
+                    agent: context.agent ?? hookAgentFromTeammate(context.teammateIdentity)
+                  },
+                  {
+                    name: tool.name,
+                    input: effectiveInput,
+                    output: raw,
+                    ...(toolCallId ? { toolCallId } : {})
+                  }
+                ),
+                { signal: context.abortSignal }
+              )
+              if (post.blocked) {
+                return formatHookBlockedResult(tool.name, post.reason)
+              }
+            }
             const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
             return truncateResult(text, maxChars)
           } finally {
@@ -359,4 +420,26 @@ function isToolVisibleInMode(tool: ToolDefinition, mode: ToolVisibilityMode): bo
   }
 
   return tool.name !== 'plan_write' && tool.name !== 'exit_plan_mode'
+}
+
+function getExecutionToolCallId(executionOptions: unknown): string | undefined {
+  if (!executionOptions || typeof executionOptions !== 'object') return undefined
+  const value = (executionOptions as Record<string, unknown>).toolCallId
+  return typeof value === 'string' ? value : undefined
+}
+
+function hookAgentFromTeammate(teammate: TeammateIdentity | undefined): HookAgentContext {
+  if (!teammate) return { kind: 'main' }
+  return {
+    kind: 'teammate',
+    agentName: teammate.agentName,
+    teamName: teammate.teamName
+  }
+}
+
+function formatHookBlockedResult(toolName: string, reason: string | undefined): string {
+  return [
+    `[hook blocked] ${toolName} 未执行。`,
+    `reason: ${reason || 'Hook blocked this tool call.'}`
+  ].join('\n')
 }

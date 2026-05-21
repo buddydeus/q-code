@@ -10,6 +10,11 @@ import {
   type PromptContext
 } from '../context/prompt-builder'
 import type { TokenUsage } from '../context/token-budget'
+import {
+  createHookEvent,
+  type HookAgentContext,
+  type HookRunner
+} from '../hooks'
 import { createToolSearchTool } from '../tools/tool-search-tool'
 import { ToolRegistry, type TeammateIdentity, type ToolDefinition } from '../tools/registry'
 import { resolveAgentTools } from './resolve-agent-tools'
@@ -30,6 +35,8 @@ export interface RunChildAgentParams {
   escalatedMaxOutputTokens?: number
   cwdOverride?: string
   abortSignal?: AbortSignal
+  sessionId?: string
+  hooks?: HookRunner
   quiet?: boolean
   onProgress?: (event: ChildAgentProgressEvent) => void
   /**
@@ -66,9 +73,36 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
   // coordination input on its very first turn.
   const openingPrompt = await buildOpeningPrompt(params.prompt, params.teammateIdentity)
   const messages: ModelMessage[] = [{ role: 'user', content: openingPrompt }]
+  const sessionId = params.sessionId ?? `sub-agent:${params.agentDefinition.agentType}`
+  const cwd = params.cwdOverride ?? process.cwd()
+  const agentContext: HookAgentContext = params.teammateIdentity
+    ? {
+        kind: 'teammate',
+        agentType: params.agentDefinition.agentType,
+        agentName: params.teammateIdentity.agentName,
+        teamName: params.teammateIdentity.teamName
+      }
+    : {
+        kind: 'subagent',
+        agentType: params.agentDefinition.agentType
+      }
   let totalToolUseCount = 0
   let totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 }
   let turnCount = 0
+
+  await params.hooks?.run(
+    createHookEvent(
+      { sessionId, cwd, agent: agentContext },
+      {
+        event: 'subagent_start',
+        subagent: {
+          agentType: params.agentDefinition.agentType,
+          prompt: openingPrompt
+        }
+      }
+    ),
+    { signal: params.abortSignal }
+  )
 
   const system = buildChildSystemPrompt({
     definition: params.agentDefinition,
@@ -84,6 +118,9 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
     maxSteps: params.agentDefinition.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
     abortSignal: params.abortSignal,
+    sessionId,
+    hooks: params.hooks,
+    agent: agentContext,
     quiet: params.quiet,
     ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
     onText: (text) => {
@@ -128,6 +165,21 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
       })
     }
   })
+
+  await params.hooks?.run(
+    createHookEvent(
+      { sessionId, cwd, agent: agentContext },
+      {
+        event: 'subagent_stop',
+        subagent: {
+          agentType: params.agentDefinition.agentType,
+          finalText: extractFinalAssistantText(loopResult.messages),
+          reason: 'completed'
+        }
+      }
+    ),
+    { signal: params.abortSignal }
+  )
 
   const warnings =
     resolved.invalidTools.length > 0

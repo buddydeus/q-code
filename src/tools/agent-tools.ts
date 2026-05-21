@@ -20,6 +20,7 @@ import {
 import type { AgentIsolation, AgentRunResult } from '../agents/types'
 import { cleanupWorktreeIfClean, createAgentWorktree, type WorktreeInfo } from '../agents/worktree'
 import { isAgentTeamsEnabled } from '../utils/agent-teams-enabled'
+import type { HookRunner } from '../hooks'
 import type { TeammateIdentity, ToolDefinition, ToolExecutionContext } from './registry'
 
 export interface AgentToolController {
@@ -33,6 +34,7 @@ export interface AgentToolController {
   getEscalatedMaxOutputTokens?: () => number
   getSessionId?: () => string
   getCwd?: () => string
+  getHooks?: () => HookRunner | undefined
 }
 
 export type ChildAgentRunner = (params: RunChildAgentParams) => Promise<AgentRunResult>
@@ -211,6 +213,8 @@ export function createAgentTool(
             tokenBudget: controller.getTokenBudget?.(),
             maxOutputTokens: controller.getMaxOutputTokens?.(),
             escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
+            sessionId,
+            hooks: controller.getHooks?.() ?? context.hooks,
             ...(isolationSetup.worktreeInfo ? { worktreeInfo: isolationSetup.worktreeInfo } : {}),
             ...(teamValidation.identity ? { teammateIdentity: teamValidation.identity } : {})
           }
@@ -246,6 +250,8 @@ export function createAgentTool(
           tokenBudget: controller.getTokenBudget?.(),
           maxOutputTokens: controller.getMaxOutputTokens?.(),
           escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
+          sessionId,
+          hooks: controller.getHooks?.() ?? context.hooks,
           ...(isolationSetup.worktreeInfo
             ? { cwdOverride: isolationSetup.worktreeInfo.worktreePath }
             : {})
