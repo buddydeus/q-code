@@ -263,6 +263,29 @@ describe('terminal markdown parser', () => {
 
     expect(blocks).toEqual([{ type: 'code', language: 'ts', code: 'const value = 1' }])
   })
+
+  it('parses GitHub-flavored markdown tables', () => {
+    const blocks = parseMarkdown(
+      [
+        '| 包名 | 作用 |',
+        '|------|------|',
+        '| current-2d-sdk | 主 SDK 入口 |',
+        '| @current/renderer | 渲染引擎 |'
+      ].join('\n')
+    )
+
+    expect(blocks).toEqual([
+      {
+        type: 'table',
+        headers: ['包名', '作用'],
+        alignments: ['left', 'left'],
+        rows: [
+          ['current-2d-sdk', '主 SDK 入口'],
+          ['@current/renderer', '渲染引擎']
+        ]
+      }
+    ])
+  })
 })
 
 describe('terminal layout helpers', () => {
