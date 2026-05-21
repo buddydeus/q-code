@@ -9,17 +9,32 @@
 | 运行时   | Node.js ≥ 18 + TypeScript               |
 | AI SDK   | `ai` (Vercel AI SDK) + `@ai-sdk/openai` |
 | MCP 协议 | `@modelcontextprotocol/sdk`             |
-| 包管理   | pnpm                                    |
-| 运行方式 | tsx 直接执行 TS                         |
+| 包管理   | pnpm / npm                              |
+| 运行方式 | npm CLI 包                              |
 
 ## 快速开始
 
 ### 环境要求
 
 - Node.js ≥ 18
-- pnpm
+- npm、pnpm 或其他兼容 npm registry 的包管理器
 
 ### 安装
+
+外部用户推荐通过 npm 安装：
+
+```bash
+npm install -g q-code
+q-code
+```
+
+也可以不全局安装，直接临时运行：
+
+```bash
+npx q-code
+```
+
+本地开发时从源码安装依赖：
 
 ```bash
 pnpm install
@@ -70,6 +85,8 @@ cp .env.example .env
 ### 启动
 
 ```bash
+q-code                  # npm 安装后的新会话
+q-code --continue       # 恢复上次会话
 pnpm start              # 新建会话
 pnpm run continue       # 恢复上次会话
 ```
@@ -86,6 +103,30 @@ pnpm run continue       # 恢复上次会话
 | `--classic`            | 使用传统 readline 交互，不启动 Ink TUI                   |
 
 默认在交互式 TTY 中启动 Ink TUI；非 TTY、`--classic` 或 `Q_CODE_TUI=0` 会回退到传统 readline。TUI 将 Agent 输出、工具调用、上下文占用和 token 用量统一渲染为事件流，支持 `Shift+Enter`/`Ctrl+J` 多行输入、上下历史、`Esc` 清空、忙时 `Ctrl+C` 中断当前任务和 Markdown 代码块/列表/标题展示。
+
+### npm 发布
+
+仓库已配置为可发布的 npm CLI 包：
+
+- `bin.q-code` 指向 `dist/index.js`
+- `prepack` 会自动执行 `npm run build`
+- `prepublishOnly` 会自动执行 typecheck 和全量测试
+- 发布包只包含 `dist/`、`README.md`、`LICENSE` 和 `.env.example`
+
+发布前检查：
+
+```bash
+pnpm install
+pnpm typecheck
+pnpm test
+npm pack --dry-run
+```
+
+确认 npm 登录态和包名后发布：
+
+```bash
+npm publish --access public
+```
 
 ## 架构概览
 

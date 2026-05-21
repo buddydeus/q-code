@@ -1,9 +1,23 @@
 {
   "name": "q-code",
   "version": "1.0.0",
-  "description": "",
+  "description": "An AI coding agent CLI with tools, skills, sub-agents, worktree isolation, and MCP support.",
   "type": "module",
+  "bin": {
+    "q-code": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
+    "build": "node scripts/build.mjs",
     "start": "tsx src/index.ts",
     "continue": "tsx src/index.ts --continue",
     "test": "vitest run",
@@ -20,12 +34,21 @@
     "test:teams": "tsx src/scripts/test-teams.ts",
     "typecheck": "tsc --noEmit",
     "precommit": "pnpm typecheck && pnpm test:unit",
+    "prepublishOnly": "npm run typecheck && npm test",
+    "prepack": "npm run build",
     "prepare": "simple-git-hooks || true"
   },
   "simple-git-hooks": {
     "pre-commit": "pnpm precommit"
   },
-  "keywords": [],
+  "keywords": [
+    "agent",
+    "ai",
+    "cli",
+    "coding-agent",
+    "mcp",
+    "subagent"
+  ],
   "author": "Bryce",
   "license": "MIT",
   "dependencies": {
@@ -46,6 +69,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "18",
     "@vitest/coverage-v8": "^4.1.7",
+    "esbuild": "^0.27.0",
     "simple-git-hooks": "^2.13.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",

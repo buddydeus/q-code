@@ -52,6 +52,9 @@ devDependencies:
   '@vitest/coverage-v8':
     specifier: ^4.1.7
     version: 4.1.7(vitest@4.1.7)
+  esbuild:
+    specifier: ^0.27.0
+    version: 0.27.7
   simple-git-hooks:
     specifier: ^2.13.1
     version: 2.13.1
@@ -755,7 +758,7 @@ packages:
       '@vitest/spy': 4.1.7
       estree-walker: 3.0.3
       magic-string: 0.30.21
-      vite: 8.0.13(@types/node@25.6.0)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 8.0.13(@types/node@25.6.0)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0)
     dev: true
 
   /@vitest/pretty-format@4.1.7:
@@ -2220,7 +2223,7 @@ packages:
     engines: {node: '>= 0.8'}
     dev: false
 
-  /vite@8.0.13(@types/node@25.6.0)(tsx@4.21.0)(yaml@2.9.0):
+  /vite@8.0.13(@types/node@25.6.0)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0):
     resolution: {integrity: sha512-MFtjBYgzmSxmgA4RAfjIyXWpGe1oALnjgUTzzV7QLx/TKxCzjtMH6Fd9/eVK+5Fg1qNoz5VAwsmMs/NofrmJvw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
@@ -2264,6 +2267,7 @@ packages:
         optional: true
     dependencies:
       '@types/node': 25.6.0
+      esbuild: 0.27.7
       lightningcss: 1.32.0
       picomatch: 4.0.4
       postcss: 8.5.15
@@ -2336,7 +2340,7 @@ packages:
       tinyexec: 1.1.2
       tinyglobby: 0.2.16
       tinyrainbow: 3.1.0
-      vite: 8.0.13(@types/node@25.6.0)(tsx@4.21.0)(yaml@2.9.0)
+      vite: 8.0.13(@types/node@25.6.0)(esbuild@0.27.7)(tsx@4.21.0)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     transitivePeerDependencies:
       - msw
