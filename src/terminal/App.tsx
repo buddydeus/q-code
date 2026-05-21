@@ -17,7 +17,7 @@ import {
 import { shouldBackspace, shouldDeleteForward } from './keys'
 import { ConversationView, Header, InputPrompt, StatusBar } from './components'
 import { formatErrorMessage } from './utils/format'
-import { estimatePromptRows, selectVisibleItems } from './utils/layout'
+import { hideCompletedTurnTools, estimatePromptRows, selectVisibleItems } from './utils/layout'
 
 const HEADER_ROWS = 2
 const STATUS_ROWS = 4
@@ -46,9 +46,10 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const promptRows = isBusy ? 0 : Math.min(6, estimatePromptRows(input.value, width))
   const fixedRows = HEADER_ROWS + STATUS_ROWS + promptRows
   const transcriptRows = Math.max(0, height - fixedRows)
+  const displayTranscript = useMemo(() => hideCompletedTurnTools(state.transcript), [state.transcript])
   const visibleItems = useMemo(
-    () => selectVisibleItems(state.transcript, transcriptRows, width - 4),
-    [state.transcript, transcriptRows, width]
+    () => selectVisibleItems(displayTranscript, transcriptRows, width - 4),
+    [displayTranscript, transcriptRows, width]
   )
   const hasStreamingAssistant = visibleItems.some((item) => item.role === 'assistant' && item.isStreaming)
 

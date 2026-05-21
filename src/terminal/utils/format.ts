@@ -45,14 +45,42 @@ export function clipTextForDisplay(text: string): string {
   return `... clipped for display ...\n${clipped}`
 }
 
-export function compactToolText(text: string): string {
+export function compactToolInputPreview(text: string): string {
   const lines = text
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
   const input = lines.find((line) => line.startsWith('Input:'))?.replace(/^Input:\s*/, '')
-  const result = lines.find((line) => line.startsWith('Result:') || line.startsWith('Error:'))
-  const bits = [input, result].filter((bit): bit is string => Boolean(bit))
-  const compacted = bits.length > 0 ? bits.join('  ') : text.replace(/\s+/g, ' ').trim()
-  return compacted.length > 220 ? `${compacted.slice(0, 217)}...` : compacted
+  if (!input || input === '{}') return ''
+
+  try {
+    const parsed = JSON.parse(input) as unknown
+    const preview = formatToolInputObject(parsed)
+    return preview ? `(${truncatePreview(preview)})` : ''
+  } catch {
+    return `(${truncatePreview(input)})`
+  }
+}
+
+function formatToolInputObject(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return formatToolInputValue(value)
+  }
+
+  return Object.entries(value)
+    .map(([key, entry]) => `${key}=${formatToolInputValue(entry)}`)
+    .join(', ')
+}
+
+function formatToolInputValue(value: unknown): string {
+  if (typeof value === 'string') return `"${value}"`
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return `[${value.map(formatToolInputValue).join(', ')}]`
+  if (typeof value === 'object') return '{...}'
+  return String(value)
+}
+
+function truncatePreview(text: string): string {
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text
 }

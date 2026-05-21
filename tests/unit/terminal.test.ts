@@ -16,7 +16,12 @@ import {
 } from '../../src/terminal/input'
 import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
-import { estimateWrappedRows, selectVisibleItems } from '../../src/terminal/utils/layout'
+import {
+  estimateItemRows,
+  estimateWrappedRows,
+  hideCompletedTurnTools,
+  selectVisibleItems
+} from '../../src/terminal/utils/layout'
 
 describe('terminal state reducer', () => {
   it('streams assistant deltas into one transcript item', () => {
@@ -242,6 +247,29 @@ describe('terminal layout helpers', () => {
     const visible = selectVisibleItems(items, 6, 80)
     expect(visible.map((item) => item.text)).toContain('真正的问题')
     expect(visible.map((item) => item.text)).toContain('最终回答')
+  })
+
+  it('hides tool calls from completed turns', () => {
+    const items = [
+      transcriptItem('1', 'message', 'user', '查一下 skills'),
+      transcriptItem('2', 'tool', 'tool', 'Input: {"pattern":"**/SKILL.md"}\nResult: ok'),
+      transcriptItem('3', 'tool', 'tool', 'Input: {"pattern":"**/README.md"}\nResult: ok'),
+      transcriptItem('4', 'message', 'assistant', '最终回答')
+    ]
+
+    const visible = hideCompletedTurnTools(items)
+    expect(visible.map((item) => item.id)).toEqual(['1', '4'])
+  })
+
+  it('treats tool calls as one terminal row', () => {
+    const item = transcriptItem(
+      '1',
+      'tool',
+      'tool',
+      ['Input: {"command":"long-output"}', 'Result: line 1', '... truncated 1000 chars, 10 more lines'].join('\n')
+    )
+
+    expect(estimateItemRows(item, 20)).toBe(1)
   })
 })
 

@@ -24,7 +24,32 @@ export function selectVisibleItems(
   return [...selected, ...pinned].sort((a, b) => items.indexOf(a) - items.indexOf(b))
 }
 
+export function hideCompletedTurnTools(items: TranscriptItem[]): TranscriptItem[] {
+  const visible: TranscriptItem[] = []
+  let turn: TranscriptItem[] = []
+
+  const flushTurn = () => {
+    const hasFinalAssistant = turn.some((item) => item.role === 'assistant' && item.isStreaming !== true)
+    for (const item of turn) {
+      if (hasFinalAssistant && item.kind === 'tool') continue
+      visible.push(item)
+    }
+  }
+
+  for (const item of items) {
+    if (item.role === 'user' && turn.length > 0) {
+      flushTurn()
+      turn = []
+    }
+    turn.push(item)
+  }
+
+  flushTurn()
+  return visible
+}
+
 export function estimateItemRows(item: TranscriptItem, textWidth = 80): number {
+  if (item.kind === 'tool') return 1
   const textRows = estimateWrappedRows(item.text, textWidth)
   return Math.min(10, textRows + 2)
 }
