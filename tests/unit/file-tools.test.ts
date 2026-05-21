@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { editFileTool, listDirectoryTool, readFileTool, writeFileTool } from '../../src/tools/file-tools'
@@ -37,16 +37,57 @@ describe('read_file tool', () => {
     const outside = join(tmp(), 'secret.txt')
     writeFileSync(outside, 'secret', 'utf-8')
 
-    const read = String(await readFileTool.execute({ path: outside }, { cwd }))
-    const write = String(await writeFileTool.execute({ path: outside, content: 'x' }, { cwd }))
-    const list = String(await listDirectoryTool.execute({ path: tmpdir() }, { cwd }))
-    const edit = String(
+    const read = await readFileTool.execute({ path: outside }, { cwd })
+    const write = await writeFileTool.execute({ path: outside, content: 'x' }, { cwd })
+    const list = await listDirectoryTool.execute({ path: tmpdir() }, { cwd })
+    const edit =
       await editFileTool.execute({ path: outside, old_string: 'secret', new_string: 'public' }, { cwd })
+
+    expect(toolOutputText(read)).toContain('路径越界')
+    expect(toolOutputText(write)).toContain('路径越界')
+    expect(toolOutputText(list)).toContain('路径越界')
+    expect(toolOutputText(edit)).toContain('路径越界')
+  })
+
+  it('write_file uses atomic text writes without leaving temp files', async () => {
+    const cwd = tmp()
+
+    const output = String(await writeFileTool.execute({ path: 'note.txt', content: 'hello' }, { cwd }))
+
+    expect(output).toContain('已写入 5 字符')
+    expect(readFileSync(join(cwd, 'note.txt'), 'utf-8')).toBe('hello')
+    expect(readdirSync(cwd).filter((name) => name.includes('.tmp-'))).toEqual([])
+  })
+
+  it('edit_file uses atomic text writes without leaving temp files', async () => {
+    const cwd = tmp()
+    writeFileSync(join(cwd, 'note.txt'), 'hello world', 'utf-8')
+
+    const output = String(
+      await editFileTool.execute(
+        { path: 'note.txt', old_string: 'world', new_string: 'agent' },
+        { cwd }
+      )
     )
 
-    expect(read).toContain('路径越界')
-    expect(write).toContain('路径越界')
-    expect(list).toContain('路径越界')
-    expect(edit).toContain('路径越界')
+    expect(output).toContain('已替换 note.txt')
+    expect(readFileSync(join(cwd, 'note.txt'), 'utf-8')).toBe('hello agent')
+    expect(readdirSync(cwd).filter((name) => name.includes('.tmp-'))).toEqual([])
+  })
+
+  it('write_file failure returns a typed error envelope for registry to mark as error', async () => {
+    const cwd = tmp()
+    const result = await writeFileTool.execute({ path: '.', content: 'x' }, { cwd })
+
+    expect(result).toMatchObject({ ok: false })
+    expect(String((result as { error?: unknown }).error)).toContain('写入失败')
+    expect(existsSync(join(cwd, '.tmp'))).toBe(false)
   })
 })
+
+function toolOutputText(output: unknown): string {
+  if (output && typeof output === 'object' && 'error' in output) {
+    return String((output as { error?: unknown }).error)
+  }
+  return String(output)
+}

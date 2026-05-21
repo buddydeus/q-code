@@ -1,7 +1,11 @@
 import { streamText, type LanguageModelUsage, type ModelMessage } from 'ai'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection'
 import { isRetryable, calculateDelay, sleep } from './retry'
-import { ToolRegistry, type TeammateIdentity } from '../tools/registry'
+import {
+  ToolRegistry,
+  type TeammateIdentity,
+  type ToolResultEnvelope
+} from '../tools/registry'
 import type { HookAgentContext, HookRunner } from '../hooks'
 import {
   buildUsageAnchor,
@@ -194,13 +198,16 @@ export async function agentLoop(
         const result = streamText({
           model,
           system,
-          tools: registry.toAISDKFormat({
-            abortSignal,
-            ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-            ...(options.hooks ? { hooks: options.hooks } : {}),
-            ...(options.agent ? { agent: options.agent } : {}),
-            ...(options.teammateIdentity ? { teammateIdentity: options.teammateIdentity } : {})
-          }),
+          tools: registry.toAISDKFormat(
+            {
+              abortSignal,
+              ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+              ...(options.hooks ? { hooks: options.hooks } : {}),
+              ...(options.agent ? { agent: options.agent } : {}),
+              ...(options.teammateIdentity ? { teammateIdentity: options.teammateIdentity } : {})
+            },
+            { resultEnvelope: true }
+          ),
           messages,
           maxOutputTokens: outputTokenLimit,
           maxRetries: 0,
@@ -277,31 +284,32 @@ export async function agentLoop(
             }
 
             case 'tool-result':
-              if (!quiet) console.log(`  ${fmtToolResult(part.output)}`)
+              if (!quiet) console.log(`  ${fmtToolResult(formatToolOutputForDisplay(part.output))}`)
               {
                 const matched = toolCallsById.get(part.toolCallId) ?? lastToolCall
                 if (matched) {
                   outstandingToolCallIds.delete(part.toolCallId)
+                  const normalized = normalizeToolResultOutput(part.output)
                   toolResultParts.push({
                     type: 'tool-result',
                     toolCallId: part.toolCallId,
                     toolName: matched.name,
-                    output: toToolResultOutput(part.output)
+                    output: toToolResultOutput(normalized.text, normalized.isError)
                   })
-                  recordResult(matched.name, matched.input, part.output)
+                  recordResult(matched.name, matched.input, normalized.text)
                   options.onToolEvent?.({
                     phase: 'done',
                     name: matched.name,
                     toolCallId: part.toolCallId,
-                    resultLength: measureResultLength(part.output),
-                    isError: false
+                    resultLength: normalized.text.length,
+                    isError: normalized.isError
                   })
                   options.onToolResult?.({
                     name: matched.name,
                     toolCallId: part.toolCallId,
                     input: matched.input,
-                    output: part.output,
-                    resultLength: measureResultLength(part.output)
+                    output: normalized.text,
+                    resultLength: normalized.text.length
                   })
                   if (options.stopAfterToolNames?.includes(matched.name)) {
                     stopAfterStepReason = `${matched.name} 已完成，等待下一条用户指令`
@@ -529,9 +537,8 @@ function buildStepMessages(
   return messages
 }
 
-function toToolResultOutput(value: unknown): ToolResultOutput {
-  if (typeof value === 'string') return { type: 'text', value }
-  return { type: 'json', value: value ?? null }
+function toToolResultOutput(value: string, isError: boolean): ToolResultOutput {
+  return isError ? { type: 'error-text', value } : { type: 'text', value }
 }
 
 function formatUnknownError(error: unknown): string {
@@ -564,6 +571,41 @@ function measureResultLength(value: unknown): number {
   } catch {
     return String(value).length
   }
+}
+
+function normalizeToolResultOutput(value: unknown): { text: string; isError: boolean } {
+  if (isToolResultEnvelope(value)) {
+    const raw = value.ok ? value.content : value.error
+    return {
+      text: typeof raw === 'string' ? raw : stringifyToolOutput(raw),
+      isError: !value.ok
+    }
+  }
+  return {
+    text: typeof value === 'string' ? value : stringifyToolOutput(value),
+    isError: false
+  }
+}
+
+function isToolResultEnvelope(value: unknown): value is ToolResultEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { ok?: unknown }).ok === 'boolean' &&
+    ('content' in value || 'error' in value || 'code' in value || 'metadata' in value)
+  )
+}
+
+function stringifyToolOutput(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? null, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function formatToolOutputForDisplay(value: unknown): unknown {
+  return normalizeToolResultOutput(value).text
 }
 
 function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {

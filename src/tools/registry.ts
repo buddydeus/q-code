@@ -31,7 +31,7 @@ export interface ToolDefinition {
   allowInPlanMode?: boolean
   isEnabled?: () => boolean
   maxResultChars?: number
-  execute: (input: any, context: ToolExecutionContext) => Promise<unknown>
+  execute: (input: any, context: ToolExecutionContext) => Promise<ToolExecutionOutput> | ToolExecutionOutput
   shouldDefer?: boolean
   searchHint?: string
   contextCost?: ToolContextCost
@@ -44,6 +44,16 @@ export interface TeammateIdentity {
   agentName: string
   /** Active team's name; matches TeamFile.name. */
   teamName: string
+}
+
+export type ToolExecutionOutput = unknown | ToolResultEnvelope
+
+export interface ToolResultEnvelope {
+  ok: boolean
+  content?: unknown
+  error?: string
+  code?: string
+  metadata?: Record<string, unknown>
 }
 
 export interface ToolExecutionContext {
@@ -63,6 +73,10 @@ export interface ToolExecutionContext {
 export interface ToolRegistryOptions {
   cwd?: string
   quiet?: boolean
+}
+
+export interface ToolRegistryFormatOptions {
+  resultEnvelope?: boolean
 }
 
 export type ToolVisibilityMode = 'normal' | 'plan'
@@ -290,7 +304,10 @@ export class ToolRegistry {
     for (const resolve of waiting) resolve()
   }
 
-  toAISDKFormat(context: Partial<ToolExecutionContext> = {}): Record<string, any> {
+  toAISDKFormat(
+    context: Partial<ToolExecutionContext> = {},
+    options: ToolRegistryFormatOptions = {}
+  ): Record<string, any> {
     const result: Record<string, any> = {}
     const activeTools = this.getActiveTools()
 
@@ -332,7 +349,15 @@ export class ToolRegistry {
                 { signal: context.abortSignal }
               )
               if (pre.blocked) {
-                return formatHookBlockedResult(tool.name, pre.reason)
+                return formatToolResult(
+                  {
+                    ok: false,
+                    error: formatHookBlockedResult(tool.name, pre.reason),
+                    code: 'hook_blocked'
+                  },
+                  maxChars,
+                  options
+                )
               }
               if (pre.input !== undefined) {
                 effectiveInput = pre.input
@@ -366,11 +391,28 @@ export class ToolRegistry {
                 { signal: context.abortSignal }
               )
               if (post.blocked) {
-                return formatHookBlockedResult(tool.name, post.reason)
+                return formatToolResult(
+                  {
+                    ok: false,
+                    error: formatHookBlockedResult(tool.name, post.reason),
+                    code: 'hook_blocked'
+                  },
+                  maxChars,
+                  options
+                )
               }
             }
-            const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)
-            return truncateResult(text, maxChars)
+            return formatToolResult(raw, maxChars, options)
+          } catch (error) {
+            return formatToolResult(
+              {
+                ok: false,
+                error: formatUnknownError(error),
+                code: 'tool_exception'
+              },
+              maxChars,
+              options
+            )
           } finally {
             if (isSafe) {
               registry.releaseConcurrent()
@@ -408,6 +450,26 @@ export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESU
   return `${head}\n\n... [省略 ${dropped} 字符] ...\n\n${tail}`
 }
 
+export function okToolResult(content: unknown, metadata?: Record<string, unknown>): ToolResultEnvelope {
+  return {
+    ok: true,
+    content,
+    ...(metadata ? { metadata } : {})
+  }
+}
+
+export function errorToolResult(
+  error: string,
+  options: { code?: string; metadata?: Record<string, unknown> } = {}
+): ToolResultEnvelope {
+  return {
+    ok: false,
+    error,
+    ...(options.code ? { code: options.code } : {}),
+    ...(options.metadata ? { metadata: options.metadata } : {})
+  }
+}
+
 function isToolVisibleInMode(tool: ToolDefinition, mode: ToolVisibilityMode): boolean {
   if (tool.isEnabled && !tool.isEnabled()) return false
 
@@ -442,4 +504,51 @@ function formatHookBlockedResult(toolName: string, reason: string | undefined): 
     `[hook blocked] ${toolName} 未执行。`,
     `reason: ${reason || 'Hook blocked this tool call.'}`
   ].join('\n')
+}
+
+function formatToolResult(
+  raw: ToolExecutionOutput,
+  maxChars: number | undefined,
+  options: ToolRegistryFormatOptions
+): string | ToolResultEnvelope {
+  const envelope = normalizeToolResult(raw)
+  const text = truncateResult(renderToolResultEnvelope(envelope), maxChars)
+  if (options.resultEnvelope !== true) return text
+  return {
+    ...envelope,
+    content: envelope.ok ? text : envelope.content,
+    error: envelope.ok ? envelope.error : text
+  }
+}
+
+function normalizeToolResult(raw: ToolExecutionOutput): ToolResultEnvelope {
+  if (isToolResultEnvelope(raw)) return raw
+  return {
+    ok: true,
+    content: raw
+  }
+}
+
+function isToolResultEnvelope(value: unknown): value is ToolResultEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { ok?: unknown }).ok === 'boolean' &&
+    ('content' in value || 'error' in value || 'code' in value || 'metadata' in value)
+  )
+}
+
+function renderToolResultEnvelope(envelope: ToolResultEnvelope): string {
+  if (!envelope.ok) {
+    const parts = ['[tool error]', envelope.error || 'Unknown tool error']
+    if (envelope.code) parts.push(`code: ${envelope.code}`)
+    return parts.join('\n')
+  }
+  const content = envelope.content
+  if (typeof content === 'string') return content
+  return JSON.stringify(content ?? null, null, 2)
+}
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

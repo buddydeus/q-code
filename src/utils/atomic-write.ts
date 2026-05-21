@@ -27,12 +27,14 @@ const RENAME_MAX_RETRY_DELAY_MS = 250
  * 进程内锁避免，这里只是再加一层防御）。
  */
 export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
-  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`
+  await writeTextAtomic(filePath, JSON.stringify(value, null, 2))
+}
+
+export async function writeTextAtomic(filePath: string, content: string): Promise<void> {
+  const tmpPath = createTempPath(filePath)
   const handle = await open(tmpPath, 'w')
   try {
-    await handle.writeFile(JSON.stringify(value, null, 2), 'utf-8')
+    await handle.writeFile(content, 'utf-8')
     // 在 rename 前强制把 tmp inode 的数据刷盘。
     // 否则如果断电发生在 rename 之后，文件虽然存在，但内容可能是空的，
     // 就失去了“原子改名”这套方案的意义。
@@ -54,12 +56,14 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
  * 里触发的处理逻辑）。
  */
 export function writeJsonAtomicSync(filePath: string, value: unknown): void {
-  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`
+  writeTextAtomicSync(filePath, JSON.stringify(value, null, 2))
+}
+
+export function writeTextAtomicSync(filePath: string, content: string): void {
+  const tmpPath = createTempPath(filePath)
   const fd = openSync(tmpPath, 'w')
   try {
-    writeSync(fd, JSON.stringify(value, null, 2))
+    writeSync(fd, content)
     fsyncSync(fd)
   } finally {
     closeSync(fd)
@@ -74,6 +78,10 @@ export function writeJsonAtomicSync(filePath: string, value: unknown): void {
     }
     throw error
   }
+}
+
+function createTempPath(filePath: string): string {
+  return `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 async function renameWithRetry(tmpPath: string, filePath: string): Promise<void> {

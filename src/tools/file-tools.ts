@@ -6,13 +6,13 @@ import {
   readFileSync,
   readdirSync,
   readSync,
-  statSync,
-  writeFileSync
+  statSync
 } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
 import { resolveToolPath } from './path-policy'
+import { writeTextAtomic } from '../utils/atomic-write'
 
 const DEFAULT_READ_MAX_LINES = 500
 const MAX_READ_MAX_LINES = 2000
@@ -73,7 +73,7 @@ export const readFileTool: ToolDefinition = {
     try {
       return await readFileRange(input, context)
     } catch (err) {
-      return `读取失败: ${err instanceof Error ? err.message : err}`
+      return { ok: false, error: `读取失败: ${err instanceof Error ? err.message : err}` }
     }
   }
 }
@@ -359,10 +359,10 @@ export const writeFileTool: ToolDefinition = {
   jitHint: '写入前确认目标路径和完整内容',
   execute: async ({ path, content }: { path: string; content: string }, context: ToolExecutionContext) => {
     try {
-      writeFileSync(resolveToolPath(context.cwd, path), content, 'utf-8')
+      await writeTextAtomic(resolveToolPath(context.cwd, path), content)
       return `已写入 ${content.length} 字符到 ${path}`
     } catch (err) {
-      return `写入失败: ${err instanceof Error ? err.message : err}`
+      return { ok: false, error: `写入失败: ${err instanceof Error ? err.message : err}` }
     }
   }
 }
@@ -393,7 +393,7 @@ export const listDirectoryTool: ToolDefinition = {
         })
         .join('\n')
     } catch (err) {
-      return `列出目录失败: ${err instanceof Error ? err.message : err}`
+      return { ok: false, error: `列出目录失败: ${err instanceof Error ? err.message : err}` }
     }
   }
 }
@@ -422,7 +422,7 @@ export const editFileTool: ToolDefinition = {
     try {
       resolved = resolveToolPath(context.cwd, path)
     } catch (err) {
-      return `编辑失败: ${err instanceof Error ? err.message : err}`
+      return { ok: false, error: `编辑失败: ${err instanceof Error ? err.message : err}` }
     }
     if (!existsSync(resolved)) return `文件不存在: ${path}`
 
@@ -437,7 +437,7 @@ export const editFileTool: ToolDefinition = {
     }
 
     const updated = content.replace(old_string, new_string)
-    writeFileSync(resolved, updated, 'utf-8')
+    await writeTextAtomic(resolved, updated)
     return `已替换 ${path} 中的内容（${old_string.length} → ${new_string.length} 字符）`
   }
 }

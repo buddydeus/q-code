@@ -507,7 +507,7 @@ try {
   clearActiveTeam()
 
   console.log('\n[10] team-prompt 三态 reminder')
-  await teamDelete.execute({}, { cwd }).catch(() => undefined) // 尽力清理
+  await Promise.resolve(teamDelete.execute({}, { cwd })).catch(() => undefined) // 尽力清理
   // 即使 TeamDelete 之后，旧运行遗留的 async-agent 条目仍在—手动清空
   clearAllAsyncAgents()
 

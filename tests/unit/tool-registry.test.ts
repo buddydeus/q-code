@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ToolRegistry, truncateResult } from '../../src/tools/registry'
+import { ToolRegistry, errorToolResult, truncateResult } from '../../src/tools/registry'
 import { makeMockTool, makeRecordingTool } from '../_helpers/mock-tool'
 import { DefaultHookRunner } from '../../src/hooks'
 
@@ -265,6 +265,49 @@ describe('ToolRegistry 工具注册表与并发控制', () => {
       expect(calls).toHaveLength(0)
       expect(result).toContain('[hook blocked] probe 未执行')
       expect(result).toContain('policy denied')
+    })
+
+    it('默认把结构化工具错误渲染为兼容文本', async () => {
+      const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
+      registry.register(makeMockTool('danger', () => errorToolResult('policy denied', { code: 'denied' })))
+
+      const tools = registry.toAISDKFormat()
+      const result = await tools.danger.execute({}, { toolCallId: 'tc1', messages: [] })
+
+      expect(result).toContain('[tool error]')
+      expect(result).toContain('policy denied')
+      expect(result).toContain('code: denied')
+    })
+
+    it('resultEnvelope 模式保留 typed ok/error envelope', async () => {
+      const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
+      registry.register(makeMockTool('danger', () => errorToolResult('policy denied', { code: 'denied' })))
+
+      const tools = registry.toAISDKFormat({}, { resultEnvelope: true })
+      const result = await tools.danger.execute({}, { toolCallId: 'tc1', messages: [] })
+
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'denied'
+      })
+      expect(result.error).toContain('[tool error]')
+      expect(result.error).toContain('policy denied')
+    })
+
+    it('工具抛出的异常会被统一包成结构化错误', async () => {
+      const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
+      registry.register(makeMockTool('boom', () => {
+        throw new Error('exploded')
+      }))
+
+      const tools = registry.toAISDKFormat({}, { resultEnvelope: true })
+      const result = await tools.boom.execute({}, { toolCallId: 'tc1', messages: [] })
+
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'tool_exception'
+      })
+      expect(result.error).toContain('exploded')
     })
   })
 })
