@@ -4,6 +4,7 @@ import type { TranscriptItem } from '../state'
 import { clipTextForDisplay, roleColor, roleLabel } from '../utils/format'
 import { MarkdownText } from './MarkdownText'
 import { ToolCallItem } from './ToolCallList'
+import { animeTheme } from '../theme'
 
 export function ConversationView({ items }: { items: TranscriptItem[] }): React.JSX.Element {
   return (
@@ -26,7 +27,7 @@ function TranscriptLine({ item }: { item: TranscriptItem }): React.JSX.Element {
   if (item.role === 'user') {
     return (
       <Box marginTop={1}>
-        <Text color="green" bold>❯ </Text>
+        <Text color={animeTheme.mint} bold>❯ </Text>
         <Text>{clipTextForDisplay(item.text)}</Text>
       </Box>
     )
@@ -36,7 +37,7 @@ function TranscriptLine({ item }: { item: TranscriptItem }): React.JSX.Element {
     return (
       <Box flexDirection="row">
         <Box width={2}>
-          <Text color="magenta">▎</Text>
+          <Text color={animeTheme.candy}>▎</Text>
         </Box>
         <Box flexDirection="column" flexShrink={1}>
           <MarkdownText text={item.text} streaming={item.isStreaming === true} />

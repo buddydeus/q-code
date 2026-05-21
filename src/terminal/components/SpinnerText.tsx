@@ -1,12 +1,13 @@
 import React from 'react'
 import { Text } from 'ink'
+import { animeTheme } from '../theme'
 
 export function SpinnerText({ label }: { label: string }): React.JSX.Element {
   return (
     <Text>
-      <Text color="#D77757">✢ </Text>
-      <Text color="#D77757">{label}</Text>
-      <Text color="#F59575">...</Text>
+      <Text color={animeTheme.duck}>✢ </Text>
+      <Text color={animeTheme.candy}>{label}</Text>
+      <Text color={animeTheme.blush}>...</Text>
     </Text>
   )
 }

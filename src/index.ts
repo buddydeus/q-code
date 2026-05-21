@@ -1495,7 +1495,7 @@ async function main() {
 
   const teamsHint = isAgentTeamsEnabled() ? '；用 /teams 查看 Agent Teams' : ''
   print(
-    `对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents${teamsHint}。\n`
+    `小黄鸭已就位，今天也要把剧情推进下去。\n对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents${teamsHint}。\n`
   )
   if (terminal) {
     await terminal.waitUntilExit()

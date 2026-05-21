@@ -1,18 +1,21 @@
-import React from 'react'
-import { Box, Text } from 'ink'
+import React from "react";
+import { Box, Text } from "ink";
+import { animeTheme } from "../theme";
 
 export function InputPrompt({
   display,
-  isBusy
+  isBusy,
 }: {
-  display: string
-  isBusy: boolean
+  display: string;
+  isBusy: boolean;
 }): React.JSX.Element {
-  if (isBusy) return <Box />
+  if (isBusy) return <Box />;
   return (
     <Box marginTop={1}>
-      <Text color="green" bold>❯ </Text>
+      <Text color={animeTheme.mint} bold>
+        ❯{" "}
+      </Text>
       <Text>{display}</Text>
     </Box>
-  )
+  );
 }

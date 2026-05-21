@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 import type { SlashCommandSuggestion } from '../../slash'
+import { animeTheme } from '../theme'
 
 export interface RenderedCommandSuggestion extends SlashCommandSuggestion {
   isSelected?: boolean
@@ -17,11 +18,11 @@ export function CommandSuggestions({
     <Box marginTop={1} flexDirection="column">
       {suggestions.map((item) => (
         <Box key={item.name}>
-          <Text color={item.isSelected ? 'green' : undefined}>
-            {item.isSelected ? '  › ' : '    '}
+          <Text color={item.isSelected ? animeTheme.duck : animeTheme.textDim}>
+            {item.isSelected ? '  ✨ ' : '    '}
             {item.name.padEnd(18)}
           </Text>
-          <Text dimColor>{item.description}</Text>
+          <Text color={item.isSelected ? animeTheme.cream : animeTheme.textDim}>{item.description}</Text>
         </Box>
       ))}
     </Box>

@@ -1,5 +1,6 @@
 import type { TerminalStatus } from '../events'
 import type { TranscriptItem } from '../state'
+import { animeTheme, statusMood } from '../theme'
 
 export function compactPath(path: string, max: number): string {
   if (path.length <= max) return path
@@ -11,29 +12,25 @@ export function formatErrorMessage(error: unknown): string {
 }
 
 export function statusLabel(status: TerminalStatus, text: string): string {
-  if (status === 'running_tool') return text.replace(/^Running\s+/, '运行 ')
-  if (status === 'thinking') return '思考中'
-  if (status === 'compacting') return '压缩上下文'
-  if (status === 'error') return '有错误'
-  return text || '运行中'
+  return statusMood(status, text)
 }
 
 export function roleLabel(item: TranscriptItem): string {
-  if (item.kind === 'context') return 'Context'
-  if (item.role === 'assistant') return 'Assistant'
-  if (item.role === 'user') return 'You'
-  if (item.role === 'tool') return 'Tool'
-  if (item.role === 'error') return 'Error'
-  return 'System'
+  if (item.kind === 'context') return '镜头'
+  if (item.role === 'assistant') return '旁白'
+  if (item.role === 'user') return '你'
+  if (item.role === 'tool') return '道具'
+  if (item.role === 'error') return '事故'
+  return '系统'
 }
 
 export function roleColor(item: TranscriptItem): string {
-  if (item.status === 'error' || item.role === 'error') return 'red'
-  if (item.status === 'running') return 'yellow'
-  if (item.role === 'assistant') return 'cyan'
-  if (item.role === 'user') return 'green'
-  if (item.role === 'tool') return item.status === 'done' ? 'green' : 'yellow'
-  return 'gray'
+  if (item.status === 'error' || item.role === 'error') return animeTheme.danger
+  if (item.status === 'running') return animeTheme.duck
+  if (item.role === 'assistant') return animeTheme.candy
+  if (item.role === 'user') return animeTheme.mint
+  if (item.role === 'tool') return item.status === 'done' ? animeTheme.mint : animeTheme.duck
+  return animeTheme.textDim
 }
 
 export function clipTextForDisplay(text: string): string {

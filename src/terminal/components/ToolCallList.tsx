@@ -6,9 +6,9 @@ import { compactToolInputPreview, roleColor } from '../utils/format'
 export function ToolCallItem({ item }: { item: TranscriptItem }): React.JSX.Element {
   const label = item.title ?? 'Tool'
   const color = roleColor(item)
-  const glyph = item.status === 'running' ? '⚡' : item.status === 'error' ? '✗' : '✓'
-  const prefix = item.status === 'running' ? `Using tool: ${label}` : label
-  const suffix = item.status === 'error' ? ' - error' : ''
+  const glyph = item.status === 'running' ? '✦' : item.status === 'error' ? '×' : '✓'
+  const prefix = item.status === 'running' ? `道具咏唱: ${label}` : label
+  const suffix = item.status === 'error' ? ' · 事故' : ''
   const inputPreview = compactToolInputPreview(item.text)
 
   return (

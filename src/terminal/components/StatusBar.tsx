@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Text } from 'ink'
 import type { TerminalState } from '../state'
 import { statusLabel } from '../utils/format'
+import { animeTheme, statusColor } from '../theme'
 import { ContextMeter } from './ContextMeter'
 import { SpinnerText } from './SpinnerText'
 
@@ -21,12 +22,12 @@ export function StatusBar({
   return (
     <Box marginTop={1} flexDirection="column">
       <Box justifyContent="space-between">
-        <Text dimColor>  status: {statusLabel(state.status, state.statusText)}</Text>
-        <Text dimColor>{tokens}</Text>
+        <Text color={statusColor(state.status)}>  ✧ 状态: {statusLabel(state.status, state.statusText)}</Text>
+        <Text color={animeTheme.textDim}>{tokens ? `魔力 ${tokens}` : ''}</Text>
       </Box>
       {state.contextUsage ? (
         <Box>
-          <Text dimColor>  context: </Text>
+          <Text color={animeTheme.textDim}>  记忆槽: </Text>
           <ContextMeter usage={state.contextUsage} />
         </Box>
       ) : null}

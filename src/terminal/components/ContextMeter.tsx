@@ -1,6 +1,7 @@
 import React from 'react'
 import { Text } from 'ink'
 import type { TerminalContextUsage } from '../state'
+import { animeTheme } from '../theme'
 
 export function ContextMeter({ usage }: { usage?: TerminalContextUsage }): React.JSX.Element {
   if (!usage) return <Text dimColor>context pending</Text>
@@ -10,10 +11,10 @@ export function ContextMeter({ usage }: { usage?: TerminalContextUsage }): React
   const bar = '█'.repeat(filled) + '░'.repeat(width - filled)
   const color =
     usage.state === 'blocking' || usage.state === 'error'
-      ? 'red'
+      ? animeTheme.danger
       : usage.state === 'warning'
-        ? 'yellow'
-        : 'green'
+        ? animeTheme.duck
+        : animeTheme.mint
   return (
     <Text color={color}>
       {bar} {pct}%
