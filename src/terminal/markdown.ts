@@ -2,12 +2,20 @@ export type MarkdownBlock =
   | { type: 'heading'; depth: number; text: string }
   | { type: 'paragraph'; text: string }
   | { type: 'list'; ordered: boolean; items: string[] }
-  | { type: 'table'; headers: string[]; rows: string[][]; alignments: TableAlignment[] }
+  | {
+      type: 'table'
+      headers: string[]
+      rows: string[][]
+      alignments: TableAlignment[]
+      omittedRows?: number
+    }
   | { type: 'quote'; text: string }
   | { type: 'code'; language?: string; code: string }
   | { type: 'rule' }
 
 export type TableAlignment = 'left' | 'center' | 'right'
+
+export const MAX_MARKDOWN_TABLE_ROWS = 300
 
 export function parseMarkdown(markdown: string): MarkdownBlock[] {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n')
@@ -138,12 +146,17 @@ function parseTableAt(
   const columnCount = Math.max(headers.length, separatorCells.length)
   const alignments = normalizeCells(separatorCells, columnCount).map(parseAlignment)
   const rows: string[][] = []
+  let omittedRows = 0
   let i = index + 2
 
   while (i < lines.length) {
     const line = lines[i] ?? ''
     if (!line.trim() || !looksLikeTableRow(line)) break
-    rows.push(normalizeCells(splitTableRow(line).map(stripInlineMarkdown), columnCount))
+    if (rows.length < MAX_MARKDOWN_TABLE_ROWS) {
+      rows.push(normalizeCells(splitTableRow(line).map(stripInlineMarkdown), columnCount))
+    } else {
+      omittedRows++
+    }
     i++
   }
 
@@ -152,7 +165,8 @@ function parseTableAt(
       type: 'table',
       headers: normalizeCells(headers, columnCount),
       rows,
-      alignments
+      alignments,
+      ...(omittedRows > 0 ? { omittedRows } : {})
     },
     nextIndex: i
   }

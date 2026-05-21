@@ -286,6 +286,21 @@ describe('terminal markdown parser', () => {
       }
     ])
   })
+
+  it('caps very large markdown tables before they reach Ink rendering', () => {
+    const rows = Array.from({ length: 350 }, (_, index) => `| pkg-${index} | desc-${index} |`)
+    const blocks = parseMarkdown(['| 包名 | 作用 |', '|------|------|', ...rows].join('\n'))
+
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toMatchObject({
+      type: 'table',
+      headers: ['包名', '作用'],
+      omittedRows: 50
+    })
+    if (blocks[0]?.type === 'table') {
+      expect(blocks[0].rows).toHaveLength(300)
+    }
+  })
 })
 
 describe('terminal layout helpers', () => {

@@ -2,6 +2,10 @@ import React, { useMemo } from 'react'
 import { Box, Text } from 'ink'
 import { parseMarkdown, type MarkdownBlock, type TableAlignment } from '../markdown'
 
+const STREAMING_PARSE_CHAR_LIMIT = 12000
+const STREAMING_PREVIEW_HEAD = 2500
+const STREAMING_PREVIEW_TAIL = 7000
+
 export function MarkdownText({
   text,
   dim = false,
@@ -13,9 +17,11 @@ export function MarkdownText({
   parse?: boolean
   streaming?: boolean
 }): React.JSX.Element {
-  const blocks = useMemo(() => (parse ? parseMarkdown(text) : []), [parse, text])
+  const shouldParse = parse && (!streaming || text.length <= STREAMING_PARSE_CHAR_LIMIT)
+  const displayText = shouldParse || !streaming ? text : previewStreamingText(text)
+  const blocks = useMemo(() => (shouldParse ? parseMarkdown(displayText) : []), [displayText, shouldParse])
   if (!parse) return <Text dimColor={dim}>{text}</Text>
-  if (blocks.length === 0) return <Text dimColor={dim}>{text}</Text>
+  if (blocks.length === 0) return <Text dimColor={dim}>{displayText}</Text>
   return (
     <Box flexDirection="column" flexShrink={1}>
       {blocks.map((block, index) => (
@@ -95,6 +101,9 @@ function MarkdownTable({
           {renderTableRow(row, widths, block.alignments)}
         </Text>
       ))}
+      {block.omittedRows ? (
+        <Text dimColor>{`│ ... omitted ${block.omittedRows} rows while rendering ... │`}</Text>
+      ) : null}
     </Box>
   )
 }
@@ -149,4 +158,17 @@ function clipCell(text: string, width: number): string {
   if (text.length <= width) return text
   if (width <= 1) return text.slice(0, width)
   return `${text.slice(0, width - 1)}…`
+}
+
+function previewStreamingText(text: string): string {
+  if (text.length <= STREAMING_PARSE_CHAR_LIMIT) return text
+  const omitted = text.length - STREAMING_PREVIEW_HEAD - STREAMING_PREVIEW_TAIL
+  if (omitted <= 0) return text
+  return [
+    text.slice(0, STREAMING_PREVIEW_HEAD),
+    '',
+    `... streaming preview omitted ${omitted} chars ...`,
+    '',
+    text.slice(-STREAMING_PREVIEW_TAIL)
+  ].join('\n')
 }
