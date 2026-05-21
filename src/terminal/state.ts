@@ -52,7 +52,24 @@ export function createInitialTerminalState(): TerminalState {
 
 export function terminalReducer(state: TerminalState, event: TerminalEvent): TerminalState {
   switch (event.type) {
-    case 'message':
+    case 'message': {
+      if (event.role === 'assistant' && state.activeAssistantId) {
+        return {
+          ...state,
+          activeAssistantId: undefined,
+          transcript: state.transcript.map((item) =>
+            item.id === state.activeAssistantId
+              ? {
+                  ...item,
+                  text: event.text,
+                  isStreaming: false,
+                  source: event.source ?? item.source,
+                  agentId: event.agentId ?? item.agentId
+                }
+              : item
+          )
+        }
+      }
       return appendItem(
         {
           ...state,
@@ -66,6 +83,7 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           agentId: event.agentId
         }
       )
+    }
 
     case 'assistant_delta': {
       const activeId = state.activeAssistantId

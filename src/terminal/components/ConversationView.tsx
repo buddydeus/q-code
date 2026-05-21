@@ -7,7 +7,7 @@ import { ToolCallItem } from './ToolCallList'
 
 export function ConversationView({ items }: { items: TranscriptItem[] }): React.JSX.Element {
   return (
-    <Box flexDirection="column" overflow="hidden">
+    <Box flexDirection="column">
       {items.map((item) => (
         <TranscriptLine key={item.id} item={item} />
       ))}
@@ -39,7 +39,7 @@ function TranscriptLine({ item }: { item: TranscriptItem }): React.JSX.Element {
           <Text color="magenta">▎</Text>
         </Box>
         <Box flexDirection="column" flexShrink={1}>
-          <MarkdownText text={clipTextForDisplay(item.text)} parse={!item.isStreaming} />
+          <MarkdownText text={item.text} parse={!item.isStreaming} />
         </Box>
       </Box>
     )

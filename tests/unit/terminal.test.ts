@@ -19,8 +19,7 @@ import { parseMarkdown } from '../../src/terminal/markdown'
 import {
   estimateItemRows,
   estimateWrappedRows,
-  hideCompletedTurnTools,
-  selectVisibleItems
+  hideCompletedTurnTools
 } from '../../src/terminal/utils/layout'
 
 describe('terminal state reducer', () => {
@@ -33,6 +32,18 @@ describe('terminal state reducer', () => {
     expect(state.transcript).toHaveLength(1)
     expect(state.transcript[0]?.role).toBe('assistant')
     expect(state.transcript[0]?.text).toBe('hello world')
+    expect(state.activeAssistantId).toBeUndefined()
+  })
+
+  it('replaces an active assistant stream with a final assistant message', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, { type: 'assistant_delta', text: 'partial' })
+    state = terminalReducer(state, { type: 'message', role: 'assistant', text: 'final answer' })
+
+    expect(state.transcript).toHaveLength(1)
+    expect(state.transcript[0]?.role).toBe('assistant')
+    expect(state.transcript[0]?.text).toBe('final answer')
+    expect(state.transcript[0]?.isStreaming).toBe(false)
     expect(state.activeAssistantId).toBeUndefined()
   })
 
@@ -236,19 +247,6 @@ describe('terminal layout helpers', () => {
     expect(estimateWrappedRows(['short', 'x'.repeat(41)].join('\n'), 20)).toBe(4)
   })
 
-  it('keeps recent user and assistant messages ahead of system noise', () => {
-    const items = [
-      transcriptItem('1', 'message', 'user', '真正的问题'),
-      transcriptItem('2', 'message', 'assistant', '最终回答'),
-      transcriptItem('3', 'tool', 'tool', 'Input: {}\nResult: ok'),
-      transcriptItem('4', 'message', 'system', '输入 /approve-plan 执行')
-    ]
-
-    const visible = selectVisibleItems(items, 6, 80)
-    expect(visible.map((item) => item.text)).toContain('真正的问题')
-    expect(visible.map((item) => item.text)).toContain('最终回答')
-  })
-
   it('hides tool calls from completed turns', () => {
     const items = [
       transcriptItem('1', 'message', 'user', '查一下 skills'),
@@ -259,6 +257,17 @@ describe('terminal layout helpers', () => {
 
     const visible = hideCompletedTurnTools(items)
     expect(visible.map((item) => item.id)).toEqual(['1', '4'])
+  })
+
+  it('keeps assistant text visible while it is still streaming', () => {
+    const items = [
+      transcriptItem('1', 'message', 'user', '开始'),
+      { ...transcriptItem('2', 'message', 'assistant', '流式输出'), isStreaming: true },
+      transcriptItem('3', 'tool', 'tool', 'Input: {"pattern":"**/*"}')
+    ]
+
+    const visible = hideCompletedTurnTools(items)
+    expect(visible.map((item) => item.id)).toContain('2')
   })
 
   it('treats tool calls as one terminal row', () => {
@@ -272,19 +281,37 @@ describe('terminal layout helpers', () => {
     expect(estimateItemRows(item, 20)).toBe(1)
   })
 
-  it('keeps the previous conversation visible after a new prompt starts', () => {
-    const items = hideCompletedTurnTools([
+  it('keeps every completed conversation visible after a new prompt starts', () => {
+    const visible = hideCompletedTurnTools([
       transcriptItem('1', 'message', 'user', '再看看skills'),
       transcriptItem('2', 'tool', 'tool', 'Input: {"pattern":"**/SKILL.md"}\nResult: ok'),
       transcriptItem('3', 'message', 'assistant', '上一轮最终回答'),
       transcriptItem('4', 'message', 'user', '读取 src/agents/types.ts 看结构')
     ])
 
-    const visible = selectVisibleItems(items, 8, 80)
     expect(visible.map((item) => item.text)).toEqual([
       '再看看skills',
       '上一轮最终回答',
       '读取 src/agents/types.ts 看结构'
+    ])
+  })
+
+  it('does not omit older completed conversations', () => {
+    const visible = hideCompletedTurnTools([
+      transcriptItem('1', 'message', 'user', '第一轮问题'),
+      transcriptItem('2', 'message', 'assistant', '第一轮最终回答'.repeat(20)),
+      transcriptItem('3', 'message', 'user', '第二轮问题'),
+      transcriptItem('4', 'message', 'assistant', '第二轮最终回答'.repeat(20)),
+      transcriptItem('5', 'message', 'user', '当前问题')
+    ])
+
+    const visibleText = visible.map((item) => item.text)
+    expect(visibleText).toEqual([
+      '第一轮问题',
+      '第一轮最终回答'.repeat(20),
+      '第二轮问题',
+      '第二轮最终回答'.repeat(20),
+      '当前问题'
     ])
   })
 })
