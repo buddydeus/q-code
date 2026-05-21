@@ -6,7 +6,7 @@
 
 | 层面     | 技术                                    |
 | -------- | --------------------------------------- |
-| 运行时   | Node.js ≥ 18 + TypeScript               |
+| 运行时   | Node.js ≥ 22 + TypeScript               |
 | AI SDK   | `ai` (Vercel AI SDK) + `@ai-sdk/openai` |
 | MCP 协议 | `@modelcontextprotocol/sdk`             |
 | 包管理   | pnpm / npm                              |
@@ -16,7 +16,7 @@
 
 ### 环境要求
 
-- Node.js ≥ 18
+- Node.js ≥ 22
 - npm、pnpm 或其他兼容 npm registry 的包管理器
 
 ### 安装

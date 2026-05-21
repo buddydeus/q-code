@@ -6,7 +6,7 @@
 
 ## 环境与工具
 
-- 运行时：Node.js 18+。
+- 运行时：Node.js 22+。
 - 包管理器：pnpm。不要混用 npm/yarn 生成新的 lockfile。
 - 源码直接通过 `tsx` 运行，项目为 ESM：`package.json` 中 `"type": "module"`。
 - TypeScript 严格模式开启，模块解析为 `bundler`，目标为 `ES2022`。
@@ -28,7 +28,7 @@ pnpm precommit
 
 - 提交前优先运行 `pnpm precommit`，它会执行 `pnpm typecheck && pnpm test:unit`。
 - 影响 Agent Loop、工具注册、会话、任务图、MCP、Skills 或 SubAgent 行为时，优先补跑相关集成测试或 legacy 脚本。
-- CI 使用 Node.js 20 和 pnpm 9，并按 `typecheck -> pnpm test -> pnpm test:legacy` 顺序执行。
+- CI 使用 Node.js 22 和 pnpm 9，并按 `typecheck -> pnpm test -> pnpm test:legacy` 顺序执行。
 
 ## 目录边界
 
