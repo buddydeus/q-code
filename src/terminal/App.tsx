@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Box, Static, useApp, useInput, useStdin } from 'ink'
+import { Box, useApp, useInput, useStdin } from 'ink'
 import type { TerminalEventBus } from './events'
 import { createInitialTerminalState, terminalReducer } from './state'
 import {
@@ -23,7 +23,7 @@ import {
   StatusBar
 } from './components'
 import { formatErrorMessage } from './utils/format'
-import { splitStaticAndLiveTranscript } from './utils/layout'
+import { hideCompletedTurnTools } from './utils/layout'
 import {
   filterSlashCommandSuggestions,
   type SlashCommandSuggestion
@@ -52,8 +52,8 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const lastRawInput = useRef<string>()
   const pendingAssistantDelta = useRef('')
   const assistantFlushTimer = useRef<ReturnType<typeof setTimeout>>()
-  const { staticItems, liveItems } = useMemo(
-    () => splitStaticAndLiveTranscript(state.transcript),
+  const visibleTranscript = useMemo(
+    () => hideCompletedTurnTools(state.transcript),
     [state.transcript]
   )
   const hasStreamingAssistant = state.activeAssistantId !== undefined
@@ -255,10 +255,7 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
-      <Static items={staticItems}>
-        {(item) => <ConversationView key={item.id} items={[item]} />}
-      </Static>
-      <ConversationView items={liveItems} />
+      <ConversationView items={visibleTranscript} />
       <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
       <CommandSuggestions suggestions={renderedSlashCommands} />
       <InputPrompt display={renderInputWithCursor(input.value || '', input.cursor)} isBusy={isBusy} />

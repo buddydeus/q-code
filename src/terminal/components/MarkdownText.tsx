@@ -3,7 +3,7 @@ import { Box, Text } from 'ink'
 import { parseMarkdown, type MarkdownBlock } from '../markdown'
 import { renderMarkdownTable } from '../table-renderer'
 
-const STREAMING_PARSE_CHAR_LIMIT = 12000
+export const MARKDOWN_PARSE_CHAR_LIMIT = 12000
 const STREAMING_PREVIEW_HEAD = 2500
 const STREAMING_PREVIEW_TAIL = 7000
 
@@ -18,9 +18,16 @@ export function MarkdownText({
   parse?: boolean
   streaming?: boolean
 }): React.JSX.Element {
-  const shouldParse = parse && (!streaming || text.length <= STREAMING_PARSE_CHAR_LIMIT)
+  const shouldParse = shouldParseMarkdownText(text, parse)
   const displayText = shouldParse || !streaming ? text : previewStreamingText(text)
-  const blocks = useMemo(() => (shouldParse ? parseMarkdown(displayText) : []), [displayText, shouldParse])
+  const blocks = useMemo(() => {
+    if (!shouldParse) return []
+    try {
+      return parseMarkdown(displayText)
+    } catch {
+      return []
+    }
+  }, [displayText, shouldParse])
   if (!parse) return <Text dimColor={dim}>{text}</Text>
   if (blocks.length === 0) return <Text dimColor={dim}>{displayText}</Text>
   return (
@@ -107,8 +114,12 @@ function MarkdownTable({
   )
 }
 
+export function shouldParseMarkdownText(text: string, parse = true): boolean {
+  return parse && text.length <= MARKDOWN_PARSE_CHAR_LIMIT
+}
+
 function previewStreamingText(text: string): string {
-  if (text.length <= STREAMING_PARSE_CHAR_LIMIT) return text
+  if (text.length <= MARKDOWN_PARSE_CHAR_LIMIT) return text
   const omitted = text.length - STREAMING_PREVIEW_HEAD - STREAMING_PREVIEW_TAIL
   if (omitted <= 0) return text
   return [

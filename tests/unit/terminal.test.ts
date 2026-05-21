@@ -16,6 +16,10 @@ import {
 } from '../../src/terminal/input'
 import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
+import {
+  MARKDOWN_PARSE_CHAR_LIMIT,
+  shouldParseMarkdownText
+} from '../../src/terminal/components/MarkdownText'
 import { renderMarkdownTable } from '../../src/terminal/table-renderer'
 import {
   estimateItemRows,
@@ -254,6 +258,12 @@ function editingKey(overrides: Partial<Parameters<typeof shouldBackspace>[1]> = 
 }
 
 describe('terminal markdown parser', () => {
+  it('skips rich markdown parsing for very long assistant output', () => {
+    expect(shouldParseMarkdownText('# short')).toBe(true)
+    expect(shouldParseMarkdownText('x'.repeat(MARKDOWN_PARSE_CHAR_LIMIT))).toBe(true)
+    expect(shouldParseMarkdownText('x'.repeat(MARKDOWN_PARSE_CHAR_LIMIT + 1))).toBe(false)
+  })
+
   it('parses common markdown blocks used by agent output', () => {
     const blocks = parseMarkdown(
       ['# Title', '', '- one', '- **two**', '', '> note', '', '```ts', 'const x = 1', '```'].join(
