@@ -1,4 +1,5 @@
 import type { TokenUsage } from '../context/token-budget'
+import type { SlashCommandSuggestion } from '../slash'
 
 export type TerminalRole = 'assistant' | 'user' | 'system' | 'tool' | 'error'
 export type TerminalStatus = 'idle' | 'thinking' | 'running_tool' | 'compacting' | 'error'
@@ -55,6 +56,13 @@ export type TerminalEvent =
   | (TerminalBaseEvent & {
       type: 'error'
       text: string
+    })
+  | (TerminalBaseEvent & {
+      type: 'clear'
+    })
+  | (TerminalBaseEvent & {
+      type: 'slash_commands'
+      commands: SlashCommandSuggestion[]
     })
 
 export type TerminalEventListener = (event: TerminalEvent) => void

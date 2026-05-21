@@ -39,7 +39,7 @@ import {
   todoGuide,
   toolGuide
 } from './context/prompt-builder'
-import { SessionStore } from './session/store'
+import { listProjectSessions, SessionStore } from './session/store'
 import { microcompact, summarize } from './context/compressor'
 import { injectOffloadManifest, offloadLargeToolResults } from './context/offload'
 import { CompactionCircuitBreaker } from './context/auto-compact'
@@ -48,7 +48,11 @@ import {
   formatRuntimeEnvironmentContext,
   getRuntimeEnvironmentContext
 } from './context/runtime-context'
-import { buildTokenBudgetSnapshot, type UsageAnchor } from './context/token-budget'
+import {
+  buildTokenBudgetSnapshot,
+  type TokenUsage,
+  type UsageAnchor
+} from './context/token-budget'
 import { buildMemorySystemContext } from './context/memory/memdir'
 import {
   getPlanFilePath,
@@ -98,6 +102,11 @@ import {
 } from './agents/team-helpers'
 import { formatTeamsSystemReminder } from './agents/team-prompt'
 import { isAgentTeamsEnabled } from './utils/agent-teams-enabled'
+import {
+  createSlashCommandRegistry,
+  type SlashCommand,
+  type SlashCommandInput
+} from './slash'
 
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
@@ -389,7 +398,7 @@ async function main() {
   registry.register(
     createAgentTool({
       createModel,
-      getDefaultModelName: () => getRequiredEnv('OPENAI_MODEL'),
+      getDefaultModelName: () => sessionModelOverride ?? defaultModelName,
       getAvailableTools: () => registry.getVisibleTools(),
       getRuntimeContext: () => runtimeContext,
       getAgentMdContext: () => agentMdContext,
@@ -476,7 +485,10 @@ async function main() {
   if (!store) throw new Error('Session store was not initialized')
   const activeStore = store
   registry.setCwd(activeStore.cwd)
-  const model = createModel()
+  const defaultModelName = getRequiredEnv('OPENAI_MODEL')
+  let sessionModelOverride: string | undefined
+  let model = createModel(defaultModelName)
+  let latestTotalUsage: TokenUsage | undefined = activeStore.getSummary().totalUsage
   const { model: summaryModel, name: summaryModelName } = createSummaryModel()
 
   function snapshotContext(
@@ -615,6 +627,22 @@ async function main() {
     }
   }
 
+  interface SlashRuntimeContext {}
+
+  const slashRegistry = createSlashCommandRegistry<SlashRuntimeContext>()
+  slashRegistry.register(...createBuiltinSlashCommands())
+  const buildSlashCommandSuggestions = () => [
+    ...slashRegistry.getSuggestions(),
+    ...getAllUserInvocableSkills().map((skill) => ({
+      name: `/${skill.name}`,
+      description: skill.description,
+      usage: skill.frontmatter.argumentHint
+        ? `/${skill.name} ${skill.frontmatter.argumentHint}`
+        : `/${skill.name}`,
+      category: 'Skills'
+    }))
+  ]
+
   if (useTui) {
     registry.setQuiet(true)
     terminal = startTerminalRuntime({
@@ -622,6 +650,7 @@ async function main() {
       sessionId,
       cwd: activeStore.cwd,
       initialEvents: pendingTerminalEvents,
+      slashCommands: buildSlashCommandSuggestions(),
       onSubmit: handleInput,
       onInterrupt: interruptActiveTurn,
       onExit: closeCli
@@ -669,58 +698,21 @@ async function main() {
     }
 
     try {
-      if (trimmed === '/compact' || trimmed.startsWith('/compact ')) {
-        await handleCompactCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/mode' || trimmed.startsWith('/mode ')) {
-        await handleModeCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/plan') {
-        await handlePlanCommand()
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/todos' || trimmed.startsWith('/todos ')) {
-        handleTodosCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/tasks' || trimmed.startsWith('/tasks ')) {
-        await handleTasksCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/mcp' || trimmed.startsWith('/mcp ')) {
-        await handleMcpCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/agents' || trimmed.startsWith('/agents ')) {
-        handleAgentsCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/teams' || trimmed.startsWith('/teams ')) {
-        await handleTeamsCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/skills' || trimmed.startsWith('/skills ')) {
-        handleSkillsCommand(trimmed)
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/approve-plan') {
-        await handleApprovePlanCommand()
-        if (!closed) ask()
-        return
-      }
-      if (trimmed === '/revise-plan' || trimmed.startsWith('/revise-plan ')) {
-        await handleRevisePlanCommand(trimmed)
+      if (trimmed.startsWith('/')) {
+        const dispatched = await slashRegistry.dispatch(trimmed, {})
+        if (dispatched.handled) {
+          if (!closed) ask()
+          return
+        }
+
+        const skillExpansion = expandSkillSlashCommand(trimmed, sessionId)
+        if (skillExpansion) {
+          print(`\n  [Skill] /${skillExpansion.skill.name}`)
+          await runAgentTurnWithMessages(skillExpansion.messages, trimmed)
+          return
+        }
+
+        print(`\n  [Slash] 未知命令: /${dispatched.input?.name ?? trimmed.slice(1)}。输入 /help 查看可用命令。`)
         if (!closed) ask()
         return
       }
@@ -729,13 +721,6 @@ async function main() {
           '\n  [Plan] 当前有待确认的计划。输入 /approve-plan 执行，或 /revise-plan <反馈> 继续规划。'
         )
         if (!closed) ask()
-        return
-      }
-
-      const skillExpansion = expandSkillSlashCommand(trimmed, sessionId)
-      if (skillExpansion) {
-        print(`\n  [Skill] /${skillExpansion.skill.name}`)
-        await runAgentTurnWithMessages(skillExpansion.messages, trimmed)
         return
       }
 
@@ -799,6 +784,7 @@ async function main() {
           }
         },
         onUsage: (turnUsage, totalUsage) => {
+          latestTotalUsage = totalUsage
           activeStore.appendUsage(turnUsage, totalUsage)
           emitTerminal({ type: 'usage', turnUsage, totalUsage })
         },
@@ -843,6 +829,7 @@ async function main() {
           const activated = activateConditionalSkillsForPaths(filePaths, activeStore.cwd)
           if (activated.length > 0) {
             print(`\n  [Skills] 条件激活: ${activated.join(', ')}`)
+            emitTerminal({ type: 'slash_commands', commands: buildSlashCommandSuggestions() })
           }
         }
       })
@@ -917,6 +904,141 @@ async function main() {
     if (requestedMode === 'plan') pendingPlanApproval = false
     print(`\n  [Mode] 已切换到 ${agentMode}`)
     if (agentMode === 'plan') print(`  [Plan] 计划文件: ${planFilePath}`)
+  }
+
+  function createBuiltinSlashCommands(): SlashCommand<SlashRuntimeContext>[] {
+    const command = (
+      name: string,
+      description: string,
+      usage: string,
+      category: string,
+      run: (input: SlashCommandInput) => Promise<void> | void,
+      aliases?: string[]
+    ): SlashCommand<SlashRuntimeContext> => ({
+      name,
+      description,
+      usage,
+      category,
+      aliases,
+      run
+    })
+
+    return [
+      command('/help', '查看可用 slash 命令', '/help', 'Core', () => {
+        print('\n' + slashRegistry.formatHelp())
+      }),
+      command('/clear', '清空当前内存上下文和终端视图', '/clear', 'Core', () => {
+        messages = []
+        summary = ''
+        pendingPlanApproval = false
+        pendingPlanSummary = ''
+        needsPlanModeExitAttachment = false
+        emitTerminal({ type: 'clear' })
+        print('\n  [Session] 当前内存上下文已清空；历史 transcript 文件保留。')
+      }),
+      command('/cost', '查看当前会话 token 用量', '/cost', 'Core', () => {
+        const usage = latestTotalUsage ?? activeStore.getSummary().totalUsage
+        if (!usage) {
+          print('\nSession usage\n\n  暂无 token 用量记录。')
+          return
+        }
+        print(
+          [
+            '\nSession usage',
+            '',
+            `  input:  ${usage.inputTokens}`,
+            `  output: ${usage.outputTokens}`,
+            `  total:  ${usage.totalTokens}`
+          ].join('\n')
+        )
+      }),
+      command('/model', '查看或覆盖本会话模型', '/model [name|default]', 'Core', handleModelCommand),
+      command('/history', '查看当前项目已保存会话', '/history', 'Core', handleHistoryCommand),
+      command('/compact', '压缩当前对话上下文', '/compact [focus]', 'Core', (input) =>
+        handleCompactCommand(input.raw)
+      ),
+      command('/mode', '查看或切换模式', '/mode [plan|normal]', 'Workflow', (input) =>
+        handleModeCommand(input.raw)
+      ),
+      command('/plan', '查看当前计划文件', '/plan', 'Workflow', () => handlePlanCommand()),
+      command('/approve-plan', '批准并执行待确认计划', '/approve-plan', 'Workflow', () =>
+        handleApprovePlanCommand()
+      ),
+      command('/revise-plan', '带反馈继续修订计划', '/revise-plan <feedback>', 'Workflow', (input) =>
+        handleRevisePlanCommand(input.raw)
+      ),
+      command('/todos', '查看或清空 TodoWrite V1 清单', '/todos [clear]', 'Tools', (input) =>
+        handleTodosCommand(input.raw)
+      ),
+      command('/tasks', '查看或切换任务系统', '/tasks [task|todo|reset]', 'Tools', (input) =>
+        handleTasksCommand(input.raw)
+      ),
+      command('/mcp', '查看 MCP server 和工具', '/mcp [tools|reconnect]', 'Tools', (input) =>
+        handleMcpCommand(input.raw)
+      ),
+      command('/skills', '列出已加载 skills', '/skills', 'Tools', (input) =>
+        handleSkillsCommand(input.raw)
+      ),
+      command('/agents', '列出 sub-agent 和后台任务', '/agents [kill]', 'Agents', (input) =>
+        handleAgentsCommand(input.raw)
+      ),
+      command('/teams', '查看或清理 Agent Teams', '/teams [clear]', 'Agents', (input) =>
+        handleTeamsCommand(input.raw)
+      ),
+      command('/exit', '退出当前会话', '/exit', 'Core', () => closeCli(), ['/quit', '/bye'])
+    ]
+  }
+
+  function handleModelCommand(input: SlashCommandInput): void {
+    const requested = input.args.trim()
+    if (!requested) {
+      print(
+        [
+          '\nModel',
+          '',
+          `  active:  ${sessionModelOverride ?? defaultModelName}`,
+          `  source:  ${sessionModelOverride ? 'session override' : 'default'}`,
+          `  default: ${defaultModelName}`,
+          '',
+          '  用法: /model <name> 或 /model default'
+        ].join('\n')
+      )
+      return
+    }
+
+    if (requested === 'default') {
+      sessionModelOverride = undefined
+      model = createModel(defaultModelName)
+      print(`\n  [Model] 已恢复默认模型: ${defaultModelName}`)
+      return
+    }
+
+    sessionModelOverride = requested
+    model = createModel(requested)
+    print(`\n  [Model] 本会话模型已切换为: ${requested}`)
+  }
+
+  function handleHistoryCommand(input: SlashCommandInput): void {
+    if (input.args) {
+      print('\n  [History] 用法: /history')
+      return
+    }
+
+    const sessions = listProjectSessions({ cwd: activeStore.cwd })
+    if (sessions.length === 0) {
+      print('\nRecent sessions\n\n  当前项目还没有保存过会话。')
+      return
+    }
+
+    const lines = ['Recent sessions', '']
+    for (const item of sessions) {
+      const usage = item.totalUsage ? ` tokens=${item.totalUsage.totalTokens}` : ''
+      lines.push(
+        `- ${item.sessionId} messages=${item.messageCount}${usage} updated=${item.updatedAt ?? '(unknown)'}`
+      )
+      lines.push(`  ${item.transcriptPath}`)
+    }
+    print('\n' + lines.join('\n'))
   }
 
   async function handlePlanCommand(): Promise<void> {

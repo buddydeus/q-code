@@ -2,12 +2,14 @@ import React from 'react'
 import { render, type Instance } from 'ink'
 import { InMemoryTerminalEventBus, type TerminalEvent, type TerminalEventBus } from './events'
 import { TerminalApp } from './App'
+import type { SlashCommandSuggestion } from '../slash'
 
 export interface TerminalRuntimeOptions {
   title?: string
   sessionId?: string
   cwd?: string
   initialEvents?: TerminalEvent[]
+  slashCommands?: SlashCommandSuggestion[]
   onSubmit: (input: string) => Promise<void> | void
   onInterrupt?: () => Promise<void> | void
   onExit: () => Promise<void> | void
@@ -30,6 +32,7 @@ export function startTerminalRuntime(options: TerminalRuntimeOptions): TerminalR
       title={options.title}
       sessionId={options.sessionId}
       cwd={options.cwd}
+      slashCommands={options.slashCommands}
       onSubmit={options.onSubmit}
       onInterrupt={options.onInterrupt}
       onExit={options.onExit}

@@ -15,9 +15,19 @@ import {
   submitInput
 } from './input'
 import { shouldBackspace, shouldDeleteForward } from './keys'
-import { ConversationView, Header, InputPrompt, StatusBar } from './components'
+import {
+  CommandSuggestions,
+  ConversationView,
+  Header,
+  InputPrompt,
+  StatusBar
+} from './components'
 import { formatErrorMessage } from './utils/format'
 import { hideCompletedTurnTools } from './utils/layout'
+import {
+  filterSlashCommandSuggestions,
+  type SlashCommandSuggestion
+} from '../slash'
 
 export interface TerminalAppProps {
   bus: TerminalEventBus
@@ -27,6 +37,7 @@ export interface TerminalAppProps {
   title?: string
   sessionId?: string
   cwd?: string
+  slashCommands?: SlashCommandSuggestion[]
 }
 
 export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
@@ -39,12 +50,33 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const lastRawInput = useRef<string>()
   const displayTranscript = useMemo(() => hideCompletedTurnTools(state.transcript), [state.transcript])
   const hasStreamingAssistant = displayTranscript.some((item) => item.role === 'assistant' && item.isStreaming)
+  const slashCommands =
+    state.slashCommands.length > 0 ? state.slashCommands : props.slashCommands ?? []
+  const filteredSlashCommands = useMemo(
+    () => filterSlashCommandSuggestions(input.value, slashCommands),
+    [input.value, slashCommands]
+  )
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(-1)
+  const renderedSlashCommands = useMemo(
+    () =>
+      filteredSlashCommands.map((item, index) => ({
+        ...item,
+        isSelected: index === selectedCommandIndex
+      })),
+    [filteredSlashCommands, selectedCommandIndex]
+  )
+  const showSlashCommands = filteredSlashCommands.length > 0
 
   useEffect(() => props.bus.subscribe(dispatch), [props.bus])
 
   useEffect(() => {
     if (!isBusy) setInterruptRequested(false)
   }, [isBusy])
+
+  useEffect(() => {
+    if (!showSlashCommands) setSelectedCommandIndex(-1)
+    if (selectedCommandIndex >= filteredSlashCommands.length) setSelectedCommandIndex(-1)
+  }, [filteredSlashCommands.length, selectedCommandIndex, showSlashCommands])
 
   useEffect(() => {
     const rememberRawInput = (data: Buffer | string) => {
@@ -80,6 +112,36 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
     if (isCtrlC) {
       void Promise.resolve(props.onExit()).finally(() => exit())
       return
+    }
+
+    if (showSlashCommands) {
+      if (key.upArrow) {
+        setSelectedCommandIndex((current) =>
+          current <= 0 ? filteredSlashCommands.length - 1 : current - 1
+        )
+        return
+      }
+      if (key.downArrow) {
+        setSelectedCommandIndex((current) =>
+          current >= filteredSlashCommands.length - 1 ? 0 : current + 1
+        )
+        return
+      }
+      if (key.tab || (key.return && selectedCommandIndex >= 0)) {
+        const selected = filteredSlashCommands[
+          selectedCommandIndex >= 0 ? selectedCommandIndex : 0
+        ]
+        if (selected) {
+          setInput((current) => ({
+            ...current,
+            value: `${selected.name} `,
+            cursor: selected.name.length + 1,
+            historyIndex: undefined
+          }))
+          setSelectedCommandIndex(-1)
+          return
+        }
+      }
     }
 
     if (key.return) {
@@ -147,6 +209,7 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
       <ConversationView items={displayTranscript} />
       <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
+      <CommandSuggestions suggestions={renderedSlashCommands} />
       <InputPrompt display={renderInputWithCursor(input.value || '', input.cursor)} isBusy={isBusy} />
     </Box>
   )

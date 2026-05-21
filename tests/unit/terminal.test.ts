@@ -21,6 +21,7 @@ import {
   estimateWrappedRows,
   hideCompletedTurnTools
 } from '../../src/terminal/utils/layout'
+import type { SlashCommandSuggestion } from '../../src/slash'
 
 describe('terminal state reducer', () => {
   it('streams assistant deltas into one transcript item', () => {
@@ -245,6 +246,18 @@ describe('terminal layout helpers', () => {
   it('estimates wrapped rows for long terminal lines', () => {
     expect(estimateWrappedRows('x'.repeat(45), 20)).toBe(3)
     expect(estimateWrappedRows(['short', 'x'.repeat(41)].join('\n'), 20)).toBe(4)
+  })
+
+  it('clears transcript while preserving slash command suggestions', () => {
+    const commands: SlashCommandSuggestion[] = [{ name: '/help', description: 'Show commands' }]
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, { type: 'slash_commands', commands })
+    state = terminalReducer(state, { type: 'message', role: 'user', text: 'hello' })
+    state = terminalReducer(state, { type: 'clear' })
+
+    expect(state.transcript).toEqual([])
+    expect(state.slashCommands).toEqual(commands)
+    expect(state.status).toBe('idle')
   })
 
   it('hides tool calls from completed turns', () => {

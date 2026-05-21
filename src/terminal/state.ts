@@ -1,4 +1,5 @@
 import type { TerminalEvent, TerminalRole, TerminalStatus } from './events'
+import type { SlashCommandSuggestion } from '../slash'
 
 export type TranscriptItemKind = 'message' | 'tool' | 'usage' | 'context'
 
@@ -32,6 +33,7 @@ export interface TerminalState {
   statusText: string
   contextUsage?: TerminalContextUsage
   usage?: TerminalUsage
+  slashCommands: SlashCommandSuggestion[]
   activeAssistantId?: string
   activeToolIds: Record<string, string>
   nextId: number
@@ -45,6 +47,7 @@ export function createInitialTerminalState(): TerminalState {
     transcript: [],
     status: 'idle',
     statusText: 'Ready',
+    slashCommands: [],
     activeToolIds: {},
     nextId: 1
   }
@@ -255,6 +258,22 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           agentId: event.agentId
         }
       )
+
+    case 'clear':
+      return {
+        ...state,
+        transcript: [],
+        activeAssistantId: undefined,
+        activeToolIds: {},
+        status: 'idle',
+        statusText: 'Ready'
+      }
+
+    case 'slash_commands':
+      return {
+        ...state,
+        slashCommands: event.commands
+      }
   }
 }
 
