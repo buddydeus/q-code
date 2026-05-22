@@ -406,7 +406,7 @@ Offloading 是无损的：摘要模型只看到短 marker 和预览，后续 Age
 | 类别     | 工具                                                        | 功能                                                    |
 | -------- | ----------------------------------------------------------- | ------------------------------------------------------- |
 | 文件操作 | `read_file` / `write_file` / `edit_file` / `list_directory` | 读写编辑文件、列出目录                                  |
-| Shell    | `bash`                                                      | Shell 命令执行                                          |
+| Shell    | `f`                                                         | Shell 命令执行；Windows 使用 PowerShell7，其他平台使用 Bash |
 | 搜索     | `glob` / `grep` / `pick_search`                             | 文件搜索 / 内容搜索 / 代码库语义搜索                    |
 | 网络     | `fetch_url` / `web_fetch`                                   | 网页抓取                                                |
 | 实用     | `start_preview`                                             | 本地预览服务                                            |
@@ -428,7 +428,7 @@ Offloading 是无损的：摘要模型只看到短 marker 和预览，后续 Age
 
 ### 5. Plan Mode — 规划模式
 
-Plan Mode 是"只看不动"的规划模式，适合复杂、多文件、需要先确认方案的任务。q-code 不引入权限系统，而是在每次模型请求前动态过滤工具列表：Plan Mode 下只暴露只读工具、`plan_write` 和 `exit_plan_mode`，隐藏 `write_file`、`edit_file`、`bash`、`memory_write` 等会修改项目或环境的工具。
+Plan Mode 是"只看不动"的规划模式，适合复杂、多文件、需要先确认方案的任务。q-code 不引入权限系统，而是在每次模型请求前动态过滤工具列表：Plan Mode 下只暴露只读工具、`plan_write` 和 `exit_plan_mode`，隐藏 `write_file`、`edit_file`、`f`、`memory_write` 等会修改项目或环境的工具。
 
 计划文件存储在 `.sessions/projects/<projectKey>/plans/<sessionId>.md`。模型完成探索后会写入计划并调用 `exit_plan_mode`，当前 loop 会停住等待用户确认，避免"退出计划后立刻实现一遍、审批后又实现一遍"的问题。
 
