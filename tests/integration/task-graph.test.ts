@@ -3,6 +3,8 @@ import {
   blockTask,
   createTask,
   deleteTask,
+  formatTaskDetail,
+  formatTaskList,
   getTask,
   isReady,
   listTasks,
@@ -138,5 +140,42 @@ describe('Task V2 持久化任务图', () => {
       metadata: { owner: 'bob', priority: 'low' }
     })
     expect(updated?.metadata).toEqual({ owner: 'bob', priority: 'low' })
+  })
+
+  it('任务列表和详情按 Markdown 格式输出', async () => {
+    const t = await createTask(opts, {
+      subject: '整理输出',
+      description: '任务结果需要是 Markdown',
+      activeForm: '正在整理输出',
+      metadata: { source: 'test' }
+    })
+    const tasks = await listTasks(opts)
+
+    const listText = formatTaskList(tasks)
+    expect(listText).toContain('## Tasks')
+    expect(listText).toContain('- #1 [pending ready] 整理输出')
+
+    const detailText = formatTaskDetail(t, tasks)
+    expect(detailText).toContain('## Task #1: 整理输出')
+    expect(detailText).toContain('- **Status**: pending')
+    expect(detailText).toContain('```json')
+  })
+
+  it('格式化任务字段时转义 Markdown 控制符并保留多行描述', async () => {
+    const t = await createTask(opts, {
+      subject: '# 标题 - [x] `code`',
+      description: '第一行\n```ts\nconst x = 1\n```',
+      activeForm: '正在处理 **粗体**'
+    })
+    const tasks = await listTasks(opts)
+
+    const listText = formatTaskList(tasks)
+    expect(listText).toContain('\\# 标题 \\- \\[x\\] \\`code\\`')
+
+    const detailText = formatTaskDetail(t, tasks)
+    expect(detailText).toContain('## Task #1: \\# 标题 \\- \\[x\\] \\`code\\`')
+    expect(detailText).toContain('  > 第一行')
+    expect(detailText).toContain('  > \\`\\`\\`ts')
+    expect(detailText).toContain('- **ActiveForm**: 正在处理 \\*\\*粗体\\*\\*')
   })
 })

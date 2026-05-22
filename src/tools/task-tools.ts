@@ -4,6 +4,7 @@ import {
   deleteTask,
   formatTaskDetail,
   formatTaskList,
+  formatMarkdownInline,
   getTask,
   listTasks,
   resetTaskGraph,
@@ -91,7 +92,11 @@ function createTaskCreateTool(controller: TaskToolController): ToolDefinition {
         metadata
       })
 
-      return `Task #${task.id} created: ${task.subject}`
+      return [
+        `## Task ${formatTaskRef(task.id)} created`,
+        '',
+        `- **Subject**: ${formatMarkdownInline(task.subject)}`
+      ].join('\n')
     }
   }
 }
@@ -145,7 +150,7 @@ function createTaskUpdateTool(controller: TaskToolController): ToolDefinition {
 
       const options = getTaskOptions(controller)
       const existing = await getTask(options, taskId)
-      if (!existing) return `Task #${taskId} not found`
+      if (!existing) return `## Task ${formatTaskRef(taskId)}\n\n未找到。`
 
       const rawStatus = pickTrimmedString(input, 'status')
       if (rawStatus !== undefined && !UPDATE_STATUSES.has(rawStatus)) {
@@ -155,7 +160,9 @@ function createTaskUpdateTool(controller: TaskToolController): ToolDefinition {
       const status = rawStatus as UpdateStatus | undefined
       if (status === 'deleted') {
         const deleted = await deleteTask(options, taskId)
-        return deleted ? `Task #${taskId} deleted.` : `Task #${taskId} not found`
+        return deleted
+          ? `## Task ${formatTaskRef(taskId)} deleted`
+          : `## Task ${formatTaskRef(taskId)}\n\n未找到。`
       }
 
       const updates: Partial<Omit<Task, 'id'>> = {}
@@ -169,11 +176,13 @@ function createTaskUpdateTool(controller: TaskToolController): ToolDefinition {
 
       const dependencyWarnings = await applyDependencyUpdates(options, taskId, input, changed)
       if (changed.length === 0 && dependencyWarnings.length === 0) {
-        return `Task #${taskId} unchanged.`
+        return `## Task ${formatTaskRef(taskId)} unchanged`
       }
 
       return [
-        changed.length > 0 ? `Updated task #${taskId}: ${changed.join(', ')}` : `Task #${taskId} unchanged.`,
+        changed.length > 0
+          ? `## Task ${formatTaskRef(taskId)} updated\n\n- **Changed**: ${changed.join(', ')}`
+          : `## Task ${formatTaskRef(taskId)} unchanged`,
         ...dependencyWarnings
       ].join('\n')
     }
@@ -205,7 +214,7 @@ function createTaskGetTool(controller: TaskToolController): ToolDefinition {
 
       const options = getTaskOptions(controller)
       const [task, tasks] = await Promise.all([getTask(options, taskId), listTasks(options)])
-      return task ? formatTaskDetail(task, tasks) : `Task #${taskId} not found`
+      return task ? formatTaskDetail(task, tasks) : `## Task ${formatTaskRef(taskId)}\n\n未找到。`
     }
   }
 }
@@ -238,6 +247,10 @@ function getTaskOptions(controller: TaskToolController): TaskGraphOptions {
     cwd: controller.getCwd(),
     sessionId: controller.getSessionId()
   }
+}
+
+function formatTaskRef(id: string): string {
+  return `#${id}`
 }
 
 function collectFieldUpdates(

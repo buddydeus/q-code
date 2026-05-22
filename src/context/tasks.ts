@@ -183,33 +183,35 @@ export function isReady(task: Task, tasks: readonly Task[]): boolean {
 }
 
 export function formatTaskList(tasks: readonly Task[]): string {
-  if (tasks.length === 0) return 'Tasks: 当前没有任务。'
+  if (tasks.length === 0) return '## Tasks\n\n当前没有任务。'
 
   const sorted = [...tasks].sort(compareTaskId)
   const completed = sorted.filter((task) => task.status === 'completed').length
-  const lines = [`Tasks (${completed}/${sorted.length} completed)`]
+  const lines = [`## Tasks`, '', `**进度**: ${completed}/${sorted.length} completed`, '']
   for (const task of sorted) {
     const ready = isReady(task, sorted) ? ' ready' : ''
     const blockers = getOpenBlockers(task, sorted)
-    const blocked = blockers.length > 0 ? ` [blocked by ${blockers.map(formatTaskRef).join(', ')}]` : ''
-    lines.push(`${formatTaskRef(task.id)} [${task.status}${ready}] ${task.subject}${blocked}`)
+    const blocked = blockers.length > 0 ? `; blocked by ${blockers.map(formatTaskRef).join(', ')}` : ''
+    lines.push(`- ${formatTaskRef(task.id)} [${task.status}${ready}${blocked}] ${formatMarkdownInline(task.subject)}`)
   }
   return lines.join('\n')
 }
 
 export function formatTaskDetail(task: Task, allTasks: readonly Task[] = []): string {
   const lines = [
-    `Task ${formatTaskRef(task.id)}: ${task.subject}`,
-    `Status: ${task.status}`,
-    `Ready: ${isReady(task, allTasks.length > 0 ? allTasks : [task]) ? 'yes' : 'no'}`,
-    `Description: ${task.description}`
+    `## Task ${formatTaskRef(task.id)}: ${formatMarkdownInline(task.subject)}`,
+    '',
+    `- **Status**: ${task.status}`,
+    `- **Ready**: ${isReady(task, allTasks.length > 0 ? allTasks : [task]) ? 'yes' : 'no'}`,
+    '- **Description**:',
+    ...formatMarkdownBlockquote(task.description)
   ]
 
-  if (task.activeForm) lines.push(`ActiveForm: ${task.activeForm}`)
-  if (task.blockedBy.length > 0) lines.push(`Blocked by: ${task.blockedBy.map(formatTaskRef).join(', ')}`)
-  if (task.blocks.length > 0) lines.push(`Blocks: ${task.blocks.map(formatTaskRef).join(', ')}`)
+  if (task.activeForm) lines.push(`- **ActiveForm**: ${formatMarkdownInline(task.activeForm)}`)
+  if (task.blockedBy.length > 0) lines.push(`- **Blocked by**: ${task.blockedBy.map(formatTaskRef).join(', ')}`)
+  if (task.blocks.length > 0) lines.push(`- **Blocks**: ${task.blocks.map(formatTaskRef).join(', ')}`)
   if (task.metadata && Object.keys(task.metadata).length > 0) {
-    lines.push(`Metadata: ${JSON.stringify(task.metadata)}`)
+    lines.push('', '**Metadata**:', '', '```json', JSON.stringify(task.metadata, null, 2), '```')
   }
 
   return lines.join('\n')
@@ -329,6 +331,19 @@ function sanitizePathSegment(value: string): string {
 
 function formatTaskRef(id: string): string {
   return `#${id}`
+}
+
+export function formatMarkdownInline(value: string): string {
+  return escapeMarkdownControlChars(value.replace(/\s+/g, ' ').trim())
+}
+
+function formatMarkdownBlockquote(value: string): string[] {
+  const lines = value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  return lines.map((line) => `  > ${escapeMarkdownControlChars(line.trimEnd()) || ' '}`)
+}
+
+function escapeMarkdownControlChars(value: string): string {
+  return value.replace(/([\\`*_{}\[\]()#+\-.!|>])/g, '\\$1')
 }
 
 function cloneTask(task: Task): Task {

@@ -57,7 +57,9 @@ function TranscriptLine({ item }: { item: TranscriptItem }): React.JSX.Element {
   return (
     <Box marginTop={1}>
       <Text color={color} bold>{label}</Text>
-      <Text dimColor> {clipTextForDisplay(item.text)}</Text>
+      <Box marginLeft={1} flexDirection="column" flexShrink={1}>
+        <MarkdownText text={clipTextForDisplay(item.text)} dim />
+      </Box>
     </Box>
   )
 }
