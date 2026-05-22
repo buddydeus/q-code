@@ -139,6 +139,7 @@ import {
   getEarlyCliCommand,
   getPackageVersion
 } from './runtime/cli-info'
+import { runCliUpdate } from './runtime/update'
 
 const packageVersion = getPackageVersion()
 const earlyCliCommand = getEarlyCliCommand(process.argv.slice(2))
@@ -149,6 +150,13 @@ if (earlyCliCommand === 'version') {
 if (earlyCliCommand === 'help') {
   console.log(formatCliHelp(packageVersion))
   process.exit(0)
+}
+if (earlyCliCommand === 'update') {
+  const code = await runCliUpdate({
+    currentVersion: packageVersion,
+    argv: process.argv.slice(2)
+  })
+  process.exit(code)
 }
 
 applyRuntimeConfig()

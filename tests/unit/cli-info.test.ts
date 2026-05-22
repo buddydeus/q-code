@@ -18,6 +18,11 @@ describe('cli info', () => {
     expect(getEarlyCliCommand(['version'])).toBe('version')
   })
 
+  it('detects update command', () => {
+    expect(getEarlyCliCommand(['update'])).toBe('update')
+    expect(getEarlyCliCommand(['update', '--dry-run'])).toBe('update')
+  })
+
   it('leaves interactive flags alone', () => {
     expect(getEarlyCliCommand(['--continue'])).toBeUndefined()
     expect(getEarlyCliCommand(['--session', 'demo'])).toBeUndefined()
@@ -34,6 +39,7 @@ describe('cli info', () => {
     expect(help).toContain('Usage:')
     expect(help).toContain('-h, --help')
     expect(help).toContain('-v, --version')
+    expect(help).toContain('q-code update')
     expect(help).toContain('--continue')
     expect(help).toContain('~/.q-code/config.toml')
   })

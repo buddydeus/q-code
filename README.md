@@ -28,6 +28,13 @@ npm install -g @q-code-cli/q-code
 q-code
 ```
 
+全局安装后可直接更新到 npm latest：
+
+```bash
+q-code update
+q-code update --dry-run  # 仅查看将执行的更新命令
+```
+
 也可以不全局安装，直接临时运行：
 
 ```bash
@@ -113,6 +120,8 @@ pnpm run continue       # 恢复上次会话
 | ---------------------- | -------------------------------------------------------- |
 | `-h`, `--help`         | 输出帮助信息后退出                                       |
 | `-v`, `--version`      | 输出版本号后退出                                         |
+| `update`               | 将全局安装的 q-code 更新到 npm latest                    |
+| `update --dry-run`     | 只显示更新命令，不实际执行                               |
 | `--continue`           | 恢复上次会话                                             |
 | `--session=<id>`       | 指定会话 ID                                              |
 | `--dump-system-prompt` | 输出完整 System Prompt 后退出                            |

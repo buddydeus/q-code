@@ -1,6 +1,8 @@
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+import { createReadStream, readFileSync, statSync, existsSync } from 'node:fs'
+import { lstat, open, readdir } from 'node:fs/promises'
 import { extname, join, relative, resolve } from 'node:path'
 import { createServer, type Server } from 'node:http'
+import { createInterface } from 'node:readline'
 import fg from 'fast-glob'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
 import { resolveToolPath, isInsideDirectory } from './path-policy'
@@ -15,10 +17,55 @@ export const SEARCH_IGNORE_DIRS = [
   '.sessions',
   '.q-code',
   '.playground',
-  '.playwright-mcp'
+  '.playwright-mcp',
+  '.next',
+  '.cache',
+  '.pnpm-store',
+  'AppData',
+  'Library',
+  'target',
+  'vendor'
 ] as const
 
 export const SEARCH_IGNORE_GLOBS = SEARCH_IGNORE_DIRS.map((dir) => `${dir}/**`)
+
+const GREP_DEFAULT_TIMEOUT_MS = 8000
+const GREP_MAX_MATCHES = 50
+const GREP_MAX_FILES_SCANNED = 5000
+const GREP_MAX_DIRS_SCANNED = 1000
+const GREP_MAX_BYTES_SCANNED = 30 * 1024 * 1024
+const GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
+const GREP_MAX_LINE_CHARS = 20000
+
+const GREP_BINARY_EXTENSIONS = new Set([
+  '.7z',
+  '.avif',
+  '.bin',
+  '.bmp',
+  '.class',
+  '.dll',
+  '.doc',
+  '.docx',
+  '.exe',
+  '.gif',
+  '.ico',
+  '.jar',
+  '.jpeg',
+  '.jpg',
+  '.lock',
+  '.mp3',
+  '.mp4',
+  '.pdf',
+  '.png',
+  '.rar',
+  '.sqlite',
+  '.webp',
+  '.woff',
+  '.woff2',
+  '.xls',
+  '.xlsx',
+  '.zip'
+])
 
 export const fetchUrlTool: ToolDefinition = {
   name: 'fetch_url',
@@ -121,72 +168,248 @@ export const grepTool: ToolDefinition = {
     { pattern, path = '.' }: { pattern: string; path?: string },
     context: ToolExecutionContext
   ) => {
-    let baseDir: string
+    let basePath: string
     try {
-      baseDir = resolveToolPath(context.cwd, path)
+      basePath = resolveToolPath(context.cwd, path)
     } catch (err) {
       return `路径错误: ${err instanceof Error ? err.message : err}`
     }
-    const regex = new RegExp(pattern, 'i')
-    const matches: string[] = []
-    const SKIP = new Set<string>(SEARCH_IGNORE_DIRS)
-    const BIN_EXT = new Set(['.png', '.jpg', '.gif', '.woff', '.woff2', '.ico', '.lock'])
 
-    function searchFile(filePath: string) {
-      if (matches.length >= 50) return
-      const ext = filePath.slice(filePath.lastIndexOf('.'))
-      if (BIN_EXT.has(ext)) return
-
-      let content: string
-      try {
-        content = readFileSync(filePath, 'utf-8')
-      } catch {
-        return
-      }
-
-      const lines = content.split('\n')
-      const rel = relative(baseDir, filePath)
-      for (let i = 0; i < lines.length; i++) {
-        if (regex.test(lines[i])) {
-          matches.push(`${rel}:${i + 1}: ${lines[i].trimEnd()}`)
-          if (matches.length >= 50) return
-        }
-      }
-    }
-
-    function walk(dir: string) {
-      if (matches.length >= 50) return
-      let entries: string[]
-      try {
-        entries = readdirSync(dir)
-      } catch {
-        return
-      }
-
-      for (const name of entries) {
-        if (SKIP.has(name)) continue
-        const full = join(dir, name)
-        try {
-          const stat = statSync(full)
-          if (stat.isDirectory()) walk(full)
-          else searchFile(full)
-        } catch {
-          /* skip */
-        }
-      }
-    }
-
-    const stat = statSync(baseDir)
-    if (stat.isFile()) {
-      searchFile(baseDir)
-    } else {
-      walk(baseDir)
-    }
-
-    if (matches.length === 0) return `没有找到匹配 "${pattern}" 的内容`
-    const suffix = matches.length >= 50 ? '\n... (结果已截断，共 50+ 条匹配)' : ''
-    return matches.join('\n') + suffix
+    return grepPath(pattern, basePath, context)
   }
+}
+
+interface GrepStats {
+  dirsScanned: number
+  filesScanned: number
+  bytesScanned: number
+  skippedLargeFiles: number
+  skippedBinaryFiles: number
+  skippedSymlinks: number
+  skippedUnreadable: number
+}
+
+interface GrepBudget {
+  startedAt: number
+  timeoutMs: number
+  aborted: boolean
+  stoppedReason?: string
+}
+
+async function grepPath(
+  pattern: string,
+  basePath: string,
+  context: ToolExecutionContext
+): Promise<string> {
+  let regex: RegExp
+  try {
+    regex = new RegExp(pattern, 'i')
+  } catch (err) {
+    return `正则表达式错误: ${err instanceof Error ? err.message : err}`
+  }
+
+  const matches: string[] = []
+  const stats: GrepStats = {
+    dirsScanned: 0,
+    filesScanned: 0,
+    bytesScanned: 0,
+    skippedLargeFiles: 0,
+    skippedBinaryFiles: 0,
+    skippedSymlinks: 0,
+    skippedUnreadable: 0
+  }
+  const budget: GrepBudget = {
+    startedAt: Date.now(),
+    timeoutMs: GREP_DEFAULT_TIMEOUT_MS,
+    aborted: false
+  }
+
+  async function shouldStop(): Promise<boolean> {
+    if (matches.length >= GREP_MAX_MATCHES) {
+      budget.stoppedReason = `结果已截断，共 ${GREP_MAX_MATCHES}+ 条匹配`
+      return true
+    }
+    if (context.abortSignal?.aborted) {
+      budget.aborted = true
+      budget.stoppedReason = '调用已取消'
+      return true
+    }
+    if (Date.now() - budget.startedAt >= budget.timeoutMs) {
+      budget.stoppedReason = `搜索超过 ${budget.timeoutMs}ms，已提前停止`
+      return true
+    }
+    if (stats.filesScanned >= GREP_MAX_FILES_SCANNED) {
+      budget.stoppedReason = `扫描文件数达到上限 ${GREP_MAX_FILES_SCANNED}，已提前停止`
+      return true
+    }
+    if (stats.dirsScanned >= GREP_MAX_DIRS_SCANNED) {
+      budget.stoppedReason = `扫描目录数达到上限 ${GREP_MAX_DIRS_SCANNED}，已提前停止`
+      return true
+    }
+    if (stats.bytesScanned >= GREP_MAX_BYTES_SCANNED) {
+      budget.stoppedReason = `扫描内容达到上限 ${formatBytes(GREP_MAX_BYTES_SCANNED)}，已提前停止`
+      return true
+    }
+    return false
+  }
+
+  async function searchFile(filePath: string): Promise<void> {
+    if (await shouldStop()) return
+    if (shouldSkipFileByExtension(filePath)) {
+      stats.skippedBinaryFiles++
+      return
+    }
+
+    let stat
+    try {
+      stat = await lstat(filePath)
+    } catch {
+      stats.skippedUnreadable++
+      return
+    }
+    if (stat.isSymbolicLink()) {
+      stats.skippedSymlinks++
+      return
+    }
+    if (!stat.isFile()) return
+    if (stat.size > GREP_MAX_FILE_BYTES) {
+      stats.skippedLargeFiles++
+      return
+    }
+    if (await looksLikeBinaryFileAsync(filePath, stat.size)) {
+      stats.skippedBinaryFiles++
+      return
+    }
+
+    stats.filesScanned++
+    stats.bytesScanned += stat.size
+
+    const rel = relative(basePath, filePath) || filePath
+    const stream = createReadStream(filePath, { encoding: 'utf-8' })
+    const rl = createInterface({ input: stream, crlfDelay: Infinity })
+    let lineNo = 0
+
+    try {
+      for await (const rawLine of rl) {
+        lineNo++
+        if (lineNo % 100 === 0 && (await shouldStop())) break
+        const line = rawLine.length > GREP_MAX_LINE_CHARS
+          ? rawLine.slice(0, GREP_MAX_LINE_CHARS)
+          : rawLine
+        if (regex.test(line)) {
+          matches.push(`${rel}:${lineNo}: ${line.trimEnd()}`)
+          if (await shouldStop()) break
+        }
+      }
+    } catch {
+      stats.skippedUnreadable++
+    } finally {
+      rl.close()
+      stream.destroy()
+    }
+  }
+
+  async function walk(dir: string): Promise<void> {
+    if (await shouldStop()) return
+
+    stats.dirsScanned++
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      stats.skippedUnreadable++
+      return
+    }
+
+    for (const entry of entries) {
+      if (await shouldStop()) return
+      if (SEARCH_IGNORE_DIRS.includes(entry.name as (typeof SEARCH_IGNORE_DIRS)[number])) continue
+
+      const full = join(dir, entry.name)
+      try {
+        if (entry.isSymbolicLink()) {
+          stats.skippedSymlinks++
+          continue
+        }
+        if (entry.isDirectory()) {
+          await walk(full)
+        } else if (entry.isFile()) {
+          await searchFile(full)
+        }
+      } catch {
+        stats.skippedUnreadable++
+      }
+    }
+  }
+
+  try {
+    const stat = await lstat(basePath)
+    if (stat.isSymbolicLink()) {
+      stats.skippedSymlinks++
+    } else if (stat.isFile()) {
+      await searchFile(basePath)
+    } else if (stat.isDirectory()) {
+      await walk(basePath)
+    } else {
+      return `路径不是可搜索的文件或目录: ${basePath}`
+    }
+  } catch (err) {
+    return `搜索失败: ${err instanceof Error ? err.message : err}`
+  }
+
+  return formatGrepResult(pattern, matches, stats, budget)
+}
+
+function formatGrepResult(
+  pattern: string,
+  matches: string[],
+  stats: GrepStats,
+  budget: GrepBudget
+): string {
+  const notices: string[] = []
+  if (budget.stoppedReason) notices.push(budget.stoppedReason)
+  if (stats.skippedLargeFiles > 0) notices.push(`跳过 ${stats.skippedLargeFiles} 个超大文件`)
+  if (stats.skippedBinaryFiles > 0) notices.push(`跳过 ${stats.skippedBinaryFiles} 个二进制/锁文件`)
+  if (stats.skippedSymlinks > 0) notices.push(`跳过 ${stats.skippedSymlinks} 个符号链接`)
+  if (stats.skippedUnreadable > 0) notices.push(`跳过 ${stats.skippedUnreadable} 个不可读路径`)
+
+  const summary = [
+    `扫描: ${stats.dirsScanned} 个目录，${stats.filesScanned} 个文件，${formatBytes(stats.bytesScanned)}`,
+    notices.length ? `提示: ${notices.join('；')}` : null
+  ].filter((line): line is string => line !== null)
+
+  if (matches.length === 0) {
+    return [`没有找到匹配 "${pattern}" 的内容`, ...summary].join('\n')
+  }
+
+  return [...matches, ...summary.map((line) => `... (${line})`)].join('\n')
+}
+
+function shouldSkipFileByExtension(filePath: string): boolean {
+  return GREP_BINARY_EXTENSIONS.has(extname(filePath).toLowerCase())
+}
+
+async function looksLikeBinaryFileAsync(filePath: string, fileSize: number): Promise<boolean> {
+  if (fileSize === 0) return false
+
+  let handle
+  try {
+    handle = await open(filePath, 'r')
+    const buffer = Buffer.alloc(Math.min(8192, fileSize))
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return buffer.subarray(0, bytesRead).includes(0)
+  } catch {
+    return true
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kb = bytes / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
 }
 
 let previewServer: Server | null = null

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export type EarlyCliCommand = 'help' | 'version'
+export type EarlyCliCommand = 'help' | 'version' | 'update'
 
 let cachedPackageVersion: string | undefined
 
@@ -33,6 +33,7 @@ export function getEarlyCliCommand(argv: string[]): EarlyCliCommand | undefined 
   const first = argv[0]
   if (first === 'help' || argv.includes('--help') || argv.includes('-h')) return 'help'
   if (first === 'version' || argv.includes('--version') || argv.includes('-v')) return 'version'
+  if (first === 'update') return 'update'
   return undefined
 }
 
@@ -48,10 +49,13 @@ export function formatCliHelp(version: string): string {
     '  q-code [options]',
     '  q-code help',
     '  q-code version',
+    '  q-code update [--dry-run]',
     '',
     'Options:',
     '  -h, --help                Show help and exit',
     '  -v, --version             Show version and exit',
+    '      update                Update global q-code CLI to npm latest',
+    '      update --dry-run      Show the update command without running it',
     '      --continue            Resume the latest session for this project',
     '      --session <id>        Use a specific session id',
     '      --plan                Start directly in Plan Mode',
@@ -67,7 +71,8 @@ export function formatCliHelp(version: string): string {
     'Examples:',
     '  q-code',
     '  q-code --continue',
-    '  q-code --session my-task --plan'
+    '  q-code --session my-task --plan',
+    '  q-code update'
   ].join('\n')
 }
 
