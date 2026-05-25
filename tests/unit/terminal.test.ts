@@ -200,6 +200,29 @@ describe('terminal state reducer', () => {
     expect(state.transcript).toHaveLength(0)
   })
 
+  it('tracks session info for status bar chips without adding transcript noise', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'session_info',
+      sessionId: 'session-123456',
+      cwd: 'C:\\repo',
+      modelName: 'gpt-5.5',
+      agentMode: 'normal',
+      taskMode: 'task',
+      cacheMode: 'auto'
+    })
+
+    expect(state.sessionInfo).toEqual({
+      sessionId: 'session-123456',
+      cwd: 'C:\\repo',
+      modelName: 'gpt-5.5',
+      agentMode: 'normal',
+      taskMode: 'task',
+      cacheMode: 'auto'
+    })
+    expect(state.transcript).toHaveLength(0)
+  })
+
   it('logs context usage when state changes into warning or blocking', () => {
     let state = createInitialTerminalState()
     state = terminalReducer(state, {

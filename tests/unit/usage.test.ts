@@ -144,6 +144,8 @@ describe('usage pricing and totals', () => {
     expect(totals.cacheMode).toBe('off')
     expect(totals.cacheHitRate).toBeCloseTo(1000 / 2010)
     expect(totals.unknownCostSteps).toBe(1)
+    expect(renderUsageSummary(totals)).toContain('Cache hit')
+    expect(renderUsageSummary(totals)).toContain('█')
     expect(renderUsageSummary(totals)).toContain('节省成本')
     expect(renderNoUsage()).toContain('还没有可统计')
   })
@@ -205,6 +207,7 @@ describe('cache status', () => {
     })
 
     expect(status).toContain('隐式 cache')
+    expect(status).toContain('命中率')
     expect(status).toContain('尚未观察到模型请求')
   })
 })

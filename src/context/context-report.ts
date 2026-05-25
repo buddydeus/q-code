@@ -80,6 +80,8 @@ export function renderContextReport(report: ContextReport): string {
   return [
     'Context',
     '',
+    `${report.snapshot.state.toUpperCase()} ${renderBar(report.snapshot.ratio, 24)} ${usedPercent}`,
+    '',
     report.matrix,
     '',
     `模型: ${report.modelName}`,
@@ -176,4 +178,10 @@ function allocateMatrixCells(limit: number, categories: MatrixCategory[]): Matri
 
 function formatPercent(value: number): string {
   return `${(Math.max(0, value) * 100).toFixed(1)}%`
+}
+
+function renderBar(value: number, width: number): string {
+  const clamped = Math.max(0, Math.min(1, value))
+  const filled = Math.round(clamped * width)
+  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`
 }

@@ -31,6 +31,8 @@ describe('context report', () => {
     expect(report.breakdown.messageTokens).toBeGreaterThan(0)
     expect(report.breakdown.overLimitTokens).toBe(0)
     expect(report.matrix.split('\n')).toHaveLength(16)
+    expect(renderContextReport(report)).toContain('NORMAL')
+    expect(renderContextReport(report)).toContain('█')
     expect(renderContextReport(report)).toContain('距离压缩余量')
   })
 

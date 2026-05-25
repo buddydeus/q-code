@@ -1,5 +1,6 @@
 import type { TokenUsage } from '../context/token-budget'
 import type { SlashCommandSuggestion } from '../slash'
+import type { CacheMode } from '../usage'
 
 export type TerminalRole = 'assistant' | 'user' | 'system' | 'tool' | 'error'
 export type TerminalStatus = 'idle' | 'thinking' | 'running_tool' | 'compacting' | 'recovering' | 'error'
@@ -89,6 +90,15 @@ export type TerminalEvent =
       type: 'usage'
       turnUsage: TokenUsage
       totalUsage: TokenUsage
+    })
+  | (TerminalBaseEvent & {
+      type: 'session_info'
+      sessionId: string
+      cwd?: string
+      modelName: string
+      agentMode: string
+      taskMode: string
+      cacheMode: CacheMode
     })
   | (TerminalBaseEvent & {
       type: 'progress'

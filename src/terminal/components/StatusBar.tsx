@@ -4,6 +4,7 @@ import type { TerminalState } from '../state'
 import { statusLabel } from '../utils/format'
 import { animeTheme, statusColor } from '../theme/index'
 import { SpinnerText } from './SpinnerText'
+import { ContextMeter } from './ContextMeter'
 
 export function StatusBar({
   state,
@@ -15,22 +16,32 @@ export function StatusBar({
   hasStreamingAssistant: boolean
 }): React.JSX.Element {
   const showSpinner = isBusy && !hasStreamingAssistant && state.status !== 'idle'
-  const tokens = state.usage
-    ? `tokens ${state.usage.totalTokens} (${state.usage.inputTokens}/${state.usage.outputTokens})`
-    : ''
-  const context = state.contextUsage
-    ? `context ${Math.round((state.contextUsage.used / state.contextUsage.limit) * 100)}%`
-    : ''
   const runningAgents = state.backgroundAgents.filter((agent) => agent.status === 'running').length
+  const chips = [
+    state.sessionInfo?.agentMode ? `mode ${state.sessionInfo.agentMode}` : '',
+    state.sessionInfo?.modelName ? `model ${shortModelName(state.sessionInfo.modelName)}` : '',
+    state.sessionInfo?.cacheMode ? `cache ${state.sessionInfo.cacheMode}` : '',
+    state.sessionInfo?.taskMode ? `tasks ${state.sessionInfo.taskMode}` : '',
+    state.usage ? `tokens ${formatCompactNumber(state.usage.totalTokens)}` : '',
+    runningAgents ? `bg ${runningAgents}` : '',
+    state.sessionInfo?.sessionId ? `session ${shortSessionId(state.sessionInfo.sessionId)}` : ''
+  ].filter(Boolean)
+
   return (
     <Box marginTop={1} flexDirection="column">
       <Box justifyContent="space-between">
         <Text color={statusColor(state.status)}>  ✧ 状态: {statusLabel(state.status, state.statusText)}</Text>
-        <Text color={animeTheme.textDim}>
-          {[tokens ? `tokens ${state.usage?.totalTokens}` : '', context, runningAgents ? `bg ${runningAgents}` : '']
-            .filter(Boolean)
-            .join(' · ')}
-        </Text>
+        <Text color={animeTheme.textDim}>{chips.join(' · ')}</Text>
+      </Box>
+      <Box marginLeft={2} gap={1}>
+        <Text color={animeTheme.textDim}>Context</Text>
+        <ContextMeter usage={state.contextUsage} />
+        {state.usage ? (
+          <Text color={animeTheme.textDim}>
+            Usage in/out {formatCompactNumber(state.usage.inputTokens)}/
+            {formatCompactNumber(state.usage.outputTokens)}
+          </Text>
+        ) : null}
       </Box>
       {state.progressItems.length > 0 ? <ProgressSummary state={state} /> : null}
       {state.backgroundAgents.length > 0 ? <BackgroundAgentSummary state={state} /> : null}
@@ -44,6 +55,20 @@ export function StatusBar({
       ) : null}
     </Box>
   )
+}
+
+function formatCompactNumber(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
+  return String(value)
+}
+
+function shortModelName(value: string): string {
+  return value.length > 24 ? `...${value.slice(-21)}` : value
+}
+
+function shortSessionId(value: string): string {
+  return value.length > 8 ? value.slice(0, 8) : value
 }
 
 function ProgressSummary({ state }: { state: TerminalState }): React.JSX.Element {

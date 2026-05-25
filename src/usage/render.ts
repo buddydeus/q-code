@@ -2,6 +2,8 @@ import type { UsageTotals } from './types'
 
 export function renderUsageSummary(totals: UsageTotals): string {
   const lines = ['Usage Summary', '', `已记录 ${totals.steps} 个模型步骤`, '']
+  lines.push(`Cache hit ${renderBar(totals.cacheHitRate, 18)} ${formatPercent(totals.cacheHitRate)}`)
+  lines.push('')
   lines.push(`输入 tokens        ${formatTokens(totals.usage.inputTokens)}`)
   lines.push(`Cache 写入         ${formatTokens(totals.usage.cacheWriteTokens)}`)
   lines.push(
@@ -49,4 +51,10 @@ function formatMoney(value: number): string {
 
 function formatPercent(value: number): string {
   return `${(Math.max(0, value) * 100).toFixed(1)}%`
+}
+
+function renderBar(value: number, width: number): string {
+  const clamped = Math.max(0, Math.min(1, value))
+  const filled = Math.round(clamped * width)
+  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`
 }

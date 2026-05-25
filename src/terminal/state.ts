@@ -6,6 +6,7 @@ import type {
   TerminalStatus
 } from './events'
 import type { SlashCommandSuggestion } from '../slash'
+import type { CacheMode } from '../usage'
 
 export type TranscriptItemKind = 'message' | 'tool' | 'usage' | 'context'
 
@@ -44,12 +45,22 @@ export interface TerminalUsage {
   outputTokens: number
 }
 
+export interface TerminalSessionInfo {
+  sessionId: string
+  cwd?: string
+  modelName: string
+  agentMode: string
+  taskMode: string
+  cacheMode: CacheMode
+}
+
 export interface TerminalState {
   transcript: TranscriptItem[]
   status: TerminalStatus
   statusText: string
   contextUsage?: TerminalContextUsage
   usage?: TerminalUsage
+  sessionInfo?: TerminalSessionInfo
   slashCommands: SlashCommandSuggestion[]
   progressItems: TerminalProgressItem[]
   backgroundAgents: TerminalBackgroundAgentItem[]
@@ -323,6 +334,19 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           totalTokens: event.totalUsage.totalTokens,
           inputTokens: event.totalUsage.inputTokens,
           outputTokens: event.totalUsage.outputTokens
+        }
+      }
+
+    case 'session_info':
+      return {
+        ...state,
+        sessionInfo: {
+          sessionId: event.sessionId,
+          ...(event.cwd ? { cwd: event.cwd } : {}),
+          modelName: event.modelName,
+          agentMode: event.agentMode,
+          taskMode: event.taskMode,
+          cacheMode: event.cacheMode
         }
       }
 

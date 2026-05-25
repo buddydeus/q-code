@@ -88,7 +88,7 @@ export function renderCacheStatus(params: {
   lines.push(`模型步骤: ${params.totals.steps}`)
   lines.push(`Cache 读取: ${params.totals.usage.cacheReadTokens} tokens`)
   lines.push(`Cache 写入: ${params.totals.usage.cacheWriteTokens} tokens`)
-  lines.push(`命中率: ${(params.totals.cacheHitRate * 100).toFixed(1)}%`)
+  lines.push(`命中率: ${renderBar(params.totals.cacheHitRate, 18)} ${(params.totals.cacheHitRate * 100).toFixed(1)}%`)
   lines.push('')
   if (params.prefix.current) {
     lines.push(`System prefix: ${params.prefix.current.systemHash}`)
@@ -109,4 +109,10 @@ function samePrefix(left: CachePrefixSnapshot, right: CachePrefixSnapshot): bool
 
 function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 12)
+}
+
+function renderBar(value: number, width: number): string {
+  const clamped = Math.max(0, Math.min(1, value))
+  const filled = Math.round(clamped * width)
+  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)}`
 }

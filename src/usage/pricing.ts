@@ -8,6 +8,7 @@ export const DEFAULT_PRICE_TABLE: Record<string, ModelPricing> = {
   'claude-haiku-4-5': { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
   'deepseek-v3-2': { input: 0.27, output: 1.1, cacheWrite: 0.27, cacheRead: 0.027 },
   'qwen3-6-plus': { input: 0.4, output: 1.2, cacheWrite: 0.4, cacheRead: 0.04 },
+  'mock-model': { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 }
 }
 
 export function resolveModelPricing(
@@ -48,4 +49,3 @@ export function computeCost(
 function priceTokens(tokens: number, dollarsPerMillion: number): number {
   return (Math.max(0, tokens) / 1_000_000) * dollarsPerMillion
 }
-

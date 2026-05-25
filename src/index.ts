@@ -405,6 +405,7 @@ async function main() {
   let needsPlanModeExitAttachment = false
   let pendingPlanApproval = false
   let pendingPlanSummary = ''
+  let canEmitSessionInfo = false
 
   function setAgentMode(mode: ToolVisibilityMode): void {
     const previous = agentMode
@@ -416,6 +417,7 @@ async function main() {
     if (previous === 'plan' && mode !== 'plan') {
       needsPlanModeExitAttachment = true
     }
+    emitSessionInfoIfReady()
   }
 
   registry.register(
@@ -574,6 +576,23 @@ async function main() {
   })
   const cachePrefixTracker = new CachePrefixTracker()
   const { model: summaryModel, name: summaryModelName } = createSummaryModel()
+  canEmitSessionInfo = true
+
+  function emitSessionInfo(): void {
+    emitTerminal({
+      type: 'session_info',
+      sessionId,
+      cwd: activeStore.cwd,
+      modelName: sessionModelOverride ?? defaultModelName,
+      agentMode,
+      taskMode,
+      cacheMode: usageTracker.getCacheMode()
+    })
+  }
+
+  function emitSessionInfoIfReady(): void {
+    if (canEmitSessionInfo) emitSessionInfo()
+  }
 
   function snapshotContext(
     currentMessages: ModelMessage[],
@@ -739,6 +758,7 @@ async function main() {
     registry.setQuiet(true)
     void emitTaskProgress()
     emitBackgroundAgents()
+    emitSessionInfo()
     terminal = startTerminalRuntime({
       title: 'q-code',
       sessionId,
@@ -1182,12 +1202,14 @@ async function main() {
     if (requested === 'default') {
       sessionModelOverride = undefined
       model = createModel(defaultModelName)
+      emitSessionInfo()
       print(`\n  [Model] 已恢复默认模型: ${defaultModelName}`)
       return
     }
 
     sessionModelOverride = requested
     model = createModel(requested)
+    emitSessionInfo()
     print(`\n  [Model] 本会话模型已切换为: ${requested}`)
   }
 
@@ -1244,6 +1266,7 @@ async function main() {
     const arg = command.slice('/tasks'.length).trim()
     if (arg === 'task') {
       taskMode = 'task'
+      emitSessionInfo()
       print('\n  [Tasks] 已切换到 Task V2 持久化任务图。')
       print(`  [Tasks] 路径: ${getTaskGraphDir(getCurrentTaskOptions())}`)
       print('\n' + formatTaskList(await listTasks(getCurrentTaskOptions())))
@@ -1252,6 +1275,7 @@ async function main() {
 
     if (arg === 'todo') {
       taskMode = 'todo'
+      emitSessionInfo()
       print('\n  [Tasks] 已切换到 TodoWrite V1 会话级任务清单。')
       print('\n' + formatTodoList(getTodos(sessionId)))
       return
@@ -1748,6 +1772,7 @@ async function main() {
       }
       usageTracker.setCacheMode(mode)
       activeStore.appendCacheMode(mode)
+      emitSessionInfo()
     }
 
     print(
