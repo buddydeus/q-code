@@ -1,11 +1,12 @@
 import React, { useMemo } from 'react'
-import { Box, Text } from 'ink'
+import { Box, Text, useStdout } from 'ink'
 import { parseMarkdown, type MarkdownBlock } from '../markdown'
 import { renderMarkdownTable } from '../table-renderer'
 
 export const MARKDOWN_PARSE_CHAR_LIMIT = 12000
-const STREAMING_PREVIEW_HEAD = 2500
-const STREAMING_PREVIEW_TAIL = 7000
+const STREAMING_MAX_CHARS = 2600
+const STREAMING_RESERVED_ROWS = 8
+const STREAMING_FALLBACK_ROWS = 16
 
 export function MarkdownText({
   text,
@@ -18,8 +19,13 @@ export function MarkdownText({
   parse?: boolean
   streaming?: boolean
 }): React.JSX.Element {
-  const shouldParse = shouldParseMarkdownText(text, parse)
-  const displayText = shouldParse || !streaming ? text : previewStreamingText(text)
+  const { stdout } = useStdout()
+  const maxStreamingLines = Math.max(
+    8,
+    Math.min(18, (stdout.rows ?? STREAMING_FALLBACK_ROWS + STREAMING_RESERVED_ROWS) - STREAMING_RESERVED_ROWS)
+  )
+  const displayText = streaming ? previewStreamingText(text, maxStreamingLines) : text
+  const shouldParse = !streaming && shouldParseMarkdownText(displayText, parse)
   const blocks = useMemo(() => {
     if (!shouldParse) return []
     try {
@@ -118,15 +124,24 @@ export function shouldParseMarkdownText(text: string, parse = true): boolean {
   return parse && text.length <= MARKDOWN_PARSE_CHAR_LIMIT
 }
 
-function previewStreamingText(text: string): string {
-  if (text.length <= MARKDOWN_PARSE_CHAR_LIMIT) return text
-  const omitted = text.length - STREAMING_PREVIEW_HEAD - STREAMING_PREVIEW_TAIL
-  if (omitted <= 0) return text
+export function previewStreamingText(text: string, maxLines: number): string {
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const charTrimmed =
+    normalized.length > STREAMING_MAX_CHARS
+      ? [
+          `... streaming preview omitted ${normalized.length - STREAMING_MAX_CHARS} chars ...`,
+          '',
+          normalized.slice(-STREAMING_MAX_CHARS)
+        ].join('\n')
+      : normalized
+  const lines = charTrimmed.split('\n')
+  if (lines.length <= maxLines) return charTrimmed
+
+  const visibleLines = Math.max(1, maxLines - 2)
+  const omitted = lines.length - visibleLines
   return [
-    text.slice(0, STREAMING_PREVIEW_HEAD),
+    `... streaming preview omitted ${omitted} lines ...`,
     '',
-    `... streaming preview omitted ${omitted} chars ...`,
-    '',
-    text.slice(-STREAMING_PREVIEW_TAIL)
+    ...lines.slice(-visibleLines)
   ].join('\n')
 }

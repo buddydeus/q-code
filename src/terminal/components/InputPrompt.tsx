@@ -72,7 +72,7 @@ function usePromptCursor({
     const rootHeight = getRootHeight(ref.current)
     const targetX = Math.max(0, Math.min((stdout.columns || 1) - 1, position.x + column))
     const targetY = position.y + row
-    const rowsFromFrameEnd = Math.max(0, rootHeight - targetY - 1)
+    const rowsFromFrameEnd = getCursorRowsFromFrameEnd(rootHeight, targetY)
     let syncTimers: NodeJS.Timeout[] = []
     let hasSavedFrameEnd = false
 
@@ -116,6 +116,10 @@ function getRootHeight(node: DOMElement): number {
   let current: DOMElement = node
   while (current.parentNode) current = current.parentNode
   return current.yogaNode?.getComputedHeight() ?? 0
+}
+
+export function getCursorRowsFromFrameEnd(rootHeight: number, targetY: number): number {
+  return Math.max(0, rootHeight - targetY)
 }
 
 const Cursor = {

@@ -24,8 +24,10 @@ import { shouldBackspace, shouldDeleteForward } from '../../src/terminal/keys'
 import { parseMarkdown } from '../../src/terminal/markdown'
 import {
   MARKDOWN_PARSE_CHAR_LIMIT,
+  previewStreamingText,
   shouldParseMarkdownText
 } from '../../src/terminal/components/MarkdownText'
+import { getCursorRowsFromFrameEnd } from '../../src/terminal/components/InputPrompt'
 import { renderMarkdownTable } from '../../src/terminal/table-renderer'
 import {
   estimateItemRows,
@@ -363,6 +365,12 @@ describe('terminal input state', () => {
     expect(getInputCursorPosition('abcd', 4, 3)).toEqual({ row: 1, column: 1 })
   })
 
+  it('moves the real cursor back onto the rendered input row', () => {
+    expect(getCursorRowsFromFrameEnd(2, 1)).toBe(1)
+    expect(getCursorRowsFromFrameEnd(5, 2)).toBe(3)
+    expect(getCursorRowsFromFrameEnd(1, 2)).toBe(0)
+  })
+
   it('positions the cursor after ZWJ emoji graphemes by display width', () => {
     let state = createInputState()
     state = insertText(state, '🧑‍💻x')
@@ -455,6 +463,21 @@ describe('terminal markdown parser', () => {
     expect(shouldParseMarkdownText('# short')).toBe(true)
     expect(shouldParseMarkdownText('x'.repeat(MARKDOWN_PARSE_CHAR_LIMIT))).toBe(true)
     expect(shouldParseMarkdownText('x'.repeat(MARKDOWN_PARSE_CHAR_LIMIT + 1))).toBe(false)
+  })
+
+  it('caps streaming markdown previews to avoid oversized live terminal renders', () => {
+    const preview = previewStreamingText(Array.from({ length: 30 }, (_, index) => `line ${index}`).join('\n'), 8)
+
+    expect(preview).toContain('streaming preview omitted 24 lines')
+    expect(preview).toContain('line 29')
+    expect(preview.split('\n')).toHaveLength(8)
+  })
+
+  it('caps very long single-line streaming previews by characters', () => {
+    const preview = previewStreamingText('x'.repeat(4000), 20)
+
+    expect(preview).toContain('streaming preview omitted 1400 chars')
+    expect(preview.length).toBeLessThan(2700)
   })
 
   it('parses common markdown blocks used by agent output', () => {
