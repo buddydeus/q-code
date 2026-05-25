@@ -33,8 +33,10 @@ import {
   estimateItemRows,
   estimateWrappedRows,
   hideCompletedTurnTools,
-  splitStaticAndLiveTranscript
+  splitStaticAndLiveTranscript,
+  takeUnprintedStaticItems
 } from '../../src/terminal/utils/layout'
+import { formatStaticTranscriptItems } from '../../src/terminal/utils/static-output'
 import { stringDisplayWidth } from '../../src/terminal/utils/string-width'
 import type { SlashCommandSuggestion } from '../../src/slash'
 
@@ -690,6 +692,31 @@ describe('terminal layout helpers', () => {
 
     expect(staticItems.map((item) => item.id)).toEqual(['1', '2'])
     expect(liveItems).toEqual([])
+  })
+
+  it('selects newly static items by id even when capped transcript length is stable', () => {
+    const printed = new Set<string>()
+    const first = [
+      transcriptItem('1', 'message', 'user', '旧问题'),
+      transcriptItem('2', 'message', 'assistant', '旧回答')
+    ]
+    const next = [
+      transcriptItem('2', 'message', 'assistant', '旧回答'),
+      transcriptItem('3', 'message', 'assistant', '新回答')
+    ]
+
+    expect(takeUnprintedStaticItems(first, printed).map((item) => item.id)).toEqual(['1', '2'])
+    expect(takeUnprintedStaticItems(next, printed).map((item) => item.id)).toEqual(['3'])
+  })
+
+  it('formats static transcript output without relying on Ink Static buffers', () => {
+    const output = formatStaticTranscriptItems([
+      transcriptItem('1', 'message', 'user', '问题'),
+      transcriptItem('2', 'message', 'assistant', '回答')
+    ])
+
+    expect(output).toContain('问题')
+    expect(output).toContain('▎ 回答')
   })
 
   it('keeps a tool-only in-progress turn live until the assistant answers', () => {

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Box, Static, useApp, useInput, useStdin, useStdout } from 'ink'
+import { Box, useApp, useInput, useStdin, useStdout } from 'ink'
 import type { TerminalEventBus } from './events'
-import { createInitialTerminalState, terminalReducer, type TranscriptItem } from './state'
+import { createInitialTerminalState, terminalReducer } from './state'
 import {
   backspace,
   clearOrRestoreInput,
@@ -24,7 +24,8 @@ import {
   StatusBar
 } from './components'
 import { formatErrorMessage } from './utils/format'
-import { splitStaticAndLiveTranscript } from './utils/layout'
+import { splitStaticAndLiveTranscript, takeUnprintedStaticItems } from './utils/layout'
+import { formatStaticTranscriptItems } from './utils/static-output'
 import {
   filterSlashCommandSuggestions,
   type SlashCommandSuggestion
@@ -32,20 +33,6 @@ import {
 
 const ASSISTANT_STREAM_FLUSH_MS = 80
 const CLEAR_TERMINAL = '\u001B[2J\u001B[3J\u001B[H'
-
-type StaticOutputItem =
-  | {
-      type: 'header'
-      id: string
-      title: string
-      sessionId?: string
-      cwd?: string
-    }
-  | {
-      type: 'transcript'
-      id: string
-      item: TranscriptItem
-    }
 
 export interface TerminalAppProps {
   bus: TerminalEventBus
@@ -63,33 +50,16 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const [input, setInput] = useState(() => createInputState())
   const [isBusy, setIsBusy] = useState(false)
   const [interruptRequested, setInterruptRequested] = useState(false)
-  const [staticResetKey, setStaticResetKey] = useState(0)
   const { exit } = useApp()
   const { internal_eventEmitter } = useStdin()
-  const { stdout } = useStdout()
+  const { stdout, write } = useStdout()
   const lastRawInput = useRef<string>()
   const pendingAssistantDelta = useRef('')
   const assistantFlushTimer = useRef<ReturnType<typeof setTimeout>>()
+  const printedStaticIds = useRef(new Set<string>())
   const { staticItems, liveItems } = useMemo(
     () => splitStaticAndLiveTranscript(state.transcript),
     [state.transcript]
-  )
-  const staticOutputItems = useMemo<StaticOutputItem[]>(
-    () => [
-      {
-        type: 'header',
-        id: 'header',
-        title: props.title ?? 'q-code',
-        ...(props.sessionId ? { sessionId: props.sessionId } : {}),
-        ...(props.cwd ? { cwd: props.cwd } : {})
-      },
-      ...staticItems.map((item) => ({
-        type: 'transcript' as const,
-        id: item.id,
-        item
-      }))
-    ],
-    [props.cwd, props.sessionId, props.title, staticItems]
   )
   const hasStreamingAssistant = state.activeAssistantId !== undefined
   const slashCommands =
@@ -141,7 +111,7 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
 
       if (event.type === 'clear') {
         stdout.write(CLEAR_TERMINAL)
-        setStaticResetKey((current) => current + 1)
+        printedStaticIds.current.clear()
       }
 
       dispatch(event)
@@ -160,6 +130,14 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   useEffect(() => {
     if (!isBusy) setInterruptRequested(false)
   }, [isBusy])
+
+  useEffect(() => {
+    const pending = takeUnprintedStaticItems(staticItems, printedStaticIds.current)
+    if (pending.length === 0) return
+
+    const output = formatStaticTranscriptItems(pending)
+    if (output) write(`${output}\n`)
+  }, [staticItems, write])
 
   useEffect(() => {
     if (!showSlashCommands) setSelectedCommandIndex(-1)
@@ -298,28 +276,18 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   })
 
   return (
-    <>
-      <Static key={staticResetKey} items={staticOutputItems} style={{ paddingX: 1 }}>
-        {(item) =>
-          item.type === 'header' ? (
-            <Header key={item.id} title={item.title} sessionId={item.sessionId} cwd={item.cwd} />
-          ) : (
-            <ConversationView key={item.id} items={[item.item]} />
-          )
-        }
-      </Static>
-      <Box flexDirection="column" paddingX={1}>
-        <ConversationView items={liveItems} />
-        <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
-        <CommandSuggestions suggestions={renderedSlashCommands} />
-        <InputPrompt
-          value={input.value}
-          cursor={input.cursor}
-          isBusy={isBusy}
-          isHistorySearch={input.historySearchQuery !== undefined}
-          hasUndoClear={!input.value && input.clearedValue !== undefined}
-        />
-      </Box>
-    </>
+    <Box flexDirection="column" paddingX={1}>
+      <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
+      <ConversationView items={liveItems} />
+      <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
+      <CommandSuggestions suggestions={renderedSlashCommands} />
+      <InputPrompt
+        value={input.value}
+        cursor={input.cursor}
+        isBusy={isBusy}
+        isHistorySearch={input.historySearchQuery !== undefined}
+        hasUndoClear={!input.value && input.clearedValue !== undefined}
+      />
+    </Box>
   )
 }

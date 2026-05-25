@@ -59,6 +59,15 @@ export function splitStaticAndLiveTranscript(items: TranscriptItem[]): {
   return { staticItems, liveItems }
 }
 
+export function takeUnprintedStaticItems(
+  items: readonly TranscriptItem[],
+  printedIds: Set<string>
+): TranscriptItem[] {
+  const pending = items.filter((item) => !printedIds.has(item.id))
+  for (const item of pending) printedIds.add(item.id)
+  return pending
+}
+
 function isLiveTurn(items: TranscriptItem[]): boolean {
   const hasUser = items.some((item) => item.role === 'user')
   if (!hasUser) return false
