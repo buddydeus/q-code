@@ -310,6 +310,35 @@ describe('agentLoop 集成（mock model + mock tools）', () => {
     expect(events.filter((e) => e === 'usage').length).toBeGreaterThanOrEqual(1)
   })
 
+  it('onStepUsage 返回归一化后的 rich usage', async () => {
+    const registry = makeRegistry()
+    const { model } = createMockModel([
+      {
+        text: '完成',
+        finishReason: 'stop',
+        usage: { inputTokens: 30, outputTokens: 7, totalTokens: 37 }
+      }
+    ])
+
+    const stepUsages: Array<{
+      model: string
+      usage: { inputTokens: number; outputTokens: number; totalTokens: number }
+      discarded: boolean
+    }> = []
+    await agentLoop(model, registry, [{ role: 'user', content: 'q' }], 'sys', {
+      quiet: true,
+      modelName: 'mock-model',
+      onStepUsage: (usage) => stepUsages.push(usage)
+    })
+
+    expect(stepUsages).toHaveLength(1)
+    expect(stepUsages[0]).toMatchObject({
+      model: 'mock-model',
+      discarded: false,
+      usage: { inputTokens: 30, outputTokens: 7, totalTokens: 37 }
+    })
+  })
+
   it('工具 envelope 错误会作为错误结果回调一次', async () => {
     const probe = makeMockTool('p', () => ({
       ok: false,

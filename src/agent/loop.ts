@@ -13,6 +13,7 @@ import {
   type UsageAnchor,
   usageFromLanguageModelUsage
 } from '../context/token-budget'
+import { normalizeUsage, type NormalizedUsage } from '../usage'
 import {
   fmtStepHeader,
   fmtToolCall,
@@ -66,6 +67,12 @@ export interface AgentToolResultEvent {
   isError?: boolean
 }
 
+export interface AgentStepUsage {
+  model: string
+  usage: NormalizedUsage
+  discarded: boolean
+}
+
 export interface AgentLoopOptions {
   tokenBudget?: number
   maxOutputTokens?: number
@@ -79,7 +86,9 @@ export interface AgentLoopOptions {
     messages: ModelMessage[],
     context: { usageAnchor?: UsageAnchor }
   ) => { used: number; limit: number; state?: string }
+  modelName?: string
   onUsage?: (turnUsage: TokenUsage, totalUsage: TokenUsage) => void
+  onStepUsage?: (stepUsage: AgentStepUsage) => void
   onText?: (text: string) => void
   onToolEvent?: (event: AgentToolEvent) => void
   onToolResult?: (event: AgentToolResultEvent) => void
@@ -351,7 +360,7 @@ export async function agentLoop(
               break
 
             case 'finish':
-              stepUsage = stepUsage ?? part.totalUsage
+              stepUsage = stepUsage ?? part.totalUsage ?? readLegacyFinishUsage(part)
               stepFinishReason = stepFinishReason ?? part.finishReason
               break
 
@@ -369,6 +378,14 @@ export async function agentLoop(
         ) {
           const partialUsage = usageFromLanguageModelUsage(stepUsage)
           discardedUsage = addUsage(discardedUsage, partialUsage)
+          const normalizedPartialUsage = normalizeUsage(stepUsage)
+          if (hasAnyUsage(normalizedPartialUsage)) {
+            options.onStepUsage?.({
+              model: options.modelName ?? 'unknown',
+              usage: normalizedPartialUsage,
+              discarded: true
+            })
+          }
           didEscalateOutput = true
           outputTokenLimit = escalatedMaxOutputTokens
           if (!quiet) console.log(fmtOutputRetry(maxOutputTokens, escalatedMaxOutputTokens))
@@ -399,6 +416,14 @@ export async function agentLoop(
 
     // 只把执行 token 作为本轮成本/死循环硬保护；主显示使用当前上下文占用。
     const anchorUsage = usageFromLanguageModelUsage(stepUsage)
+    const normalizedStepUsage = normalizeUsage(stepUsage)
+    if (hasAnyUsage(normalizedStepUsage)) {
+      options.onStepUsage?.({
+        model: options.modelName ?? 'unknown',
+        usage: normalizedStepUsage,
+        discarded: false
+      })
+    }
     const turnUsage = addUsage(discardedUsage, anchorUsage)
     totalUsage = {
       inputTokens: totalUsage.inputTokens + turnUsage.inputTokens,
@@ -623,4 +648,36 @@ function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
     outputTokens: left.outputTokens + right.outputTokens,
     totalTokens: left.totalTokens + right.totalTokens
   }
+}
+
+function hasAnyUsage(usage: NormalizedUsage): boolean {
+  return (
+    usage.inputTokens > 0 ||
+    usage.outputTokens > 0 ||
+    usage.cacheReadTokens > 0 ||
+    usage.cacheWriteTokens > 0 ||
+    usage.totalTokens > 0
+  )
+}
+
+function readLegacyFinishUsage(part: unknown): LanguageModelUsage | undefined {
+  if (
+    typeof part === 'object' &&
+    part !== null &&
+    'usage' in part &&
+    isLanguageModelUsage((part as { usage?: unknown }).usage)
+  ) {
+    return (part as { usage: LanguageModelUsage }).usage
+  }
+  return undefined
+}
+
+function isLanguageModelUsage(value: unknown): value is LanguageModelUsage {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (typeof (value as { inputTokens?: unknown }).inputTokens === 'number' ||
+      typeof (value as { outputTokens?: unknown }).outputTokens === 'number' ||
+      typeof (value as { totalTokens?: unknown }).totalTokens === 'number')
+  )
 }

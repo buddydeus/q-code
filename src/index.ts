@@ -53,6 +53,16 @@ import {
   type TokenUsage,
   type UsageAnchor
 } from './context/token-budget'
+import { buildContextReport, renderContextReport } from './context/context-report'
+import {
+  CachePrefixTracker,
+  UsageTracker,
+  createCachePrefixSnapshot,
+  parseCacheModeArg,
+  renderCacheStatus,
+  renderNoUsage,
+  renderUsageSummary
+} from './usage'
 import { buildMemorySystemContext } from './context/memory/memdir'
 import {
   getPlanFilePath,
@@ -555,7 +565,14 @@ async function main() {
   const defaultModelName = getRequiredEnv('OPENAI_MODEL')
   let sessionModelOverride: string | undefined
   let model = createModel(defaultModelName)
-  let latestTotalUsage: TokenUsage | undefined = activeStore.getSummary().totalUsage
+  const initialSessionSummary = activeStore.getSummary()
+  let latestTotalUsage: TokenUsage | undefined = initialSessionSummary.totalUsage
+  const usageRecords = activeStore.getUsageRecords()
+  const usageTracker = new UsageTracker({
+    cacheMode: activeStore.getLatestCacheMode() ?? lastUsageRecord(usageRecords)?.cacheMode ?? 'auto',
+    records: usageRecords
+  })
+  const cachePrefixTracker = new CachePrefixTracker()
   const { model: summaryModel, name: summaryModelName } = createSummaryModel()
 
   function snapshotContext(
@@ -862,6 +879,13 @@ async function main() {
     messages.push(...userMessages)
     activeStore.appendAll(userMessages)
     const turnSystem = await buildSystemPrompt(userQuery)
+    cachePrefixTracker.observe(
+      createCachePrefixSnapshot({
+        systemPrompt: turnSystem,
+        tools: registry.getActiveTools(),
+        activeToolSchemaTokens: registry.countTokenEstimate().active
+      })
+    )
     const jitSummary = registry.getJitToolSummary()
     if (jitSummary) {
       const firstLine = jitSummary.split('\n')[0]
@@ -881,6 +905,7 @@ async function main() {
         escalatedMaxOutputTokens,
         maxSteps,
         quiet: useTui,
+        modelName: sessionModelOverride ?? defaultModelName,
         abortSignal: turnAbortController.signal,
         sessionId,
         hooks,
@@ -913,6 +938,11 @@ async function main() {
           latestTotalUsage = totalUsage
           activeStore.appendUsage(turnUsage, totalUsage)
           emitTerminal({ type: 'usage', turnUsage, totalUsage })
+        },
+        onStepUsage: (stepUsage) => {
+          const record = usageTracker.record(stepUsage.model, stepUsage.usage)
+          const totals = usageTracker.totals()
+          activeStore.appendUsageV2(record, totals)
         },
         onText: (text) => {
           emitTerminal({ type: 'assistant_delta', text })
@@ -1082,22 +1112,13 @@ async function main() {
         emitTerminal({ type: 'clear' })
         print('\n  [Session] 当前内存上下文已清空；历史 transcript 文件保留。')
       }),
-      command('/cost', '查看当前会话 token 用量', '/cost', 'Core', () => {
-        const usage = latestTotalUsage ?? activeStore.getSummary().totalUsage
-        if (!usage) {
-          print('\nSession usage\n\n  暂无 token 用量记录。')
-          return
-        }
-        print(
-          [
-            '\nSession usage',
-            '',
-            `  input:  ${usage.inputTokens}`,
-            `  output: ${usage.outputTokens}`,
-            `  total:  ${usage.totalTokens}`
-          ].join('\n')
-        )
-      }),
+      command('/context', '查看上下文占用矩阵', '/context', 'Core', () => handleContextCommand()),
+      command('/usage', '查看 token、cache 与成本统计', '/usage', 'Core', () => handleUsageCommand(), [
+        '/cost'
+      ]),
+      command('/cache', '查看或切换 cache 策略', '/cache [status|auto|on|off]', 'Core', (input) =>
+        handleCacheCommand(input.args)
+      ),
       command('/model', '查看或覆盖本会话模型', '/model [name|default]', 'Core', handleModelCommand),
       command('/history', '查看当前项目已保存会话', '/history', 'Core', handleHistoryCommand),
       command('/compact', '压缩当前对话上下文', '/compact [focus]', 'Core', (input) =>
@@ -1676,6 +1697,68 @@ async function main() {
     }
   }
 
+  async function handleContextCommand(): Promise<void> {
+    const systemPrompt = await buildSystemPrompt()
+    const report = buildContextReport(messages, {
+      modelName: sessionModelOverride ?? defaultModelName,
+      systemPrompt,
+      activeToolSchemaTokens: registry.countTokenEstimate().active,
+      contextLimitTokens,
+      compactTriggerRatio,
+      warningRatio: warningTriggerRatio,
+      blockingRatio: blockingTriggerRatio,
+      reservedOutputTokens: defaultMaxOutputTokens
+    })
+    print(`\n${renderContextReport(report)}`)
+  }
+
+  function handleUsageCommand(): void {
+    const totals = usageTracker.totals()
+    if (totals.steps > 0) {
+      print(`\n${renderUsageSummary(totals)}`)
+      return
+    }
+
+    const legacyUsage = latestTotalUsage ?? activeStore.getSummary().totalUsage
+    if (!legacyUsage) {
+      print(`\n${renderNoUsage()}`)
+      return
+    }
+
+    print(
+      [
+        '\nUsage Summary',
+        '',
+        '当前 transcript 只有旧版 token 用量，没有 cache/cost 明细。',
+        '',
+        `输入 tokens        ${legacyUsage.inputTokens}`,
+        `输出 tokens        ${legacyUsage.outputTokens}`,
+        `总 tokens          ${legacyUsage.totalTokens}`
+      ].join('\n')
+    )
+  }
+
+  function handleCacheCommand(args: string): void {
+    const arg = args.trim().toLowerCase()
+    if (arg && arg !== 'status') {
+      const mode = parseCacheModeArg(arg)
+      if (!mode) {
+        print('\n  [Cache] 用法: /cache、/cache status、/cache auto、/cache on、/cache off')
+        return
+      }
+      usageTracker.setCacheMode(mode)
+      activeStore.appendCacheMode(mode)
+    }
+
+    print(
+      `\n${renderCacheStatus({
+        mode: usageTracker.getCacheMode(),
+        totals: usageTracker.totals(),
+        prefix: cachePrefixTracker.status()
+      })}`
+    )
+  }
+
   async function handleCompactCommand(command: string): Promise<void> {
     if (messages.length === 0) {
       print('\n  [Manual compaction] 当前没有可压缩的对话历史')
@@ -1737,6 +1820,10 @@ function formatTerminalBackgroundAgent(entry: AsyncAgentEntry): Extract<
     outputFile: entry.outputFile,
     ...(entry.error ? { error: entry.error } : {})
   }
+}
+
+function lastUsageRecord<T>(records: readonly T[]): T | undefined {
+  return records.length > 0 ? records[records.length - 1] : undefined
 }
 
 main().catch(console.error)

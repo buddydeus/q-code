@@ -121,4 +121,65 @@ describe('SessionStore JSONL 损坏与恢复', () => {
     const reopened = makeStore({ sessionId: 'exists-flag' })
     expect(reopened.exists()).toBe(true)
   })
+
+  it('usage_v2 记录可恢复，旧 usage 兼容逻辑不受影响', () => {
+    const store = makeStore({ sessionId: 'usage-v2' })
+    store.appendUsage(
+      { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+    )
+    store.appendUsageV2(
+      {
+        timestamp: '2026-05-25T00:00:00.000Z',
+        model: 'mock-model',
+        cacheMode: 'auto',
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 80,
+          cacheWriteTokens: 0,
+          totalTokens: 200
+        },
+        pricingModel: 'mock-model',
+        cost: {
+          cost: 0.001,
+          baselineCost: 0.002,
+          savedCost: 0.001
+        }
+      },
+      {
+        steps: 1,
+        cacheMode: 'auto',
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 80,
+          cacheWriteTokens: 0,
+          totalTokens: 200
+        },
+        cost: {
+          cost: 0.001,
+          baselineCost: 0.002,
+          savedCost: 0.001
+        },
+        unknownCostSteps: 0,
+        cacheHitRate: 80 / 180
+      }
+    )
+
+    const reopened = makeStore({ sessionId: 'usage-v2' })
+    expect(reopened.getUsageRecords()).toHaveLength(1)
+    expect(reopened.getUsageRecords()[0]?.usage.cacheReadTokens).toBe(80)
+    expect(reopened.getSummary().totalUsage?.totalTokens).toBe(15)
+    expect(reopened.getSummary().usageTotals?.usage.totalTokens).toBe(200)
+  })
+
+  it('cache_mode 记录可恢复，用于继续会话时保留 cache 策略', () => {
+    const store = makeStore({ sessionId: 'cache-mode' })
+    store.appendCacheMode('off')
+    store.appendCacheMode('on')
+
+    const reopened = makeStore({ sessionId: 'cache-mode' })
+    expect(reopened.getLatestCacheMode()).toBe('on')
+  })
 })

@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import type { ModelMessage } from 'ai'
 import { PROJECTS_DIR, getProjectStorageInfo, type ProjectStorageInfo } from '../context/project-paths'
 import type { TokenUsage } from '../context/token-budget'
+import type { CacheMode, NormalizedUsage, UsageCost, UsageRecord, UsageTotals } from '../usage'
 
 const LATEST_FILE = 'latest'
 const LEGACY_DEFAULT_SESSION_ID = 'default'
@@ -42,6 +43,7 @@ export interface SessionSummary {
   updatedAt?: string
   messageCount: number
   totalUsage?: TokenUsage
+  usageTotals?: UsageTotals
 }
 
 export type TranscriptEntry =
@@ -63,6 +65,17 @@ export type TranscriptEntry =
       timestamp: string
       turn: TokenUsage
       total: TokenUsage
+    }
+  | {
+      type: 'usage_v2'
+      timestamp: string
+      record: UsageRecord
+      totals?: UsageTotals
+    }
+  | {
+      type: 'cache_mode'
+      timestamp: string
+      mode: CacheMode
     }
   | {
       type: 'tool_event'
@@ -154,6 +167,23 @@ export class SessionStore {
     })
   }
 
+  appendUsageV2(record: UsageRecord, totals: UsageTotals): void {
+    this.appendEntry({
+      type: 'usage_v2',
+      timestamp: new Date().toISOString(),
+      record,
+      totals
+    })
+  }
+
+  appendCacheMode(mode: CacheMode): void {
+    this.appendEntry({
+      type: 'cache_mode',
+      timestamp: new Date().toISOString(),
+      mode
+    })
+  }
+
   appendToolEvent(event: Omit<Extract<TranscriptEntry, { type: 'tool_event' }>, 'timestamp'>): void {
     this.appendEntry({
       ...event,
@@ -213,6 +243,22 @@ export class SessionStore {
       transcriptPath: this.paths.transcriptPath,
       entries
     })
+  }
+
+  getUsageRecords(): UsageRecord[] {
+    return this.readEntries()
+      .filter((entry): entry is Extract<TranscriptEntry, { type: 'usage_v2' }> => {
+        return entry.type === 'usage_v2'
+      })
+      .map((entry) => entry.record)
+  }
+
+  getLatestCacheMode(): CacheMode | undefined {
+    return [...this.readEntries()]
+      .reverse()
+      .find((entry): entry is Extract<TranscriptEntry, { type: 'cache_mode' }> => {
+        return entry.type === 'cache_mode'
+      })?.mode
   }
 
   private appendEntry(entry: TranscriptEntry): void {
@@ -374,6 +420,9 @@ function summarizeTranscript(params: {
   const latestUsage = [...params.entries]
     .reverse()
     .find((entry): entry is Extract<TranscriptEntry, { type: 'usage' }> => entry.type === 'usage')
+  const latestUsageV2 = [...params.entries]
+    .reverse()
+    .find((entry): entry is Extract<TranscriptEntry, { type: 'usage_v2' }> => entry.type === 'usage_v2')
 
   return {
     sessionId: params.sessionId,
@@ -383,7 +432,8 @@ function summarizeTranscript(params: {
     startedAt: meta?.timestamp,
     updatedAt: getLastTimestamp(params.entries),
     messageCount: params.entries.filter((entry) => entry.type === 'message').length,
-    totalUsage: latestUsage?.total
+    totalUsage: latestUsage?.total,
+    ...(latestUsageV2?.totals ? { usageTotals: latestUsageV2.totals } : {})
   }
 }
 
@@ -450,6 +500,23 @@ function parseEntry(line: string): TranscriptEntry | null {
       }
     }
 
+    if (parsed.type === 'usage_v2' && isUsageRecord(parsed.record)) {
+      return {
+        type: 'usage_v2',
+        timestamp: typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString(),
+        record: parsed.record,
+        ...(isUsageTotals(parsed.totals) ? { totals: parsed.totals } : {})
+      }
+    }
+
+    if (parsed.type === 'cache_mode' && isCacheMode(parsed.mode)) {
+      return {
+        type: 'cache_mode',
+        timestamp: typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString(),
+        mode: parsed.mode
+      }
+    }
+
     if (parsed.type === 'tool_event' && typeof parsed.name === 'string') {
       return {
         type: 'tool_event',
@@ -504,6 +571,54 @@ function isTokenUsage(value: unknown): value is TokenUsage {
     typeof value.outputTokens === 'number' &&
     typeof value.totalTokens === 'number'
   )
+}
+
+function isUsageRecord(value: unknown): value is UsageRecord {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.timestamp === 'string' &&
+    typeof value.model === 'string' &&
+    isNormalizedUsage(value.usage) &&
+    isCacheMode(value.cacheMode) &&
+    (value.cost === undefined || isUsageCost(value.cost)) &&
+    (value.pricingModel === undefined || typeof value.pricingModel === 'string')
+  )
+}
+
+function isUsageTotals(value: unknown): value is UsageTotals {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.steps === 'number' &&
+    isNormalizedUsage(value.usage) &&
+    isCacheMode(value.cacheMode) &&
+    (value.cost === undefined || isUsageCost(value.cost)) &&
+    typeof value.unknownCostSteps === 'number' &&
+    typeof value.cacheHitRate === 'number'
+  )
+}
+
+function isNormalizedUsage(value: unknown): value is NormalizedUsage {
+  return (
+    isRecord(value) &&
+    typeof value.inputTokens === 'number' &&
+    typeof value.outputTokens === 'number' &&
+    typeof value.cacheReadTokens === 'number' &&
+    typeof value.cacheWriteTokens === 'number' &&
+    typeof value.totalTokens === 'number'
+  )
+}
+
+function isUsageCost(value: unknown): value is UsageCost {
+  return (
+    isRecord(value) &&
+    typeof value.cost === 'number' &&
+    typeof value.baselineCost === 'number' &&
+    typeof value.savedCost === 'number'
+  )
+}
+
+function isCacheMode(value: unknown): value is CacheMode {
+  return value === 'auto' || value === 'on' || value === 'off'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

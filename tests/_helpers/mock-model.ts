@@ -85,7 +85,7 @@ export function createMockModel(turns: MockTurn[]): {
       parts.push({
         type: 'finish',
         finishReason,
-        usage
+        usage: toProviderUsage(usage)
       })
 
       return {
@@ -99,6 +99,25 @@ export function createMockModel(turns: MockTurn[]): {
   return {
     model,
     callCount: () => cursor
+  }
+}
+
+function toProviderUsage(usage: { inputTokens: number; outputTokens: number; totalTokens: number }) {
+  return {
+    inputTokens: {
+      total: usage.inputTokens,
+      noCache: usage.inputTokens,
+      cacheRead: 0,
+      cacheWrite: 0
+    },
+    outputTokens: {
+      total: usage.outputTokens,
+      text: usage.outputTokens,
+      reasoning: 0
+    },
+    raw: {
+      totalTokens: usage.totalTokens
+    }
   }
 }
 
