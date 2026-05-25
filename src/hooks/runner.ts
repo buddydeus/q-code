@@ -8,6 +8,7 @@ import type {
   HookRunResult,
   HookRunner
 } from './types'
+import { createHookDecisionPayload, getAuditLogger } from '../observability/audit'
 
 const CONTINUE: HookHandlerResult = { action: 'continue' }
 
@@ -63,6 +64,24 @@ export class DefaultHookRunner implements HookRunner {
       try {
         const result = normalizeResult(await executeDefinition(definition, event, options))
         const durationMs = Date.now() - started
+        getAuditLogger().emit(
+          'hook.decision',
+          createHookDecisionPayload({
+            hookName: definition.name,
+            event: event.event,
+            scope: definition.scope,
+            matched: true,
+            action: result.action,
+            durationMs,
+            ...(result.action === 'block' ? { reason: result.reason } : {}),
+            ...(result.action === 'warn' ? { message: result.message } : {})
+          }),
+          {
+            sessionId: event.sessionId,
+            cwd: event.cwd,
+            agent: event.agent
+          }
+        )
         records.push({
           hookName: definition.name,
           event: event.event,
@@ -91,6 +110,23 @@ export class DefaultHookRunner implements HookRunner {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        getAuditLogger().emit(
+          'hook.decision',
+          createHookDecisionPayload({
+            hookName: definition.name,
+            event: event.event,
+            scope: definition.scope,
+            matched: true,
+            action: definition.blocking === false ? 'warn' : 'block',
+            reason: message,
+            durationMs: Date.now() - started
+          }),
+          {
+            sessionId: event.sessionId,
+            cwd: event.cwd,
+            agent: event.agent
+          }
+        )
         records.push({
           hookName: definition.name,
           event: event.event,

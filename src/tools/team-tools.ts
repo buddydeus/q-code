@@ -14,6 +14,7 @@ import { writeToMailbox } from '../agents/teammate-mailbox'
 import { removeAgentWorktree } from '../agents/worktree'
 import { isAgentTeamsEnabled } from '../utils/agent-teams-enabled'
 import type { ToolDefinition, ToolExecutionContext } from './registry'
+import { createMessageSummaryPayload, getAuditLogger } from '../observability/audit'
 
 /**
  * 单条 SendMessage 正文的硬性大小上限，单位字节。
@@ -117,6 +118,11 @@ export function createTeamCreateTool(): ToolDefinition {
         teamFilePath,
         createdAt
       })
+      getAuditLogger().emit('team.create', {
+        teamName,
+        leadAgentId,
+        ...(description ? { description: createMessageSummaryPayload(description) } : {})
+      })
 
       return [
         `Team "${teamName}" created. You are the lead (${leadAgentId}).`,
@@ -207,6 +213,11 @@ export function createTeamDeleteTool(): ToolDefinition {
 
       await cleanupTeamDirectory(active.teamName)
       clearActiveTeam()
+      getAuditLogger().emit('team.delete', {
+        teamName: active.teamName,
+        preservedWorktrees: preservedWorktrees.length,
+        worktreeWarnings: worktreeWarnings.length
+      })
 
       return [
         `Team "${active.teamName}" disbanded. Removed team file and inboxes.`,
@@ -316,6 +327,23 @@ export function createSendMessageTool(): ToolDefinition {
             active.teamName
           )
         }
+        const messageSummary = createMessageSummaryPayload(message)
+        getAuditLogger().emit(
+          'team.message',
+          {
+            teamName: active.teamName,
+            from: senderName,
+            to: '*',
+            recipients: recipients.map((r) => r.name),
+            chars: message.length,
+            sha256: messageSummary.sha256
+          },
+          {
+            ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+            cwd: context.cwd,
+            agent: context.agent
+          }
+        )
         return `Broadcast delivered to ${recipients.length} teammate(s): ${recipients.map((r) => r.name).join(', ')}.`
       }
 
@@ -332,6 +360,22 @@ export function createSendMessageTool(): ToolDefinition {
         recipient.name,
         { from: senderName, text: message, timestamp, ...summaryField },
         active.teamName
+      )
+      const messageSummary = createMessageSummaryPayload(message)
+      getAuditLogger().emit(
+        'team.message',
+        {
+          teamName: active.teamName,
+          from: senderName,
+          to,
+          chars: message.length,
+          sha256: messageSummary.sha256
+        },
+        {
+          ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+          cwd: context.cwd,
+          agent: context.agent
+        }
       )
 
       const offlineHint = recipient.isActive

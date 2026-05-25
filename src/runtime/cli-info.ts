@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export type EarlyCliCommand = 'help' | 'version' | 'update'
+export type EarlyCliCommand = 'help' | 'version' | 'update' | 'audit'
 
 let cachedPackageVersion: string | undefined
 
@@ -34,6 +34,7 @@ export function getEarlyCliCommand(argv: string[]): EarlyCliCommand | undefined 
   if (first === 'help' || argv.includes('--help') || argv.includes('-h')) return 'help'
   if (first === 'version' || argv.includes('--version') || argv.includes('-v')) return 'version'
   if (first === 'update') return 'update'
+  if (first === 'audit') return 'audit'
   return undefined
 }
 
@@ -50,12 +51,16 @@ export function formatCliHelp(version: string): string {
     '  q-code help',
     '  q-code version',
     '  q-code update [--dry-run]',
+    '  q-code audit verify [--from YYYY-MM-DD] [--to YYYY-MM-DD]',
+    '  q-code audit tail [--session <id>] [--event <name>] [--follow]',
     '',
     'Options:',
     '  -h, --help                Show help and exit',
     '  -v, --version             Show version and exit',
     '      update                Update global q-code CLI to npm latest',
     '      update --dry-run      Show the update command without running it',
+    '      audit verify          Verify local NDJSON audit logs',
+    '      audit tail            Print local audit records with optional filters',
     '      --continue            Resume the latest session for this project',
     '      --session <id>        Use a specific session id',
     '      --plan                Start directly in Plan Mode',

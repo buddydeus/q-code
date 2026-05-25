@@ -162,6 +162,12 @@ import {
   isDebugMode
 } from './runtime/cli-info'
 import { runCliUpdate } from './runtime/update'
+import { runAuditCli } from './observability/audit-cli'
+import {
+  createMessageSummaryPayload,
+  createUserPromptPayload,
+  getAuditLogger
+} from './observability/audit'
 
 const packageVersion = getPackageVersion()
 const earlyCliCommand = getEarlyCliCommand(process.argv.slice(2))
@@ -178,6 +184,11 @@ if (earlyCliCommand === 'update') {
     currentVersion: packageVersion,
     argv: process.argv.slice(2)
   })
+  process.exit(code)
+}
+if (earlyCliCommand === 'audit') {
+  applyRuntimeConfig()
+  const code = await runAuditCli(process.argv.slice(3))
   process.exit(code)
 }
 
@@ -436,6 +447,13 @@ async function main() {
     if (previous === 'plan' && mode !== 'plan') {
       needsPlanModeExitAttachment = true
     }
+    if (previous !== mode) {
+      getAuditLogger().emit(
+        'mode.change',
+        { from: previous, to: mode },
+        { sessionId, cwd: store?.cwd ?? process.cwd(), agent: { kind: 'main' } }
+      )
+    }
     emitSessionInfoIfReady()
   }
 
@@ -449,6 +467,11 @@ async function main() {
       markPlanReady: (summary) => {
         pendingPlanApproval = true
         pendingPlanSummary = summary
+        getAuditLogger().emit(
+          'plan.markReady',
+          createMessageSummaryPayload(summary),
+          { sessionId, cwd: planOptions.cwd, agent: { kind: 'main' } }
+        )
       }
     })
   )
@@ -717,6 +740,15 @@ async function main() {
     if (offload.entries.length > 0) {
       const manifest = injectOffloadManifest(nextMessages, offload.entries)
       nextMessages = manifest.messages
+      getAuditLogger().emit(
+        'context.offload',
+        {
+          trigger,
+          entries: offload.entries.length,
+          chars: offload.entries.reduce((sum, entry) => sum + entry.originalChars, 0)
+        },
+        { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+      )
     }
 
     const after = snapshotContext(nextMessages, systemPrompt)
@@ -734,6 +766,18 @@ async function main() {
         afterTokens: after.used,
         messages: nextMessages
       })
+      getAuditLogger().emit(
+        'context.compact',
+        {
+          trigger,
+          reason,
+          beforeTokens: before.used,
+          afterTokens: after.used,
+          reduced,
+          forced: force
+        },
+        { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+      )
     } else if (!force) {
       compactionBreaker.recordFailure()
     }
@@ -824,6 +868,17 @@ async function main() {
       }
     )
   )
+  const resumedSession = activeStore.exists()
+  getAuditLogger().emit(
+    resumedSession ? 'session.resume' : 'session.start',
+    {
+      resumed: resumedSession,
+      requestedContinue: isContinue,
+      messageCount: messages.length,
+      transcriptPath: activeStore.paths.transcriptPath
+    },
+    { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+  )
 
   async function closeCli(): Promise<void> {
     if (closed) return
@@ -839,6 +894,12 @@ async function main() {
         }
       )
     )
+    getAuditLogger().emit(
+      'session.end',
+      { reason: 'closed' },
+      { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+    )
+    await getAuditLogger().flush()
     await closeMcpSubsystem()
     rl?.close()
     terminal?.instance.unmount()
@@ -881,6 +942,14 @@ async function main() {
 
       await runAgentTurn(trimmed)
     } catch (error) {
+      getAuditLogger().emit(
+        'error',
+        {
+          where: 'index.handleInput',
+          message: formatErrorMessage(error)
+        },
+        { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+      )
       emitTerminal({ type: 'error', text: `本轮执行失败: ${formatErrorMessage(error)}` })
       print(fmtStop(`本轮执行失败: ${formatErrorMessage(error)}`))
     }
@@ -908,6 +977,11 @@ async function main() {
           prompt: userQuery
         }
       )
+    )
+    getAuditLogger().emit(
+      'user.prompt',
+      createUserPromptPayload(userQuery),
+      { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
     )
     reportHookWarnings(promptHook.warnings)
     if (promptHook.blocked) {
@@ -1762,6 +1836,14 @@ async function main() {
     }
 
     pendingPlanApproval = false
+    getAuditLogger().emit(
+      'plan.approve',
+      {
+        planFilePath,
+        chars: content.length
+      },
+      { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+    )
     setAgentMode('normal')
     await runAgentTurn(
       [
@@ -1781,6 +1863,11 @@ async function main() {
     }
 
     pendingPlanApproval = false
+    getAuditLogger().emit(
+      'plan.revise',
+      createMessageSummaryPayload(feedback),
+      { sessionId, cwd: activeStore.cwd, agent: { kind: 'main' } }
+    )
     setAgentMode('plan')
     await runAgentTurn(
       [

@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { ToolRegistry, errorToolResult, truncateResult } from '../../src/tools/registry'
 import { makeMockTool, makeRecordingTool } from '../_helpers/mock-tool'
 import { DefaultHookRunner } from '../../src/hooks'
+import { resetAuditLoggerForTests, type AuditLogger } from '../../src/observability/audit'
+
+afterEach(() => {
+  resetAuditLoggerForTests()
+})
 
 /**
  * ToolRegistry 是工具可见性与并发控制的心脏。测试覆盖：
@@ -295,6 +300,13 @@ describe('ToolRegistry 工具注册表与并发控制', () => {
     })
 
     it('工具抛出的异常会被统一包成结构化错误', async () => {
+      const auditRecords: Array<{ event: string; payload: Record<string, unknown> }> = []
+      resetAuditLoggerForTests({
+        emit: (event, payload = {}) => {
+          auditRecords.push({ event, payload })
+        },
+        flush: async () => {}
+      } satisfies AuditLogger)
       const registry = new ToolRegistry({ cwd: '/tmp', quiet: true })
       registry.register(makeMockTool('boom', () => {
         throw new Error('exploded')
@@ -308,6 +320,10 @@ describe('ToolRegistry 工具注册表与并发控制', () => {
         code: 'tool_exception'
       })
       expect(result.error).toContain('exploded')
+      const auditResult = auditRecords.find(
+        (record) => record.event === 'tool.result' && record.payload.code === 'tool_exception'
+      )
+      expect(auditResult?.payload.durationMs).toBeTypeOf('number')
     })
   })
 })

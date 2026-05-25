@@ -15,6 +15,7 @@ import {
   type HookAgentContext,
   type HookRunner
 } from '../hooks'
+import { createMessageSummaryPayload, getAuditLogger } from '../observability/audit'
 import { createToolSearchTool } from '../tools/tool-search-tool'
 import { ToolRegistry, type TeammateIdentity, type ToolDefinition } from '../tools/registry'
 import { resolveAgentTools } from './resolve-agent-tools'
@@ -103,6 +104,15 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     ),
     { signal: params.abortSignal }
   )
+  getAuditLogger().emit(
+    'subagent.spawn',
+    {
+      agentType: params.agentDefinition.agentType,
+      ...(params.teammateIdentity ? { teamName: params.teammateIdentity.teamName } : {}),
+      prompt: createMessageSummaryPayload(openingPrompt)
+    },
+    { sessionId, cwd, agent: agentContext }
+  )
 
   const system = buildChildSystemPrompt({
     definition: params.agentDefinition,
@@ -112,50 +122,64 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
     teammateIdentity: params.teammateIdentity
   })
 
-  const loopResult = await agentLoop(params.model, registry, messages, system, {
-    tokenBudget: params.tokenBudget,
-    maxOutputTokens: params.maxOutputTokens,
-    escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
-    maxSteps: params.agentDefinition.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
-    abortSignal: params.abortSignal,
-    sessionId,
-    hooks: params.hooks,
-    agent: agentContext,
-    quiet: params.quiet,
-    ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
-    onText: (text) => {
-      params.onProgress?.({ type: 'text', text })
-    },
-    onToolEvent: (event) => {
-      if (event.phase === 'start') {
-        totalToolUseCount++
+  let loopResult: Awaited<ReturnType<typeof agentLoop>>
+  try {
+    loopResult = await agentLoop(params.model, registry, messages, system, {
+      tokenBudget: params.tokenBudget,
+      maxOutputTokens: params.maxOutputTokens,
+      escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
+      maxSteps: params.agentDefinition.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
+      abortSignal: params.abortSignal,
+      sessionId,
+      hooks: params.hooks,
+      agent: agentContext,
+      quiet: params.quiet,
+      ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
+      onText: (text) => {
+        params.onProgress?.({ type: 'text', text })
+      },
+      onToolEvent: (event) => {
+        if (event.phase === 'start') {
+          totalToolUseCount++
+          params.onProgress?.({
+            type: 'tool_use',
+            toolName: event.name,
+            ...(event.toolCallId ? { toolCallId: event.toolCallId } : {})
+          })
+        }
+      },
+      onToolResult: (event) => {
         params.onProgress?.({
-          type: 'tool_use',
+          type: 'tool_result',
           toolName: event.name,
-          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {})
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+          isError: event.isError === true,
+          output: event.output
+        })
+      },
+      onUsage: (_turnUsage, nextTotalUsage) => {
+        totalUsage = nextTotalUsage
+        turnCount++
+        params.onProgress?.({
+          type: 'turn_usage',
+          turnUsage: _turnUsage,
+          cumulativeUsage: nextTotalUsage,
+          turnCount
         })
       }
-    },
-    onToolResult: (event) => {
-      params.onProgress?.({
-        type: 'tool_result',
-        toolName: event.name,
-        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
-        isError: event.isError === true,
-        output: event.output
-      })
-    },
-    onUsage: (_turnUsage, nextTotalUsage) => {
-      totalUsage = nextTotalUsage
-      turnCount++
-      params.onProgress?.({
-        type: 'turn_usage',
-        turnUsage: _turnUsage,
-        cumulativeUsage: nextTotalUsage,
-        turnCount
-      })
-    }
-  })
+    })
+  } catch (error) {
+    getAuditLogger().emit(
+      'subagent.fail',
+      {
+        agentType: params.agentDefinition.agentType,
+        durationMs: Date.now() - startTime,
+        message: formatError(error)
+      },
+      { sessionId, cwd, agent: agentContext }
+    )
+    throw error
+  }
 
   await params.hooks?.run(
     createHookEvent(
@@ -170,6 +194,16 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
       }
     ),
     { signal: params.abortSignal }
+  )
+  getAuditLogger().emit(
+    'subagent.complete',
+    {
+      agentType: params.agentDefinition.agentType,
+      durationMs: Date.now() - startTime,
+      totalToolUseCount,
+      totalTokens: totalUsage.totalTokens
+    },
+    { sessionId, cwd, agent: agentContext }
   )
 
   const warnings =
@@ -306,4 +340,8 @@ function extractText(content: unknown): string {
 
 function countAssistantTurns(messages: ModelMessage[]): number {
   return messages.filter((message) => message.role === 'assistant').length
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

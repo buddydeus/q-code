@@ -6,6 +6,13 @@ import {
   type HookAgentContext,
   type HookRunner
 } from '../hooks'
+import {
+  auditContext,
+  createToolCallPayload,
+  createToolResultPayload,
+  getAuditLogger,
+  safeStringify
+} from '../observability/audit'
 
 export type ToolContextCost = 'low' | 'medium' | 'high'
 
@@ -328,17 +335,33 @@ export class ToolRegistry {
             await registry.acquireExclusive()
             if (!registry.quiet) console.log(fmtLockAcquire(tool.name, false))
           }
+          const startedAt = Date.now()
           try {
             const toolCallId = getExecutionToolCallId(executionOptions)
             const cwd = context.cwd ?? registry.cwd
+            const agent = context.agent ?? hookAgentFromTeammate(context.teammateIdentity)
+            const auditCtx = auditContext({
+              cwd,
+              ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+              agent
+            })
             let effectiveInput = input
+            getAuditLogger().emit(
+              'tool.call',
+              createToolCallPayload({
+                name: tool.name,
+                input,
+                ...(toolCallId ? { toolCallId } : {})
+              }),
+              auditCtx
+            )
             if (context.hooks && context.sessionId) {
               const pre = await context.hooks.run(
                 createPreToolUseEvent(
                   {
                     sessionId: context.sessionId,
                     cwd,
-                    agent: context.agent ?? hookAgentFromTeammate(context.teammateIdentity)
+                    agent
                   },
                   {
                     name: tool.name,
@@ -349,15 +372,25 @@ export class ToolRegistry {
                 { signal: context.abortSignal }
               )
               if (pre.blocked) {
-                return formatToolResult(
-                  {
+                const blocked = {
+                  ok: false,
+                  error: formatHookBlockedResult(tool.name, pre.reason),
+                  code: 'hook_blocked'
+                }
+                getAuditLogger().emit(
+                  'tool.result',
+                  createToolResultPayload({
+                    name: tool.name,
+                    ...(toolCallId ? { toolCallId } : {}),
+                    output: blocked.error,
                     ok: false,
-                    error: formatHookBlockedResult(tool.name, pre.reason),
-                    code: 'hook_blocked'
-                  },
-                  maxChars,
-                  options
+                    isError: true,
+                    code: blocked.code,
+                    durationMs: Date.now() - startedAt
+                  }),
+                  auditCtx
                 )
+                return formatToolResult(blocked, maxChars, options)
               }
               if (pre.input !== undefined) {
                 effectiveInput = pre.input
@@ -379,7 +412,7 @@ export class ToolRegistry {
                   {
                     sessionId: context.sessionId,
                     cwd,
-                    agent: context.agent ?? hookAgentFromTeammate(context.teammateIdentity)
+                    agent
                   },
                   {
                     name: tool.name,
@@ -391,28 +424,69 @@ export class ToolRegistry {
                 { signal: context.abortSignal }
               )
               if (post.blocked) {
-                return formatToolResult(
-                  {
+                const blocked = {
+                  ok: false,
+                  error: formatHookBlockedResult(tool.name, post.reason),
+                  code: 'hook_blocked'
+                }
+                getAuditLogger().emit(
+                  'tool.result',
+                  createToolResultPayload({
+                    name: tool.name,
+                    ...(toolCallId ? { toolCallId } : {}),
+                    output: blocked.error,
                     ok: false,
-                    error: formatHookBlockedResult(tool.name, post.reason),
-                    code: 'hook_blocked'
-                  },
-                  maxChars,
-                  options
+                    isError: true,
+                    code: blocked.code,
+                    durationMs: Date.now() - startedAt
+                  }),
+                  auditCtx
                 )
+                return formatToolResult(blocked, maxChars, options)
               }
             }
+            const envelope = normalizeToolResult(raw)
+            getAuditLogger().emit(
+              'tool.result',
+              createToolResultPayload({
+                name: tool.name,
+                ...(toolCallId ? { toolCallId } : {}),
+                output: envelope.ok ? envelope.content : envelope.error,
+                ok: envelope.ok,
+                isError: !envelope.ok,
+                ...(envelope.code ? { code: envelope.code } : {}),
+                durationMs: Date.now() - startedAt
+              }),
+              auditCtx
+            )
             return formatToolResult(raw, maxChars, options)
           } catch (error) {
-            return formatToolResult(
-              {
+            const toolCallId = getExecutionToolCallId(executionOptions)
+            const cwd = context.cwd ?? registry.cwd
+            const durationMs = Date.now() - startedAt
+            const failed = {
+              ok: false,
+              error: formatUnknownError(error),
+              code: 'tool_exception'
+            }
+            getAuditLogger().emit(
+              'tool.result',
+              createToolResultPayload({
+                name: tool.name,
+                ...(toolCallId ? { toolCallId } : {}),
+                output: failed.error,
                 ok: false,
-                error: formatUnknownError(error),
-                code: 'tool_exception'
-              },
-              maxChars,
-              options
+                isError: true,
+                code: failed.code,
+                durationMs
+              }),
+              auditContext({
+                cwd,
+                ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+                agent: context.agent ?? hookAgentFromTeammate(context.teammateIdentity)
+              })
             )
+            return formatToolResult(failed, maxChars, options)
           } finally {
             if (isSafe) {
               registry.releaseConcurrent()

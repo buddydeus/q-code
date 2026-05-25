@@ -28,6 +28,7 @@ import {
   fmtTaskDuration,
   fmtOutputRetry
 } from '../utils/logger'
+import { auditContext, getAuditLogger } from '../observability/audit'
 
 const DEFAULT_MAX_STEPS = 88
 const MAX_RETRIES = 3
@@ -151,6 +152,19 @@ export async function agentLoop(
   while (step < maxSteps) {
     throwIfAborted(options.abortSignal)
     step++
+    const stepAuditCtx = auditContext({
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+      agent: options.agent
+    })
+    getAuditLogger().emit(
+      'agent.step.start',
+      {
+        step,
+        messageCount: messages.length,
+        activeToolSchemaTokens: registry.countTokenEstimate().active
+      },
+      stepAuditCtx
+    )
     if (!quiet) console.log(fmtStepHeader(step))
     if (options.preflight) {
       const beforePreflight = messages
@@ -163,6 +177,15 @@ export async function agentLoop(
       usageAnchor = preflight.usageAnchor
       if (preflight.stopReason) {
         if (!quiet) console.log(fmtStop(preflight.stopReason))
+        getAuditLogger().emit(
+          'agent.step.end',
+          {
+            step,
+            hasToolCall: false,
+            stopReason: preflight.stopReason
+          },
+          stepAuditCtx
+        )
         break
       }
     }
@@ -394,7 +417,18 @@ export async function agentLoop(
         break
       } catch (error) {
         if (options.abortSignal?.aborted) throw createAbortError(options.abortSignal)
-        if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error
+        if (attempt > MAX_RETRIES || !isRetryable(error as Error)) {
+          getAuditLogger().emit(
+            'error',
+            {
+              where: 'agent.loop',
+              step,
+              message: formatUnknownError(error)
+            },
+            stepAuditCtx
+          )
+          throw error
+        }
         const delay = calculateDelay(attempt)
         if (!quiet) console.log(fmtRetry(attempt, MAX_RETRIES, delay))
         await sleep(delay)
@@ -408,6 +442,15 @@ export async function agentLoop(
 
     if (shouldBreak) {
       if (!quiet) console.log(fmtStop('循环检测触发，Agent 已停止'))
+      getAuditLogger().emit(
+        'agent.step.end',
+        {
+          step,
+          hasToolCall,
+          stopReason: 'loop_detection'
+        },
+        stepAuditCtx
+      )
       break
     }
 
@@ -437,6 +480,18 @@ export async function agentLoop(
       activeToolSchemaTokens: requestToolSchemaTokens
     })
     options.onUsage?.(turnUsage, totalUsage)
+    getAuditLogger().emit(
+      'agent.step.end',
+      {
+        step,
+        hasToolCall,
+        finishReason: stepFinishReason,
+        assistantChars: fullText.length,
+        newMessages: stepMessages.length,
+        usage: turnUsage
+      },
+      stepAuditCtx
+    )
 
     if (firstTokenAt && stepStart) {
       const ttft = firstTokenAt - stepStart

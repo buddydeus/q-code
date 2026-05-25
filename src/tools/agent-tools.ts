@@ -22,6 +22,7 @@ import { cleanupWorktreeIfClean, createAgentWorktree, type WorktreeInfo } from '
 import { isAgentTeamsEnabled } from '../utils/agent-teams-enabled'
 import type { HookRunner } from '../hooks'
 import type { TeammateIdentity, ToolDefinition, ToolExecutionContext } from './registry'
+import { createMessageSummaryPayload, getAuditLogger } from '../observability/audit'
 
 export interface AgentToolController {
   createModel: (modelName?: string) => any
@@ -226,6 +227,34 @@ export function createAgentTool(
         void asyncRunner(runnerParams).catch(() => {
           /* runAsyncAgentLifecycle owns user-visible failure reporting. */
         })
+        getAuditLogger().emit(
+          'subagent.spawn',
+          {
+            agentId,
+            agentType,
+            background: true,
+            description: input.description,
+            prompt: createMessageSummaryPayload(input.prompt),
+            ...(teamValidation.identity
+              ? {
+                  teamName: teamValidation.identity.teamName,
+                  agentName: teamValidation.identity.agentName
+                }
+              : {})
+          },
+          {
+            sessionId,
+            cwd,
+            agent: teamValidation.identity
+              ? {
+                  kind: 'teammate',
+                  agentName: teamValidation.identity.agentName,
+                  teamName: teamValidation.identity.teamName,
+                  agentType
+                }
+              : { kind: 'subagent', agentId, agentType }
+          }
+        )
 
         return formatAsyncLaunchResult({
           agentType,

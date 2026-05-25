@@ -103,6 +103,12 @@ cp .env.example .env
 | `Q_CODE_SESSION_DIR`           | ❌   | 会话存储目录，默认 .sessions                                  |
 | `Q_CODE_HOME`                  | ❌   | q-code 全局配置目录，默认 `~/.q-code`                         |
 | `Q_CODE_DEBUG`                 | ❌   | 设为 1/true/yes/on 显示启动诊断信息（等价于 `--debug`）       |
+| `Q_CODE_AUDIT_ENABLED`         | ❌   | 审计日志开关，默认开启；设为 false/0/off/no 可关闭            |
+| `Q_CODE_AUDIT_DIR`             | ❌   | 审计日志目录，默认 `<Q_CODE_HOME>/logs`                       |
+| `Q_CODE_AUDIT_RETENTION_DAYS`  | ❌   | 审计日志保留天数，默认 30                                    |
+| `Q_CODE_AUDIT_MAX_FILE_BYTES`  | ❌   | 单个审计文件最大字节数，默认 50MB，超出后追加序号轮转        |
+| `Q_CODE_AUDIT_MAX_QUEUE_SIZE`  | ❌   | 审计写入内存队列上限，默认 1000                              |
+| `Q_CODE_AUDIT_PII`             | ❌   | 默认不写 prompt/tool 原文；设为 `full` 才写入原文             |
 | `Q_CODE_SKILL_CHAR_BUDGET`     | ❌   | Skills discovery 注入字符预算，默认 8000                      |
 | `Q_CODE_TEAMS`                 | ❌   | 设为 1/true/yes/on 开启 Agent Teams（等价于 `--agent-teams`） |
 | `Q_CODE_INFRA_ENABLED`         | ❌   | 是否启用企业 AI 基建集成；默认 false，需显式设为 true         |
@@ -409,6 +415,35 @@ Offloading 是无损的：摘要模型只看到短 marker 和预览，后续 Age
 | `/status [on|off|toggle]`    | 打开或关闭 TUI 状态详情，默认隐藏 model/cache/context/usage 摘要     |
 
 `/usage` 的成本估算基于内置模型价格表；未知模型仍会统计 token/cache，但成本项会标注不可用。`/cache off` 不能关闭 OpenAI、DeepSeek 等供应商侧的隐式 prompt cache，它只控制 q-code 自身未来可启用的显式 cache hint 策略。
+
+#### 审计日志
+
+q-code 默认开启本地审计日志，按 UTC 日期写入 `<Q_CODE_HOME>/logs/audit-YYYY-MM-DD.ndjson`。每一行是一条 JSON 事件，便于 `tail -f`、归档到 SIEM/ELK，或在故障后按 `sessionId` 和时间窗回放关键行为。
+
+公共字段：
+
+| 字段 | 说明 |
+| ---- | ---- |
+| `ts` | UTC ISO8601 时间戳 |
+| `seq` | 当前进程内自增序号 |
+| `pid` | 进程号 |
+| `sessionId` | 会话 ID |
+| `agent` | `main` / `subagent` / `teammate` 上下文 |
+| `event` | 事件名 |
+| `payload` | 事件负载 |
+
+首期覆盖事件包括 `session.start` / `session.resume` / `session.end`、`user.prompt`、`agent.step.start` / `agent.step.end`、`tool.call` / `tool.result`、`hook.decision`、`mode.change`、`plan.markReady` / `plan.approve` / `plan.revise`、`subagent.*`、`team.*`、`context.compact` / `context.offload` 和 `error`。
+
+默认 PII 模式不会把用户输入、工具输入、工具输出原文写入日志，只记录 `chars`、`inputChars`、`resultLength` 和 `sha256` 摘要。只有显式设置 `Q_CODE_AUDIT_PII=full` 时，才会把原文写入 `payload.text` / `payload.input` / `payload.output`，建议仅在企业内网或短期调试时使用。
+
+日志文件默认单文件 50MB，超出后写入 `audit-YYYY-MM-DD.1.ndjson`、`audit-YYYY-MM-DD.2.ndjson`。启动时会清理超过 `Q_CODE_AUDIT_RETENTION_DAYS` 的旧文件；写入采用异步串行队列，失败只输出 `[audit]` 警告，不阻塞 Agent 主流程。
+
+CLI 校验与查询：
+
+```bash
+q-code audit verify --from 2026-05-25 --to 2026-05-25
+q-code audit tail --session <sessionId> --event tool.result --follow
+```
 
 **预算状态分三级**：
 

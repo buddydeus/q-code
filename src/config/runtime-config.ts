@@ -45,7 +45,21 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     home: 'Q_CODE_HOME',
     project_root: 'Q_CODE_PROJECT_ROOT',
     teams: 'Q_CODE_TEAMS',
-    debug: 'Q_CODE_DEBUG'
+    debug: 'Q_CODE_DEBUG',
+    audit_enabled: 'Q_CODE_AUDIT_ENABLED',
+    audit_dir: 'Q_CODE_AUDIT_DIR',
+    audit_retention_days: 'Q_CODE_AUDIT_RETENTION_DAYS',
+    audit_max_file_bytes: 'Q_CODE_AUDIT_MAX_FILE_BYTES',
+    audit_max_queue_size: 'Q_CODE_AUDIT_MAX_QUEUE_SIZE',
+    audit_pii: 'Q_CODE_AUDIT_PII'
+  },
+  audit: {
+    enabled: 'Q_CODE_AUDIT_ENABLED',
+    dir: 'Q_CODE_AUDIT_DIR',
+    retention_days: 'Q_CODE_AUDIT_RETENTION_DAYS',
+    max_file_bytes: 'Q_CODE_AUDIT_MAX_FILE_BYTES',
+    max_queue_size: 'Q_CODE_AUDIT_MAX_QUEUE_SIZE',
+    pii: 'Q_CODE_AUDIT_PII'
   },
   infra: {
     enabled: 'Q_CODE_INFRA_ENABLED',

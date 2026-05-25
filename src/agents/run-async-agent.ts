@@ -14,6 +14,7 @@ import { cleanupWorktreeIfClean, type WorktreeInfo } from './worktree'
 import type { AgentDefinition } from './types'
 import type { TeammateIdentity, ToolDefinition } from '../tools/registry'
 import type { HookRunner } from '../hooks'
+import { getAuditLogger } from '../observability/audit'
 
 export interface RunAsyncAgentLifecycleParams {
   entry: AsyncAgentEntry
@@ -125,6 +126,26 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
         durationMs
       })
       markAsyncAgentKilled(entry.agentId, durationMs, 'Background agent was killed', worktreeFinal)
+      getAuditLogger().emit(
+        'subagent.kill',
+        {
+          agentId: entry.agentId,
+          agentType: entry.agentType,
+          durationMs,
+          reason: 'Background agent was killed'
+        },
+        {
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          agent: params.teammateIdentity
+            ? {
+                kind: 'teammate',
+                agentType: entry.agentType,
+                agentName: params.teammateIdentity.agentName,
+                teamName: params.teammateIdentity.teamName
+              }
+            : { kind: 'subagent', agentId: entry.agentId, agentType: entry.agentType }
+        }
+      )
       enqueuePendingNotification({
         mode: 'task-notification',
         text: formatTaskNotification({
@@ -150,6 +171,27 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
     })
 
     completeAsyncAgent(entry.agentId, result, worktreeFinal)
+    getAuditLogger().emit(
+      'subagent.complete',
+      {
+        agentId: entry.agentId,
+        agentType: entry.agentType,
+        durationMs,
+        totalTokens: result.totalTokens,
+        toolUseCount: result.totalToolUseCount
+      },
+      {
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        agent: params.teammateIdentity
+          ? {
+              kind: 'teammate',
+              agentType: entry.agentType,
+              agentName: params.teammateIdentity.agentName,
+              teamName: params.teammateIdentity.teamName
+            }
+          : { kind: 'subagent', agentId: entry.agentId, agentType: entry.agentType }
+      }
+    )
     enqueuePendingNotification({
       mode: 'task-notification',
       text: formatTaskNotification({
@@ -180,8 +222,34 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
 
     if (wasKilled) {
       markAsyncAgentKilled(entry.agentId, durationMs, message, worktreeFinal)
+      getAuditLogger().emit(
+        'subagent.kill',
+        {
+          agentId: entry.agentId,
+          agentType: entry.agentType,
+          durationMs,
+          reason: message
+        },
+        {
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          agent: { kind: 'subagent', agentId: entry.agentId, agentType: entry.agentType }
+        }
+      )
     } else {
       failAsyncAgent(entry.agentId, message, durationMs, worktreeFinal)
+      getAuditLogger().emit(
+        'subagent.fail',
+        {
+          agentId: entry.agentId,
+          agentType: entry.agentType,
+          durationMs,
+          message
+        },
+        {
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          agent: { kind: 'subagent', agentId: entry.agentId, agentType: entry.agentType }
+        }
+      )
     }
 
     enqueuePendingNotification({
