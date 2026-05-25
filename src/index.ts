@@ -137,6 +137,16 @@ import {
   type InfraSyncResult
 } from './infra'
 import {
+  formatGitLabKbPage,
+  formatGitLabKbPages,
+  formatGitLabKbPublishResult,
+  getGitLabKbStatus,
+  parseGitLabKbPublishArgs,
+  publishGitLabKbPage,
+  readGitLabKbPage,
+  searchGitLabKb
+} from './gitlab-kb'
+import {
   formatErrorMessage,
   getNumberEnv,
   getRatioEnv,
@@ -1179,6 +1189,14 @@ async function main() {
       command('/infra', '查看、同步或提交企业 AI 基建知识', '/infra [status|sync|candidate]', 'Tools', (input) =>
         handleInfraCommand(input.raw)
       ),
+      command(
+        '/gitlab-kb',
+        '查看或发布当前仓库 GitLab Wiki 知识库',
+        '/gitlab-kb [status|list|search|get|publish]',
+        'Tools',
+        (input) => handleGitLabKbCommand(input),
+        ['/kb']
+      ),
       command('/hooks', '查看 hooks 配置和加载状态', '/hooks', 'Tools', (input) =>
         handleHooksCommand(input.raw)
       ),
@@ -1422,6 +1440,74 @@ async function main() {
     }
 
     print('\n  [Infra] 用法: /infra、/infra status、/infra sync、/infra candidate <候选知识>')
+  }
+
+  async function handleGitLabKbCommand(input: SlashCommandInput): Promise<void> {
+    const args = input.args.trim()
+    const [subcommand = 'status', ...rest] = args.split(/\s+/).filter(Boolean)
+
+    if (subcommand === 'status') {
+      print('\n' + (await getGitLabKbStatus(activeStore.cwd)))
+      return
+    }
+
+    if (subcommand === 'list') {
+      const query = rest.join(' ').trim()
+      const pages = await searchGitLabKb({
+        cwd: activeStore.cwd,
+        ...(query ? { query } : {})
+      })
+      print('\n' + formatGitLabKbPages(pages, query ? `GitLab Wiki KB Search: ${query}` : 'GitLab Wiki KB Pages'))
+      return
+    }
+
+    if (subcommand === 'search') {
+      const query = rest.join(' ').trim()
+      if (!query) {
+        print('\n  [GitLab KB] 用法: /gitlab-kb search <关键词>')
+        return
+      }
+      const pages = await searchGitLabKb({ cwd: activeStore.cwd, query })
+      print('\n' + formatGitLabKbPages(pages, `GitLab Wiki KB Search: ${query}`))
+      return
+    }
+
+    if (subcommand === 'get' || subcommand === 'read') {
+      const slug = rest.join(' ').trim()
+      if (!slug) {
+        print('\n  [GitLab KB] 用法: /gitlab-kb get <slug>')
+        return
+      }
+      const page = await readGitLabKbPage({ cwd: activeStore.cwd, slug })
+      print('\n' + formatGitLabKbPage(page))
+      return
+    }
+
+    if (subcommand === 'publish' || subcommand === 'write') {
+      const rawPublishArgs = args.replace(/^(publish|write)(?:\s+|$)/, '')
+      const parsed = parseGitLabKbPublishArgs(rawPublishArgs)
+      if (!parsed) {
+        print(
+          [
+            '\n  [GitLab KB] 用法: /gitlab-kb publish --title "标题" [--slug slug] <Markdown 正文>',
+            '  示例: /gitlab-kb publish --title "发布流程" 发布前先运行 pnpm typecheck 和 pnpm test:unit。'
+          ].join('\n')
+        )
+        return
+      }
+      const result = await publishGitLabKbPage({
+        cwd: activeStore.cwd,
+        title: parsed.title,
+        content: parsed.content,
+        ...(parsed.slug ? { slug: parsed.slug } : {})
+      })
+      print('\n' + formatGitLabKbPublishResult(result))
+      return
+    }
+
+    print(
+      '\n  [GitLab KB] 用法: /gitlab-kb、/gitlab-kb list [关键词]、/gitlab-kb search <关键词>、/gitlab-kb get <slug>、/gitlab-kb publish --title "标题" <正文>'
+    )
   }
 
   function handleHooksCommand(command: string): void {

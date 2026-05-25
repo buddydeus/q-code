@@ -7,6 +7,10 @@ import { applyRuntimeConfig, getRuntimeConfigPaths } from '../../src/config/runt
 const ENV_KEYS = [
   'Q_CODE_HOME',
   'Q_CODE_DEBUG',
+  'Q_CODE_GITLAB_URL',
+  'Q_CODE_GITLAB_TOKEN',
+  'Q_CODE_GITLAB_PROJECT_ID',
+  'Q_CODE_GITLAB_KB_PREFIX',
   'OPENAI_BASE_URL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
@@ -97,6 +101,31 @@ describe('runtime config', () => {
     expect(process.env.OPENAI_MODEL).toBe('toml-model')
   })
 
+  it('supports loading extra env file from config.toml', () => {
+    const { cwd, home } = setupConfigFixture()
+    writeFileSync(join(home, '.shared.env'), 'OPENAI_API_KEY=shared-key\nOPENAI_MODEL=shared-model\n')
+    writeFileSync(join(home, 'config.toml'), '[env]\nfile = ".shared.env"\n')
+
+    applyRuntimeConfig(cwd)
+
+    expect(process.env.OPENAI_API_KEY).toBe('shared-key')
+    expect(process.env.OPENAI_MODEL).toBe('shared-model')
+  })
+
+  it('lets toml keys override values loaded from env.file', () => {
+    const { cwd, home } = setupConfigFixture()
+    writeFileSync(join(home, '.shared.env'), 'OPENAI_API_KEY=shared-key\nOPENAI_MODEL=shared-model\n')
+    writeFileSync(
+      join(home, 'config.toml'),
+      ['[env]', 'file = ".shared.env"', '[openai]', 'api_key = "toml-key"'].join('\n')
+    )
+
+    applyRuntimeConfig(cwd)
+
+    expect(process.env.OPENAI_API_KEY).toBe('toml-key')
+    expect(process.env.OPENAI_MODEL).toBe('shared-model')
+  })
+
   it('keeps explicit environment variables above config.toml and .env', () => {
     const { cwd, home } = setupConfigFixture()
     writeFileSync(join(cwd, '.env'), 'OPENAI_API_KEY=env-file-key\n')
@@ -118,7 +147,12 @@ describe('runtime config', () => {
         '[runtime]',
         'token_budget = 12345',
         '[q_code]',
-        'debug = true'
+        'debug = true',
+        '[gitlab_kb]',
+        'url = "https://gitlab.example.com/group/project"',
+        'token = "glpat-test"',
+        'project_id = "group/project"',
+        'prefix = "team-kb"'
       ].join('\n')
     )
 
@@ -128,6 +162,10 @@ describe('runtime config', () => {
     expect(process.env.OPENAI_MODEL).toBe('alias-model')
     expect(process.env.TOKEN_BUDGET).toBe('12345')
     expect(process.env.Q_CODE_DEBUG).toBe('true')
+    expect(process.env.Q_CODE_GITLAB_URL).toBe('https://gitlab.example.com/group/project')
+    expect(process.env.Q_CODE_GITLAB_TOKEN).toBe('glpat-test')
+    expect(process.env.Q_CODE_GITLAB_PROJECT_ID).toBe('group/project')
+    expect(process.env.Q_CODE_GITLAB_KB_PREFIX).toBe('team-kb')
   })
 
   it('reports the config file locations', () => {

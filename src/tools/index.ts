@@ -4,6 +4,7 @@ import { pickSearchTool, webFetchTool } from './search-tools'
 import { bashTool } from './shell-tools'
 import { memoryWriteTool } from './memory-tools'
 import { fetchUrlTool, globTool, grepTool, startPreviewTool } from './utility-tools'
+import { createGitLabKbTools } from './gitlab-kb-tools'
 
 export const allTools: ToolDefinition[] = [
   readFileTool,
@@ -17,7 +18,8 @@ export const allTools: ToolDefinition[] = [
   fetchUrlTool,
   startPreviewTool,
   pickSearchTool(),
-  webFetchTool
+  webFetchTool,
+  ...createGitLabKbTools()
 ]
 
 export { ToolRegistry, type ToolDefinition, truncateResult } from './registry'
@@ -28,3 +30,4 @@ export { createSkillTool } from './skill-tools'
 export { createAgentTool } from './agent-tools'
 export { createToolSearchTool } from './tool-search-tool'
 export { createTeamCreateTool, createTeamDeleteTool, createSendMessageTool } from './team-tools'
+export { createGitLabKbTools } from './gitlab-kb-tools'

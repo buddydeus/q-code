@@ -60,6 +60,14 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     user_groups: 'Q_CODE_INFRA_USER_GROUPS',
     upload_source: 'Q_CODE_INFRA_UPLOAD_SOURCE'
   },
+  gitlab_kb: {
+    enabled: 'Q_CODE_GITLAB_KB_ENABLED',
+    url: 'Q_CODE_GITLAB_URL',
+    token: 'Q_CODE_GITLAB_TOKEN',
+    project_id: 'Q_CODE_GITLAB_PROJECT_ID',
+    prefix: 'Q_CODE_GITLAB_KB_PREFIX',
+    timeout_ms: 'Q_CODE_GITLAB_KB_TIMEOUT_MS'
+  },
   search: {
     tavily_api_key: 'TAVILY_API_KEY',
     serper_api_key: 'SERPER_API_KEY'
@@ -67,6 +75,10 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
   mcp: {
     connect_timeout_ms: 'MCP_CONNECT_TIMEOUT_MS'
   }
+}
+
+interface ParsedTomlConfig {
+  entries: Record<string, Record<string, string | number | boolean>>
 }
 
 export interface RuntimeConfigPaths {
@@ -91,9 +103,15 @@ export function applyRuntimeConfig(cwd: string = process.cwd()): RuntimeConfigPa
   const values = new Map<string, string>()
 
   mergeValues(values, readDotenvValues(paths.envPath))
-  mergeValues(values, readTomlEnvValues(paths.userConfigPath))
+
+  const userConfig = readTomlConfig(paths.userConfigPath)
+  mergeValues(values, readExtraDotenvValues(userConfig, paths.userConfigPath, cwd))
+  mergeValues(values, extractTomlEnvValues(userConfig))
+
   if (resolve(paths.projectConfigPath) !== resolve(paths.userConfigPath)) {
-    mergeValues(values, readTomlEnvValues(paths.projectConfigPath))
+    const projectConfig = readTomlConfig(paths.projectConfigPath)
+    mergeValues(values, readExtraDotenvValues(projectConfig, paths.projectConfigPath, cwd))
+    mergeValues(values, extractTomlEnvValues(projectConfig))
   }
 
   for (const [name, value] of values) {
@@ -124,13 +142,34 @@ function readDotenvValues(filePath: string): Map<string, string> {
   return values
 }
 
-function readTomlEnvValues(filePath: string): Map<string, string> {
-  if (!existsSync(filePath)) return new Map()
-  const parsed = parseSimpleToml(readFileSync(filePath, 'utf-8'), filePath)
+function readTomlConfig(filePath: string): ParsedTomlConfig {
+  if (!existsSync(filePath)) return { entries: { '': {} } }
+  return { entries: parseSimpleToml(readFileSync(filePath, 'utf-8'), filePath) }
+}
+
+function readExtraDotenvValues(
+  config: ParsedTomlConfig,
+  configPath: string,
+  cwd: string
+): Map<string, string> {
+  const values = new Map<string, string>()
+  const envSection = config.entries.env
+  if (!envSection) return values
+
+  const fileValue = envSection.file
+  if (typeof fileValue !== 'string') return values
+
+  const envPath = resolveConfigRelativePath(fileValue, configPath, cwd)
+  mergeValues(values, readDotenvValues(envPath))
+  return values
+}
+
+function extractTomlEnvValues(config: ParsedTomlConfig): Map<string, string> {
   const values = new Map<string, string>()
 
-  for (const [section, entries] of Object.entries(parsed)) {
+  for (const [section, entries] of Object.entries(config.entries)) {
     for (const [key, rawValue] of Object.entries(entries)) {
+      if (section === 'env' && key === 'file') continue
       const value = String(rawValue).trim()
       if (!value) continue
       const envName = resolveEnvName(section, key)
@@ -139,6 +178,13 @@ function readTomlEnvValues(filePath: string): Map<string, string> {
   }
 
   return values
+}
+
+function resolveConfigRelativePath(fileValue: string, configPath: string, cwd: string): string {
+  const trimmed = fileValue.trim()
+  if (!trimmed) return join(resolve(cwd), '.env')
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(trimmed)) return resolve(trimmed)
+  return resolve(join(configPath, '..', trimmed))
 }
 
 function resolveEnvName(section: string, key: string): string | undefined {
