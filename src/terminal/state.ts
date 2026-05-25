@@ -61,6 +61,7 @@ export interface TerminalState {
   contextUsage?: TerminalContextUsage
   usage?: TerminalUsage
   sessionInfo?: TerminalSessionInfo
+  statusDetailsVisible: boolean
   slashCommands: SlashCommandSuggestion[]
   progressItems: TerminalProgressItem[]
   backgroundAgents: TerminalBackgroundAgentItem[]
@@ -78,6 +79,7 @@ export function createInitialTerminalState(): TerminalState {
     transcript: [],
     status: 'idle',
     statusText: 'Ready',
+    statusDetailsVisible: false,
     slashCommands: [],
     progressItems: [],
     backgroundAgents: [],
@@ -348,6 +350,12 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           taskMode: event.taskMode,
           cacheMode: event.cacheMode
         }
+      }
+
+    case 'status_details_visibility':
+      return {
+        ...state,
+        statusDetailsVisible: event.visible
       }
 
     case 'error':

@@ -223,6 +223,22 @@ describe('terminal state reducer', () => {
     expect(state.transcript).toHaveLength(0)
   })
 
+  it('keeps status details hidden by default and toggles them without transcript noise', () => {
+    let state = createInitialTerminalState()
+    expect(state.statusDetailsVisible).toBe(false)
+
+    state = terminalReducer(state, {
+      type: 'status_details_visibility',
+      visible: true
+    })
+
+    expect(state.statusDetailsVisible).toBe(true)
+    expect(state.transcript).toHaveLength(0)
+
+    state = terminalReducer(state, { type: 'clear' })
+    expect(state.statusDetailsVisible).toBe(true)
+  })
+
   it('logs context usage when state changes into warning or blocking', () => {
     let state = createInitialTerminalState()
     state = terminalReducer(state, {

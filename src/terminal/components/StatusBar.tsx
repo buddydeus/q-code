@@ -31,21 +31,25 @@ export function StatusBar({
     <Box marginTop={1} flexDirection="column">
       <Box justifyContent="space-between">
         <Text color={statusColor(state.status)}>  ✧ 状态: {statusLabel(state.status, state.statusText)}</Text>
-        <Text color={animeTheme.textDim}>{chips.join(' · ')}</Text>
-      </Box>
-      <Box marginLeft={2} gap={1}>
-        <Text color={animeTheme.textDim}>Context</Text>
-        <ContextMeter usage={state.contextUsage} />
-        {state.usage ? (
-          <Text color={animeTheme.textDim}>
-            Usage in/out {formatCompactNumber(state.usage.inputTokens)}/
-            {formatCompactNumber(state.usage.outputTokens)}
-          </Text>
+        {state.statusDetailsVisible && chips.length > 0 ? (
+          <Text color={animeTheme.textDim} wrap="truncate-end">{chips.join(' · ')}</Text>
         ) : null}
       </Box>
+      {state.statusDetailsVisible ? (
+        <Box marginLeft={2} gap={1}>
+          <Text color={animeTheme.textDim}>Context</Text>
+          <ContextMeter usage={state.contextUsage} />
+          {state.usage ? (
+            <Text color={animeTheme.textDim}>
+              Usage in/out {formatCompactNumber(state.usage.inputTokens)}/
+              {formatCompactNumber(state.usage.outputTokens)}
+            </Text>
+          ) : null}
+        </Box>
+      ) : null}
       {state.progressItems.length > 0 ? <ProgressSummary state={state} /> : null}
       {state.backgroundAgents.length > 0 ? <BackgroundAgentSummary state={state} /> : null}
-      {state.jitMessages.length > 0 ? (
+      {state.statusDetailsVisible && state.jitMessages.length > 0 ? (
         <Text color={animeTheme.textDim}>  JIT: {state.jitMessages[state.jitMessages.length - 1]}</Text>
       ) : null}
       {showSpinner ? (

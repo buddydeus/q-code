@@ -406,6 +406,7 @@ async function main() {
   let pendingPlanApproval = false
   let pendingPlanSummary = ''
   let canEmitSessionInfo = false
+  let statusDetailsVisible = false
 
   function setAgentMode(mode: ToolVisibilityMode): void {
     const previous = agentMode
@@ -1139,6 +1140,9 @@ async function main() {
       command('/cache', '查看或切换 cache 策略', '/cache [status|auto|on|off]', 'Core', (input) =>
         handleCacheCommand(input.args)
       ),
+      command('/status', '打开或关闭 TUI 状态详情', '/status [on|off|toggle]', 'Core', (input) =>
+        handleStatusCommand(input.args)
+      ),
       command('/model', '查看或覆盖本会话模型', '/model [name|default]', 'Core', handleModelCommand),
       command('/history', '查看当前项目已保存会话', '/history', 'Core', handleHistoryCommand),
       command('/compact', '压缩当前对话上下文', '/compact [focus]', 'Core', (input) =>
@@ -1782,6 +1786,23 @@ async function main() {
         prefix: cachePrefixTracker.status()
       })}`
     )
+  }
+
+  function handleStatusCommand(args: string): void {
+    const arg = args.trim().toLowerCase()
+    if (arg === '' || arg === 'toggle') {
+      statusDetailsVisible = !statusDetailsVisible
+    } else if (arg === 'on') {
+      statusDetailsVisible = true
+    } else if (arg === 'off') {
+      statusDetailsVisible = false
+    } else {
+      print('\n  [Status] 用法: /status、/status on、/status off、/status toggle')
+      return
+    }
+
+    emitTerminal({ type: 'status_details_visibility', visible: statusDetailsVisible })
+    print(`\n  [Status] 状态详情已${statusDetailsVisible ? '显示' : '隐藏'}。`)
   }
 
   async function handleCompactCommand(command: string): Promise<void> {

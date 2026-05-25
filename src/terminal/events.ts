@@ -101,6 +101,10 @@ export type TerminalEvent =
       cacheMode: CacheMode
     })
   | (TerminalBaseEvent & {
+      type: 'status_details_visibility'
+      visible: boolean
+    })
+  | (TerminalBaseEvent & {
       type: 'progress'
       items: TerminalProgressItem[]
     })
