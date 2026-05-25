@@ -61,6 +61,7 @@ export function formatCliHelp(version: string): string {
     '      --plan                Start directly in Plan Mode',
     '      --agent-teams         Enable Agent Teams',
     '      --classic             Use the classic readline UI',
+    '      --debug               Show startup diagnostics in the terminal',
     '      --dump-system-prompt  Print the full system prompt and exit',
     '',
     'Configuration:',
@@ -74,6 +75,18 @@ export function formatCliHelp(version: string): string {
     '  q-code --session my-task --plan',
     '  q-code update'
   ].join('\n')
+}
+
+export function isDebugMode(
+  argv: string[],
+  env: { Q_CODE_DEBUG?: string | undefined } = process.env
+): boolean {
+  return argv.includes('--debug') || isTruthyEnv(env.Q_CODE_DEBUG)
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())
 }
 
 function getPackageJsonCandidates(startDir: string): string[] {

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Box, useApp, useInput, useStdin, useStdout } from 'ink'
+import { Box, Static, useApp, useInput, useStdin, useStdout } from 'ink'
 import type { TerminalEventBus } from './events'
-import { createInitialTerminalState, terminalReducer } from './state'
+import { createInitialTerminalState, terminalReducer, type TranscriptItem } from './state'
 import {
   backspace,
   clearOrRestoreInput,
@@ -25,7 +25,6 @@ import {
 } from './components'
 import { formatErrorMessage } from './utils/format'
 import { splitStaticAndLiveTranscript, takeUnprintedStaticItems } from './utils/layout'
-import { formatStaticTranscriptItems } from './utils/static-output'
 import {
   filterSlashCommandSuggestions,
   type SlashCommandSuggestion
@@ -50,9 +49,11 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   const [input, setInput] = useState(() => createInputState())
   const [isBusy, setIsBusy] = useState(false)
   const [interruptRequested, setInterruptRequested] = useState(false)
+  const [staticTranscriptItems, setStaticTranscriptItems] = useState<TranscriptItem[]>([])
+  const [staticResetKey, setStaticResetKey] = useState(0)
   const { exit } = useApp()
   const { internal_eventEmitter } = useStdin()
-  const { stdout, write } = useStdout()
+  const { stdout } = useStdout()
   const lastRawInput = useRef<string>()
   const pendingAssistantDelta = useRef('')
   const assistantFlushTimer = useRef<ReturnType<typeof setTimeout>>()
@@ -112,6 +113,8 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
       if (event.type === 'clear') {
         stdout.write(CLEAR_TERMINAL)
         printedStaticIds.current.clear()
+        setStaticTranscriptItems([])
+        setStaticResetKey((current) => current + 1)
       }
 
       dispatch(event)
@@ -134,10 +137,8 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   useEffect(() => {
     const pending = takeUnprintedStaticItems(staticItems, printedStaticIds.current)
     if (pending.length === 0) return
-
-    const output = formatStaticTranscriptItems(pending)
-    if (output) write(`${output}\n`)
-  }, [staticItems, write])
+    setStaticTranscriptItems((current) => [...current, ...pending])
+  }, [staticItems])
 
   useEffect(() => {
     if (!showSlashCommands) setSelectedCommandIndex(-1)
@@ -276,18 +277,23 @@ export function TerminalApp(props: TerminalAppProps): React.JSX.Element {
   })
 
   return (
-    <Box flexDirection="column" paddingX={1}>
-      <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
-      <ConversationView items={liveItems} />
-      <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
-      <CommandSuggestions suggestions={renderedSlashCommands} />
-      <InputPrompt
-        value={input.value}
-        cursor={input.cursor}
-        isBusy={isBusy}
-        isHistorySearch={input.historySearchQuery !== undefined}
-        hasUndoClear={!input.value && input.clearedValue !== undefined}
-      />
-    </Box>
+    <>
+      <Static key={staticResetKey} items={staticTranscriptItems}>
+        {(item) => <ConversationView key={item.id} items={[item]} />}
+      </Static>
+      <Box flexDirection="column" paddingX={1}>
+        <Header title={props.title ?? 'q-code'} sessionId={props.sessionId} cwd={props.cwd} />
+        <ConversationView items={liveItems} />
+        <StatusBar state={state} isBusy={isBusy} hasStreamingAssistant={hasStreamingAssistant} />
+        <CommandSuggestions suggestions={renderedSlashCommands} />
+        <InputPrompt
+          value={input.value}
+          cursor={input.cursor}
+          isBusy={isBusy}
+          isHistorySearch={input.historySearchQuery !== undefined}
+          hasUndoClear={!input.value && input.clearedValue !== undefined}
+        />
+      </Box>
+    </>
   )
 }

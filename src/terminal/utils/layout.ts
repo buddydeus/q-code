@@ -31,10 +31,18 @@ export function splitStaticAndLiveTranscript(items: TranscriptItem[]): {
   staticItems: TranscriptItem[]
   liveItems: TranscriptItem[]
 } {
+  const firstUserIndex = items.findIndex((item) => item.role === 'user')
+  const preludeItems = firstUserIndex === -1 ? hideCompletedTurnTools(items) : []
+  const conversationItems = firstUserIndex === -1 ? [] : items.slice(firstUserIndex)
+
+  if (conversationItems.length === 0) {
+    return { staticItems: [], liveItems: preludeItems }
+  }
+
   const turns: TranscriptItem[][] = []
   let currentTurn: TranscriptItem[] = []
 
-  for (const item of items) {
+  for (const item of conversationItems) {
     if (item.role === 'user' && currentTurn.length > 0) {
       turns.push(currentTurn)
       currentTurn = []
@@ -51,11 +59,14 @@ export function splitStaticAndLiveTranscript(items: TranscriptItem[]): {
     }
   }
   if (liveTurnIndex === -1) {
-    return { staticItems: hideCompletedTurnTools(items), liveItems: [] }
+    return {
+      staticItems: hideCompletedTurnTools(conversationItems),
+      liveItems: preludeItems
+    }
   }
 
   const staticItems = hideCompletedTurnTools(turns.slice(0, liveTurnIndex).flat())
-  const liveItems = hideCompletedTurnTools(turns.slice(liveTurnIndex).flat())
+  const liveItems = [...preludeItems, ...hideCompletedTurnTools(turns.slice(liveTurnIndex).flat())]
   return { staticItems, liveItems }
 }
 

@@ -3,7 +3,6 @@ import { Box, Text } from 'ink'
 import type { TerminalState } from '../state'
 import { statusLabel } from '../utils/format'
 import { animeTheme, statusColor } from '../theme/index'
-import { SpinnerText } from './SpinnerText'
 import { ContextMeter } from './ContextMeter'
 
 export function StatusBar({
@@ -15,7 +14,6 @@ export function StatusBar({
   isBusy: boolean
   hasStreamingAssistant: boolean
 }): React.JSX.Element {
-  const showSpinner = isBusy && !hasStreamingAssistant && state.status !== 'idle'
   const runningAgents = state.backgroundAgents.filter((agent) => agent.status === 'running').length
   const chips = [
     state.sessionInfo?.agentMode ? `mode ${state.sessionInfo.agentMode}` : '',
@@ -51,11 +49,6 @@ export function StatusBar({
       {state.backgroundAgents.length > 0 ? <BackgroundAgentSummary state={state} /> : null}
       {state.statusDetailsVisible && state.jitMessages.length > 0 ? (
         <Text color={animeTheme.textDim}>  JIT: {state.jitMessages[state.jitMessages.length - 1]}</Text>
-      ) : null}
-      {showSpinner ? (
-        <Box>
-          <SpinnerText label={statusLabel(state.status, state.statusText)} />
-        </Box>
       ) : null}
     </Box>
   )

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   formatCliHelp,
   formatCliVersion,
-  getEarlyCliCommand
+  getEarlyCliCommand,
+  isDebugMode
 } from '../../src/runtime/cli-info'
 
 describe('cli info', () => {
@@ -26,6 +27,15 @@ describe('cli info', () => {
   it('leaves interactive flags alone', () => {
     expect(getEarlyCliCommand(['--continue'])).toBeUndefined()
     expect(getEarlyCliCommand(['--session', 'demo'])).toBeUndefined()
+    expect(getEarlyCliCommand(['--debug'])).toBeUndefined()
+  })
+
+  it('detects debug mode from cli flag or env', () => {
+    expect(isDebugMode(['--debug'], {})).toBe(true)
+    expect(isDebugMode([], { Q_CODE_DEBUG: '1' })).toBe(true)
+    expect(isDebugMode([], { Q_CODE_DEBUG: 'true' })).toBe(true)
+    expect(isDebugMode([], { Q_CODE_DEBUG: '0' })).toBe(false)
+    expect(isDebugMode([], {})).toBe(false)
   })
 
   it('formats version output', () => {
@@ -41,6 +51,7 @@ describe('cli info', () => {
     expect(help).toContain('-v, --version')
     expect(help).toContain('q-code update')
     expect(help).toContain('--continue')
+    expect(help).toContain('--debug')
     expect(help).toContain('~/.q-code/config.toml')
   })
 })

@@ -38,6 +38,7 @@ import {
 } from '../../src/terminal/utils/layout'
 import { formatStaticTranscriptItems } from '../../src/terminal/utils/static-output'
 import { stringDisplayWidth } from '../../src/terminal/utils/string-width'
+import { formatStartupDuckBanner, STARTUP_DUCK_SOURCE } from '../../src/terminal/utils/duck'
 import type { SlashCommandSuggestion } from '../../src/slash'
 
 describe('terminal state reducer', () => {
@@ -470,7 +471,7 @@ describe('terminal markdown parser', () => {
   it('caps streaming markdown previews to avoid oversized live terminal renders', () => {
     const preview = previewStreamingText(Array.from({ length: 30 }, (_, index) => `line ${index}`).join('\n'), 8)
 
-    expect(preview).toContain('streaming preview omitted 24 lines')
+    expect(preview).toContain('内容较长，已折叠 24 行')
     expect(preview).toContain('line 29')
     expect(preview.split('\n')).toHaveLength(8)
   })
@@ -478,7 +479,7 @@ describe('terminal markdown parser', () => {
   it('caps very long single-line streaming previews by characters', () => {
     const preview = previewStreamingText('x'.repeat(4000), 20)
 
-    expect(preview).toContain('streaming preview omitted 1400 chars')
+    expect(preview).toContain('内容较长，已折叠 1400 字符')
     expect(preview.length).toBeLessThan(2700)
   })
 
@@ -611,6 +612,22 @@ describe('terminal markdown parser', () => {
 })
 
 describe('terminal layout helpers', () => {
+  it('formats a startup duck banner for the initial terminal screen', () => {
+    const banner = formatStartupDuckBanner()
+
+    expect(banner).toContain('小黄鸭已就位')
+    expect(banner).toContain('/mode plan')
+    expect(banner).toContain('pnpm run continue')
+    expect(banner).not.toContain('/teams')
+    expect(STARTUP_DUCK_SOURCE).toBe('startup_duck')
+  })
+
+  it('adds the Agent Teams hint to the startup duck banner when enabled', () => {
+    const banner = formatStartupDuckBanner({ teamsEnabled: true })
+
+    expect(banner).toContain('/teams 团队')
+  })
+
   it('estimates wrapped rows for long terminal lines', () => {
     expect(estimateWrappedRows('x'.repeat(45), 20)).toBe(3)
     expect(estimateWrappedRows(['short', 'x'.repeat(41)].join('\n'), 20)).toBe(4)
@@ -670,7 +687,7 @@ describe('terminal layout helpers', () => {
     expect(liveItems.map((item) => item.id)).toEqual(['4', '5'])
   })
 
-  it('keeps all history static when no current user turn exists', () => {
+  it('keeps startup prelude live instead of writing it through static stdout', () => {
     const items = [
       transcriptItem('1', 'message', 'system', '欢迎'),
       transcriptItem('2', 'message', 'assistant', '恢复的历史')
@@ -678,7 +695,20 @@ describe('terminal layout helpers', () => {
 
     const { staticItems, liveItems } = splitStaticAndLiveTranscript(items)
 
-    expect(staticItems.map((item) => item.id)).toEqual(['1', '2'])
+    expect(staticItems).toEqual([])
+    expect(liveItems.map((item) => item.id)).toEqual(['1', '2'])
+  })
+
+  it('does not move startup prelude into static output after the first user turn', () => {
+    const items = [
+      transcriptItem('1', 'message', 'system', '启动诊断'),
+      transcriptItem('2', 'message', 'user', '问题'),
+      transcriptItem('3', 'message', 'assistant', '最终回答')
+    ]
+
+    const { staticItems, liveItems } = splitStaticAndLiveTranscript(items)
+
+    expect(staticItems.map((item) => item.id)).toEqual(['2', '3'])
     expect(liveItems).toEqual([])
   })
 

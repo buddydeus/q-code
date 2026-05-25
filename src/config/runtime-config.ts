@@ -44,7 +44,8 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     session_dir: 'Q_CODE_SESSION_DIR',
     home: 'Q_CODE_HOME',
     project_root: 'Q_CODE_PROJECT_ROOT',
-    teams: 'Q_CODE_TEAMS'
+    teams: 'Q_CODE_TEAMS',
+    debug: 'Q_CODE_DEBUG'
   },
   infra: {
     enabled: 'Q_CODE_INFRA_ENABLED',

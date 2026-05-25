@@ -90,6 +90,7 @@ cp .env.example .env
 | `COMPACT_MAX_OUTPUT_TOKENS`    | ❌   | 压缩摘要输出上限，默认 20000                                  |
 | `Q_CODE_SESSION_DIR`           | ❌   | 会话存储目录，默认 .sessions                                  |
 | `Q_CODE_HOME`                  | ❌   | q-code 全局配置目录，默认 `~/.q-code`                         |
+| `Q_CODE_DEBUG`                 | ❌   | 设为 1/true/yes/on 显示启动诊断信息（等价于 `--debug`）       |
 | `Q_CODE_SKILL_CHAR_BUDGET`     | ❌   | Skills discovery 注入字符预算，默认 8000                      |
 | `Q_CODE_TEAMS`                 | ❌   | 设为 1/true/yes/on 开启 Agent Teams（等价于 `--agent-teams`） |
 | `Q_CODE_INFRA_ENABLED`         | ❌   | 是否启用企业 AI 基建集成；默认 false，需显式设为 true         |
@@ -128,6 +129,7 @@ pnpm run continue       # 恢复上次会话
 | `--plan`               | 启动时直接进入 Plan Mode                                 |
 | `--agent-teams`        | 启用 Agent Teams 多智能体协作（也可设 `Q_CODE_TEAMS=1`） |
 | `--classic`            | 使用传统 readline 交互，不启动 Ink TUI                   |
+| `--debug`              | 显示启动诊断信息，包括 Prompt Pipe 和工具加载概览        |
 
 默认在交互式 TTY 中启动 Ink TUI；非 TTY、`--classic` 或 `Q_CODE_TUI=0` 会回退到传统 readline。TUI 将 Agent 输出、工具调用、上下文占用、任务进度、后台 Agent 和 token 用量统一渲染为事件流，支持 `Shift+Enter`/`Ctrl+J` 多行输入、`Ctrl+R` 历史搜索、`Esc` 清空/恢复输入、忙时 `Ctrl+C` 中断当前任务和 Markdown 代码块/列表/表格展示。输入区使用真实终端光标锚定输入法候选窗，避免 macOS IME 跑到屏幕角落。
 

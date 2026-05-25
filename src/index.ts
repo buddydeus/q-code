@@ -6,6 +6,7 @@ import { fmtBanner, fmtContextUsage, fmtStop } from './utils/logger'
 import { createInterface } from 'node:readline'
 import { startTerminalRuntime, type TerminalRuntime } from './terminal/runtime'
 import type { TerminalEvent } from './terminal/events'
+import { formatStartupDuckBanner, STARTUP_DUCK_SOURCE } from './terminal/utils/duck'
 import {
   allTools,
   createAgentTool,
@@ -147,7 +148,8 @@ import {
   formatCliHelp,
   formatCliVersion,
   getEarlyCliCommand,
-  getPackageVersion
+  getPackageVersion,
+  isDebugMode
 } from './runtime/cli-info'
 import { runCliUpdate } from './runtime/update'
 
@@ -171,6 +173,7 @@ if (earlyCliCommand === 'update') {
 
 applyRuntimeConfig()
 
+const debugMode = isDebugMode(process.argv.slice(2))
 const tokenBudget = getNumberEnv('TOKEN_BUDGET', 256000)
 const contextLimitTokens = getNumberEnv('CONTEXT_LIMIT_TOKENS', 256000)
 const maxSteps = getNumberEnv('MAX_STEPS', 88)
@@ -263,6 +266,9 @@ async function main() {
       console.log(text)
     }
   }
+  const printStartupInfo = (text = ''): void => {
+    if (!useTui || debugMode) print(text)
+  }
   const setStatus = (
     text: string,
     status: Extract<TerminalEvent, { type: 'status' }>['status'] = 'idle'
@@ -345,11 +351,13 @@ async function main() {
           emitTerminal({ type: 'error', text: `[MCP config] ${error}` })
         }
       }
-      print(
-        result.connections.length > 0
-          ? `  [MCP] 已配置 ${result.connections.length} 个 server，已注册 ${result.toolCount} 个工具`
-          : '  [MCP] 未配置 MCP server'
-      )
+      if (debugMode) {
+        print(
+          result.connections.length > 0
+            ? `  [MCP] 已配置 ${result.connections.length} 个 server，已注册 ${result.toolCount} 个工具`
+            : '  [MCP] 未配置 MCP server'
+        )
+      }
     }).catch((error) => {
       if (useTui) emitTerminal({ type: 'error', text: `[MCP] 启动失败: ${formatErrorMessage(error)}` })
     })
@@ -457,14 +465,14 @@ async function main() {
     messages = store.load()
     const restored = store.getSummary()
     if (!dumpSystemPrompt) {
-      print(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`)
-      print(`  transcript: ${restored.transcriptPath}`)
+      printStartupInfo(`\n[Session] 恢复会话 "${sessionId}"，${messages.length} 条活跃历史消息`)
+      printStartupInfo(`  transcript: ${restored.transcriptPath}`)
     }
   } else {
     if (!dumpSystemPrompt) {
       const prefix = isContinue ? '未找到可恢复会话，已创建新会话' : '新会话'
-      print(`\n[Session] ${prefix} "${sessionId}"`)
-      if (store) print(`  transcript: ${store.paths.transcriptPath}`)
+      printStartupInfo(`\n[Session] ${prefix} "${sessionId}"`)
+      if (store) printStartupInfo(`  transcript: ${store.paths.transcriptPath}`)
     }
   }
 
@@ -772,27 +780,28 @@ async function main() {
     })
   }
 
-  // Debug: 显示 Prompt Pipe 各模块状态
-  builder.debug(initialPromptCtx, print)
+  if (debugMode) {
+    builder.debug(initialPromptCtx, print)
 
-  const activeTools = registry.getActiveTools()
-  print(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
-  print(
-    `Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`
-  )
-  print(
-    `SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`
-  )
-  print(`Hooks: ${hooks.list().length} 个已加载`)
-  print(
-    `任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`
-  )
-  if (agentMode === 'plan') print(`Plan 文件: ${planFilePath}`)
-  print(
-    `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
-      compactTriggerRatio * 100
-    )}%)，执行预算: ${tokenBudget} tokens，输出预算: ${defaultMaxOutputTokens}/${escalatedMaxOutputTokens}/${compactMaxOutputTokens}`
-  )
+    const activeTools = registry.getActiveTools()
+    print(`活跃工具: ${activeTools.length} 个，当前模式: ${agentMode}`)
+    print(
+      `Skills: ${skillsBootstrap.skillCount} 个可见，${skillsBootstrap.conditionalCount} 个条件激活`
+    )
+    print(
+      `SubAgents: ${agentsBootstrap.agentCount} 个可用，${agentsBootstrap.customCount} 个自定义`
+    )
+    print(`Hooks: ${hooks.list().length} 个已加载`)
+    print(
+      `任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`
+    )
+    if (agentMode === 'plan') print(`Plan 文件: ${planFilePath}`)
+    print(
+      `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
+        compactTriggerRatio * 100
+      )}%)，执行预算: ${tokenBudget} tokens，输出预算: ${defaultMaxOutputTokens}/${escalatedMaxOutputTokens}/${compactMaxOutputTokens}`
+    )
+  }
 
   const rl = useTui ? null : createInterface({ input: process.stdin, output: process.stdout })
   let closed = false
@@ -992,11 +1001,11 @@ async function main() {
             isError: event.isError === true
           })
           if (event.name === 'todo_write' && typeof event.output === 'string') {
-            print(`\n${event.output}`)
+            if (!useTui) print(`\n${event.output}`)
             void emitTaskProgress()
           }
           if (event.name.startsWith('task_') && typeof event.output === 'string') {
-            print(`\n${event.output}`)
+            if (!useTui) print(`\n${event.output}`)
             void emitTaskProgress()
           }
           const filePaths = extractToolFilePaths(event.name, event.input)
@@ -1836,10 +1845,17 @@ async function main() {
     })
   }
 
-  const teamsHint = isAgentTeamsEnabled() ? '；用 /teams 查看 Agent Teams' : ''
-  print(
-    `小黄鸭已就位，今天也要把剧情推进下去。\n对话会自动保存。用 pnpm run continue 恢复上次对话；用 /mode plan 进入 Plan Mode；用 /tasks 切换任务系统；用 /mcp 查看 MCP；用 /skills 查看 Skills；用 /agents 查看 SubAgents${teamsHint}。\n`
-  )
+  const startupDuckBanner = formatStartupDuckBanner({ teamsEnabled: isAgentTeamsEnabled() })
+  if (useTui) {
+    emitTerminal({
+      type: 'message',
+      role: 'system',
+      text: startupDuckBanner,
+      source: STARTUP_DUCK_SOURCE
+    })
+  } else {
+    console.log(`\n${startupDuckBanner}\n`)
+  }
   if (terminal) {
     await terminal.waitUntilExit()
   } else {

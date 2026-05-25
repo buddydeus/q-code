@@ -6,6 +6,7 @@ import { applyRuntimeConfig, getRuntimeConfigPaths } from '../../src/config/runt
 
 const ENV_KEYS = [
   'Q_CODE_HOME',
+  'Q_CODE_DEBUG',
   'OPENAI_BASE_URL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
@@ -111,9 +112,14 @@ describe('runtime config', () => {
     const { cwd, home } = setupConfigFixture()
     writeFileSync(
       join(home, 'config.toml'),
-      ['OPENAI_API_KEY = "root-key"', 'openai_model = "alias-model"', '[runtime]', 'token_budget = 12345'].join(
-        '\n'
-      )
+      [
+        'OPENAI_API_KEY = "root-key"',
+        'openai_model = "alias-model"',
+        '[runtime]',
+        'token_budget = 12345',
+        '[q_code]',
+        'debug = true'
+      ].join('\n')
     )
 
     applyRuntimeConfig(cwd)
@@ -121,6 +127,7 @@ describe('runtime config', () => {
     expect(process.env.OPENAI_API_KEY).toBe('root-key')
     expect(process.env.OPENAI_MODEL).toBe('alias-model')
     expect(process.env.TOKEN_BUDGET).toBe('12345')
+    expect(process.env.Q_CODE_DEBUG).toBe('true')
   })
 
   it('reports the config file locations', () => {
