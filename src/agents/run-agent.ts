@@ -51,6 +51,7 @@ export interface RunChildAgentParams {
 export type ChildAgentProgressEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; toolName: string; toolCallId?: string }
+  | { type: 'tool_progress'; toolName: string; toolCallId?: string; text: string }
   | {
       type: 'tool_result'
       toolName: string
@@ -137,6 +138,15 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
       ...(params.teammateIdentity ? { teammateIdentity: params.teammateIdentity } : {}),
       onText: (text) => {
         params.onProgress?.({ type: 'text', text })
+      },
+      onToolProgress: (event) => {
+        if (!event.text) return
+        params.onProgress?.({
+          type: 'tool_progress',
+          toolName: event.name,
+          ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+          text: event.text
+        })
       },
       onToolEvent: (event) => {
         if (event.phase === 'start') {

@@ -4,6 +4,7 @@ import { isRetryable, calculateDelay, sleep } from './retry'
 import {
   ToolRegistry,
   type TeammateIdentity,
+  type ToolProgressEvent,
   type ToolResultEnvelope
 } from '../tools/registry'
 import type { HookAgentContext, HookRunner } from '../hooks'
@@ -68,6 +69,15 @@ export interface AgentToolResultEvent {
   isError?: boolean
 }
 
+export interface AgentToolProgressEvent {
+  type: string
+  name: string
+  text?: string
+  toolCallId?: string
+  input?: unknown
+  metadata?: Record<string, unknown>
+}
+
 export interface AgentStepUsage {
   model: string
   usage: NormalizedUsage
@@ -93,6 +103,7 @@ export interface AgentLoopOptions {
   onText?: (text: string) => void
   onToolEvent?: (event: AgentToolEvent) => void
   onToolResult?: (event: AgentToolResultEvent) => void
+  onToolProgress?: (event: AgentToolProgressEvent) => void
   stopAfterToolNames?: string[]
   abortSignal?: AbortSignal
   sessionId?: string
@@ -237,6 +248,7 @@ export async function agentLoop(
               ...(options.sessionId ? { sessionId: options.sessionId } : {}),
               ...(options.hooks ? { hooks: options.hooks } : {}),
               ...(options.agent ? { agent: options.agent } : {}),
+              ...(options.onToolProgress ? { onProgress: toAgentToolProgress(options) } : {}),
               ...(options.teammateIdentity ? { teammateIdentity: options.teammateIdentity } : {})
             },
             { resultEnvelope: true }
@@ -530,6 +542,21 @@ export async function agentLoop(
 
   if (!quiet) console.log(fmtTaskDuration(Date.now() - taskStart))
   return { messages, newMessages, usageAnchor }
+}
+
+function toAgentToolProgress(
+  options: AgentLoopOptions
+): (event: ToolProgressEvent) => void {
+  return (event) => {
+    options.onToolProgress?.({
+      type: event.type,
+      name: event.toolName ?? 'unknown',
+      ...(event.text ? { text: event.text } : {}),
+      ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+      ...(event.input !== undefined ? { input: event.input } : {}),
+      ...(event.metadata ? { metadata: event.metadata } : {})
+    })
+  }
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

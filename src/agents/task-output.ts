@@ -6,6 +6,7 @@ export type TaskOutputEvent =
   | { type: 'started'; agentType: string; description?: string; prompt: string }
   | { type: 'text'; text: string }
   | { type: 'tool_use'; toolName: string; toolCallId?: string }
+  | { type: 'tool_progress'; toolName: string; toolCallId?: string; text: string }
   | { type: 'tool_result'; toolName: string; toolCallId?: string; isError: boolean; preview: string }
   | {
       type: 'turn_usage'

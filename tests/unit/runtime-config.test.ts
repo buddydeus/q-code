@@ -11,6 +11,11 @@ const ENV_KEYS = [
   'Q_CODE_GITLAB_TOKEN',
   'Q_CODE_GITLAB_PROJECT_ID',
   'Q_CODE_GITLAB_KB_PREFIX',
+  'Q_CODE_SHELL_TIMEOUT_MS',
+  'Q_CODE_SHELL_TIMEOUT_MAX_MS',
+  'Q_CODE_SHELL_MAX_BUFFER',
+  'Q_CODE_SHELL_ALLOW_ABS_CWD',
+  'Q_CODE_SHELL_KILL_BG_ON_EXIT',
   'OPENAI_BASE_URL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
@@ -148,11 +153,17 @@ describe('runtime config', () => {
         'token_budget = 12345',
         '[q_code]',
         'debug = true',
+        'shell_timeout_ms = 90000',
         '[gitlab_kb]',
         'url = "https://gitlab.example.com/group/project"',
         'token = "glpat-test"',
         'project_id = "group/project"',
-        'prefix = "team-kb"'
+        'prefix = "team-kb"',
+        '[shell]',
+        'timeout_max_ms = 120000',
+        'max_buffer = 2097152',
+        'allow_abs_cwd = true',
+        'kill_bg_on_exit = true'
       ].join('\n')
     )
 
@@ -162,6 +173,11 @@ describe('runtime config', () => {
     expect(process.env.OPENAI_MODEL).toBe('alias-model')
     expect(process.env.TOKEN_BUDGET).toBe('12345')
     expect(process.env.Q_CODE_DEBUG).toBe('true')
+    expect(process.env.Q_CODE_SHELL_TIMEOUT_MS).toBe('90000')
+    expect(process.env.Q_CODE_SHELL_TIMEOUT_MAX_MS).toBe('120000')
+    expect(process.env.Q_CODE_SHELL_MAX_BUFFER).toBe('2097152')
+    expect(process.env.Q_CODE_SHELL_ALLOW_ABS_CWD).toBe('true')
+    expect(process.env.Q_CODE_SHELL_KILL_BG_ON_EXIT).toBe('true')
     expect(process.env.Q_CODE_GITLAB_URL).toBe('https://gitlab.example.com/group/project')
     expect(process.env.Q_CODE_GITLAB_TOKEN).toBe('glpat-test')
     expect(process.env.Q_CODE_GITLAB_PROJECT_ID).toBe('group/project')

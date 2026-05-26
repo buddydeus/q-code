@@ -52,7 +52,19 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     audit_max_file_bytes: 'Q_CODE_AUDIT_MAX_FILE_BYTES',
     audit_max_queue_size: 'Q_CODE_AUDIT_MAX_QUEUE_SIZE',
     audit_pii: 'Q_CODE_AUDIT_PII',
-    crash_guard: 'Q_CODE_CRASH_GUARD'
+    crash_guard: 'Q_CODE_CRASH_GUARD',
+    shell_timeout_ms: 'Q_CODE_SHELL_TIMEOUT_MS',
+    shell_timeout_max_ms: 'Q_CODE_SHELL_TIMEOUT_MAX_MS',
+    shell_max_buffer: 'Q_CODE_SHELL_MAX_BUFFER',
+    shell_allow_abs_cwd: 'Q_CODE_SHELL_ALLOW_ABS_CWD',
+    shell_kill_bg_on_exit: 'Q_CODE_SHELL_KILL_BG_ON_EXIT'
+  },
+  shell: {
+    timeout_ms: 'Q_CODE_SHELL_TIMEOUT_MS',
+    timeout_max_ms: 'Q_CODE_SHELL_TIMEOUT_MAX_MS',
+    max_buffer: 'Q_CODE_SHELL_MAX_BUFFER',
+    allow_abs_cwd: 'Q_CODE_SHELL_ALLOW_ABS_CWD',
+    kill_bg_on_exit: 'Q_CODE_SHELL_KILL_BG_ON_EXIT'
   },
   audit: {
     enabled: 'Q_CODE_AUDIT_ENABLED',
