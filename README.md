@@ -531,6 +531,57 @@ q-code 默认启用崩溃保护。遇到未捕获异常、未处理 Promise reje
 }
 ```
 
+#### 自定义工具目录
+
+q-code 支持从两个目录扫描“目录式”自定义工具，并按固定优先级覆盖同名工具：
+
+1. `<cwd>/.q-code/tools/<tool-name>/`
+2. `~/.q-code/tools/<tool-name>/`
+3. 内置工具
+
+每个工具目录至少包含一个 `schema.json`，格式为：
+
+```json
+{
+  "name": "demo_tool",
+  "description": "示例自定义工具",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" }
+    },
+    "required": ["value"],
+    "additionalProperties": false
+  },
+  "isReadOnly": true,
+  "isConcurrencySafe": true,
+  "execute": "node ./index.js"
+}
+```
+
+约定说明：
+
+- `schema.json` 结构为 `Omit<ToolDefinition, 'isEnabled' | 'execute'> & { execute: string }`
+- 工具目录名必须与 `schema.json.name` 完全一致
+- 子目录缺少 `schema.json` 时会在启动时输出 `[tools] Skipping …` 警告并跳过
+- `execute` 是可在 shell 中直接执行的命令，执行目录固定为当前工具目录
+- 工具目录中可以放置任意配套文件，例如 `index.js`、模板、脚本或静态资源
+- 运行时会把工具输入通过 `stdin` 传给命令，默认 payload 为：
+
+```json
+{
+  "version": 1,
+  "input": { "value": "hello" },
+  "context": {
+    "cwd": "/abs/project",
+    "sessionId": "optional-session-id"
+  }
+}
+```
+
+- 命令 `stdout` 如果是合法 JSON，会按结构化工具结果解析；否则按普通文本结果返回
+- 命令非零退出、超时、输出过大或启动失败时，会转成结构化工具错误并进入现有审计/Hooks 管线
+
 #### 并发控制
 
 - `isConcurrencySafe` 工具可并发执行

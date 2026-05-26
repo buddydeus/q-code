@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
+    setupFiles: ['tests/setup-vitest.ts'],
     include: ['tests/**/*.test.ts'],
     // Each test isolates env vars + tmp dirs through helpers; running
     // sequentially keeps Q_CODE_HOME isolation simple and the suite

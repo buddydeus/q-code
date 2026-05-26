@@ -67,7 +67,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
 - `src/agent/`：核心 Agent Loop、重试、循环检测。
 - `src/agents/`：SubAgent、后台 Agent、Agent Teams、worktree、mailbox、notification-store。
 - `src/context/`：System Prompt 管道、上下文压缩与 offload、任务、Todo、记忆、运行环境和项目指令加载。
-- `src/tools/`：内置工具定义、注册表（含审计/Hooks 包装层）、文件/搜索/计划/任务/团队/Memory/Skill/GitLab KB/Agent 等工具；`shell-tools.ts` 负责 `f`、后台 shell job、输出 spill、cwd 策略和危险命令/交互保护。
+- `src/tools/`：内置工具定义、注册表（含审计/Hooks 包装层）、自定义工具目录加载器、文件/搜索/计划/任务/团队/Memory/Skill/GitLab KB/Agent 等工具；`shell-tools.ts` 负责 `f`、后台 shell job、输出 spill、cwd 策略和危险命令/交互保护。
 - `src/mcp/`：MCP 配置、连接、工具适配和注册表。
 - `src/skills/`：Skills 加载、预算、条件激活和斜杠命令展开。
 - `src/slash/`：斜杠命令注册表、解析、suggestions、formatHelp（`/help` 输出由此驱动）。
@@ -104,6 +104,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
 - 新增环境变量需同时更新：(a) `.env.example`；(b) `src/config/runtime-config.ts` 的 `SECTION_ALIASES`（让 toml 配置可用）；(c) README 配置表。
 - 工具默认通过 `ToolRegistry.toAISDKFormat` 包装，会自动写 `tool.call` / `tool.result` 审计事件；新增工具入口或绕过 registry 时需自行接审计与 Hooks 管线（参考 `src/observability/audit.ts::getAuditLogger`）。
 - Shell 工具默认只能在当前 `cwd` 内执行；跳出目录必须显式设置 `Q_CODE_SHELL_ALLOW_ABS_CWD=true`。长命令优先使用 `timeoutMs` 或 `background=true`，超大输出通过 `<Q_CODE_HOME>/shell-spills` 恢复全文，后台 job 元数据写 `<Q_CODE_HOME>/shell-jobs`。
+- 自定义工具目录固定为 `~/.q-code/tools/<name>/` 与 `<cwd>/.q-code/tools/<name>/`；项目级覆盖用户级，用户级覆盖内置工具。每个工具目录必须提供 `schema.json`，其结构为 `Omit<ToolDefinition, 'isEnabled' | 'execute'> & { execute: string }`，其中 `execute` 会在该工具目录下作为 shell 命令运行。
 - 新增 Slash 命令通过 `createSlashCommandRegistry` + `command(...)` 注册（见 `src/index.ts::createBuiltinSlashCommands`），并填好 `category`、`aliases`、`usage`，以便 `/help` 输出友好。
 - 新增 Hook 事件类型时同步更新 `src/hooks/events.ts` 与 `src/hooks/types.ts` 的导出，并在 `tests/unit/hooks.test.ts` 加覆盖。
 - 新增企业相关能力（Infra / GitLab KB / 审计 PII 模式）必须保持可禁用：环境变量缺省值不能让首次启动失败。
@@ -119,6 +120,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
   - Slash 改动：`vitest run tests/unit/slash.test.ts`
   - Tool registry 改动：`vitest run tests/unit/tool-registry.test.ts`
   - Shell 工具改动：`vitest run tests/unit/shell-tools.test.ts tests/integration/shell-streaming.test.ts`
+  - 自定义工具目录改动：`vitest run tests/unit/custom-tools.test.ts tests/unit/tool-registry.test.ts`
   - 终端/输入状态机改动：`vitest run tests/unit/terminal.test.ts`
   - 运行时配置/CLI 子命令：`vitest run tests/unit/runtime-config.test.ts tests/unit/cli-info.test.ts tests/unit/update.test.ts`
   - 崩溃保护：`vitest run tests/unit/crash-guard.test.ts tests/unit/mcp-bootstrap.test.ts tests/unit/audit-logger.test.ts`
