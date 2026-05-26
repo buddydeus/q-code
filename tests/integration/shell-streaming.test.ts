@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { agentLoop } from '../../src/agent/loop'
 import { bashTool, shellTailTool } from '../../src/tools/shell-tools'
 import { ToolRegistry } from '../../src/tools/registry'
+import { canRunShellCommand } from '../_helpers/shell-test'
+
+const itIfShellAvailable = canRunShellCommand() ? it : it.skip
 
 describe('shell streaming integration', () => {
   const tempDirs: string[] = []
@@ -17,7 +20,7 @@ describe('shell streaming integration', () => {
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
-  it('mock model can start a background f job and tail its complete output', async () => {
+  itIfShellAvailable('mock model can start a background f job and tail its complete output', async () => {
     const root = mkdtempSync(join(tmpdir(), 'q-code-shell-streaming-'))
     tempDirs.push(root)
     const cwd = join(root, 'project')

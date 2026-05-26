@@ -18,6 +18,7 @@ import {
   createTeamDeleteTool,
   createTodoWriteTool,
   createToolSearchTool,
+  loadAllCustomTools,
   ToolRegistry
 } from './tools'
 import { agentLoop, type AgentLoopPreflightResult } from './agent/loop'
@@ -73,7 +74,7 @@ import {
   type PlanFileOptions
 } from './context/plans'
 import { getPlanModeAttachment, getPlanModeExitAttachment } from './context/plan-attachments'
-import type { ToolVisibilityMode } from './tools/registry'
+import type { ToolDefinition, ToolVisibilityMode } from './tools/registry'
 import { clearTodos, formatTodoList, getTodos, subscribeTodos, type TodoItem } from './context/todos'
 import {
   formatTaskList,
@@ -212,8 +213,6 @@ const compactMaxOutputTokens = getNumberEnv('COMPACT_MAX_OUTPUT_TOKENS', 20000)
 const compactTriggerTokens = Math.floor(contextLimitTokens * compactTriggerRatio)
 
 const registry = new ToolRegistry()
-registry.register(...allTools)
-registry.register(createToolSearchTool(registry))
 
 function findLastUserPromptDigest(messages: ModelMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -428,6 +427,22 @@ async function main() {
       })
     })
   }
+
+  registry.setCwd(runtimeCwd)
+  const customToolsBootstrap = await loadAllCustomTools(runtimeCwd).catch((error) => {
+    if (!dumpSystemPrompt) print(`  [Tools] 启动失败: ${formatErrorMessage(error)}`)
+    return { tools: [], warnings: [] }
+  })
+  const customToolNames = new Set(customToolsBootstrap.tools.map((tool) => tool.name))
+  const registerBuiltinTools = (...tools: ToolDefinition[]): void => {
+    registry.register(...tools.filter((tool) => !customToolNames.has(tool.name)))
+  }
+  registerBuiltinTools(...allTools)
+  registry.register(...customToolsBootstrap.tools)
+  registerBuiltinTools(createToolSearchTool(registry))
+  if (!dumpSystemPrompt) {
+    for (const warning of customToolsBootstrap.warnings) print(`  ${warning}`)
+  }
   let lastInfraSync: InfraSyncResult | undefined
   if (!dumpSystemPrompt) {
     lastInfraSync = await syncInfraConfig(runtimeCwd).catch((error) => ({
@@ -530,7 +545,7 @@ async function main() {
     emitSessionInfoIfReady()
   }
 
-  registry.register(
+  registerBuiltinTools(
     ...createPlanTools({
       getMode: () => agentMode,
       setMode: (mode) => setAgentMode(mode),
@@ -548,7 +563,7 @@ async function main() {
       }
     })
   )
-  registry.register(
+  registerBuiltinTools(
     ...createTaskTools({
       getSessionId: () => sessionId,
       getCwd: () => store?.cwd ?? process.cwd(),
@@ -559,7 +574,7 @@ async function main() {
       isEnabled: () => taskMode === 'todo'
     })
   )
-  registry.register(createSkillTool({ getSessionId: () => sessionId }))
+  registerBuiltinTools(createSkillTool({ getSessionId: () => sessionId }))
   registry.setMode(agentMode)
   const unsubscribeTodos = subscribeTodos((changedSessionId, todos) => {
     if (changedSessionId === sessionId) emitTodoProgress(todos)
@@ -588,7 +603,7 @@ async function main() {
     getRuntimeEnvironmentContext().then(formatRuntimeEnvironmentContext),
     loadAgentMdContext()
   ])
-  registry.register(
+  registerBuiltinTools(
     createAgentTool({
       createModel,
       getDefaultModelName: currentModelName,
@@ -607,7 +622,7 @@ async function main() {
   // Agent Teams (stage 21): the three coordination tools. Their
   // isEnabled() gate hides them from the model schema unless the
   // feature flag is on, so registering unconditionally is safe.
-  registry.register(createTeamCreateTool(), createTeamDeleteTool(), createSendMessageTool())
+  registerBuiltinTools(createTeamCreateTool(), createTeamDeleteTool(), createSendMessageTool())
 
   // Prompt Pipe 组装 system prompt
   const builder = new PromptBuilder()

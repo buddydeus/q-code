@@ -5,6 +5,7 @@ import { bashTool, shellKillTool, shellListTool, shellStatusTool, shellTailTool 
 import { memoryWriteTool } from './memory-tools'
 import { fetchUrlTool, globTool, grepTool, startPreviewTool } from './utility-tools'
 import { createGitLabKbTools } from './gitlab-kb-tools'
+export { loadAllCustomTools, getProjectToolsDir, getUserToolsDir } from './load-tools-dir'
 
 export const allTools: ToolDefinition[] = [
   readFileTool,

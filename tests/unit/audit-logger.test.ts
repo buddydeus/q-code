@@ -14,6 +14,9 @@ import {
 import { tailAuditLogs, verifyAuditLogs } from '../../src/observability/audit-cli'
 import { setupTempHome, type TempHome } from '../_helpers/temp-home'
 
+const subprocessAvailable = canExecNodeSubprocesses()
+const itIfSubprocessAvailable = subprocessAvailable ? it : it.skip
+
 describe('NdjsonAuditLogger', () => {
   let home: TempHome | undefined
 
@@ -32,7 +35,7 @@ describe('NdjsonAuditLogger', () => {
     vi.restoreAllMocks()
   })
 
-  it('默认写入 UTC 日期切分的 NDJSON', async () => {
+  it('writes NDJSON split by UTC date by default', async () => {
     home = setupTempHome('audit-')
     const auditDir = join(home.root, 'audit')
     const logger = new NdjsonAuditLogger({
@@ -58,7 +61,7 @@ describe('NdjsonAuditLogger', () => {
     })
   })
 
-  it('Q_CODE_AUDIT_ENABLED=false 时不生成日志文件', async () => {
+  it('does not create audit files when Q_CODE_AUDIT_ENABLED=false', async () => {
     home = setupTempHome('audit-disabled-')
     const auditDir = join(home.root, 'audit')
     const logger = new NdjsonAuditLogger({
@@ -73,7 +76,7 @@ describe('NdjsonAuditLogger', () => {
     expect(existsSync(auditDir)).toBe(false)
   })
 
-  it('默认 PII 模式只写 chars + sha256，不写原文', () => {
+  it('masks prompt and tool payloads by default', () => {
     const prompt = createUserPromptPayload('secret prompt')
     expect(prompt).toMatchObject({ chars: 13 })
     expect(prompt.sha256).toBeTypeOf('string')
@@ -84,9 +87,10 @@ describe('NdjsonAuditLogger', () => {
     expect(tool).not.toHaveProperty('input')
   })
 
-  it('Q_CODE_AUDIT_PII=full 时允许写原文', () => {
+  it('includes full payloads when Q_CODE_AUDIT_PII=full', () => {
     const prompt = createUserPromptPayload('secret prompt', 'full')
     expect(prompt.text).toBe('secret prompt')
+
     const tool = createToolCallPayload({
       name: 'write_file',
       input: { content: 'secret' },
@@ -95,7 +99,7 @@ describe('NdjsonAuditLogger', () => {
     expect(tool.input).toEqual({ content: 'secret' })
   })
 
-  it('hook decision 默认只写摘要，PII=full 才写原文', () => {
+  it('masks hook decision reason unless pii mode is full', () => {
     const masked = createHookDecisionPayload({
       hookName: 'deny',
       event: 'pre_tool_use',
@@ -121,7 +125,7 @@ describe('NdjsonAuditLogger', () => {
     expect(full.reason).toMatchObject({ text: 'secret reason' })
   })
 
-  it('超过单文件大小后轮转到序号文件', async () => {
+  it('rotates to numbered files after exceeding max file size', async () => {
     home = setupTempHome('audit-rotate-')
     const auditDir = join(home.root, 'audit')
     const logger = new NdjsonAuditLogger({
@@ -141,7 +145,7 @@ describe('NdjsonAuditLogger', () => {
     ])
   })
 
-  it('写入失败只输出 stderr，不向调用方抛错', async () => {
+  it('writes failures to stderr without throwing to callers', async () => {
     const stderr: string[] = []
     const logger = new NdjsonAuditLogger({
       auditDir: 'unused',
@@ -158,7 +162,7 @@ describe('NdjsonAuditLogger', () => {
     expect(stderr.join('')).toContain('disk full')
   })
 
-  it('队列满时丢弃非关键事件并保持队列上限', async () => {
+  it('drops non-critical events when the queue is full', async () => {
     const lines: string[] = []
     const logger = new NdjsonAuditLogger({
       auditDir: 'unused',
@@ -180,7 +184,7 @@ describe('NdjsonAuditLogger', () => {
     expect(records.some((record) => record.event === 'audit.dropped')).toBe(true)
   })
 
-  it('启动时清理过期 audit 文件', () => {
+  it('cleans up expired audit files on startup', () => {
     home = setupTempHome('audit-retention-')
     const auditDir = join(home.root, 'audit')
     mkdirSync(auditDir, { recursive: true })
@@ -199,7 +203,7 @@ describe('NdjsonAuditLogger', () => {
     expect(existsSync(join(auditDir, 'audit-2026-05-24.ndjson'))).toBe(true)
   })
 
-  it('verifyAuditLogs 校验 schema 与 seq 单调', async () => {
+  it('verifyAuditLogs validates schema and monotonic seq', async () => {
     home = setupTempHome('audit-verify-')
     const auditDir = join(home.root, 'audit')
     const logger = new NdjsonAuditLogger({
@@ -225,7 +229,7 @@ describe('NdjsonAuditLogger', () => {
     })
   })
 
-  it('tail --follow 能跟随轮转后出现的新 audit 文件', async () => {
+  it('tail --follow picks up newly rotated audit files', async () => {
     home = setupTempHome('audit-tail-rotate-')
     const auditDir = join(home.root, 'audit')
     mkdirSync(auditDir, { recursive: true })
@@ -317,40 +321,58 @@ describe('NdjsonAuditLogger', () => {
     expect(once).not.toHaveBeenCalledWith('SIGTERM', expect.any(Function))
   })
 
-  it('audit CLI 入口会先加载 .env 中的审计目录配置', () => {
-    home = setupTempHome('audit-cli-config-')
-    const auditDir = join(home.root, 'configured-audit')
-    mkdirSync(auditDir, { recursive: true })
-    writeAuditRecord(join(auditDir, 'audit-2026-05-25.ndjson'), {
-      ts: '2026-05-25T00:00:00.000Z',
-      seq: 1,
-      pid: 1,
-      agent: { kind: 'main' },
-      event: 'session.start',
-      payload: {},
-      sessionId: 's1'
-    })
-    writeFileSync(join(home.cwd, '.env'), `Q_CODE_AUDIT_DIR=${auditDir}\n`, 'utf-8')
+  itIfSubprocessAvailable(
+    'audit CLI 入口会先加载 .env 中的审计目录配置',
+    { timeout: 60_000 },
+    () => {
+      home = setupTempHome('audit-cli-config-')
+      const auditDir = join(home.root, 'configured-audit')
+      mkdirSync(auditDir, { recursive: true })
+      writeAuditRecord(join(auditDir, 'audit-2026-05-25.ndjson'), {
+        ts: '2026-05-25T00:00:00.000Z',
+        seq: 1,
+        pid: 1,
+        agent: { kind: 'main' },
+        event: 'session.start',
+        payload: {},
+        sessionId: 's1'
+      })
+      writeFileSync(join(home.cwd, '.env'), `Q_CODE_AUDIT_DIR=${auditDir}\n`, 'utf-8')
 
-    const repoRoot = process.cwd()
-    const output = execFileSync(
-      process.execPath,
-      [join(repoRoot, 'node_modules/tsx/dist/cli.mjs'), join(repoRoot, 'src/index.ts'), 'audit', 'verify'],
-      {
-        cwd: home.cwd,
-        encoding: 'utf-8',
-        env: {
-          ...process.env,
-          Q_CODE_HOME: home.qcodeHome
+      const repoRoot = process.cwd()
+      const output = execFileSync(
+        process.execPath,
+        [join(repoRoot, 'node_modules/tsx/dist/cli.mjs'), join(repoRoot, 'src/index.ts'), 'audit', 'verify'],
+        {
+          cwd: home.cwd,
+          encoding: 'utf-8',
+          env: {
+            ...process.env,
+            Q_CODE_HOME: home.qcodeHome
+          }
         }
-      }
-    )
+      )
 
-    expect(output).toContain('Audit verify: OK')
-    expect(output).toContain('files: 1')
-    expect(output).toContain('events: 1')
-  })
+      expect(output).toContain('Audit verify: OK')
+      expect(output).toContain('files: 1')
+      expect(output).toContain('events: 1')
+    }
+  )
 })
+
+function canExecNodeSubprocesses(): boolean {
+  try {
+    const repoRoot = process.cwd()
+    execFileSync(
+      process.execPath,
+      [join(repoRoot, 'node_modules/tsx/dist/cli.mjs'), '-e', 'process.exit(0)'],
+      { stdio: 'ignore' }
+    )
+    return true
+  } catch {
+    return false
+  }
+}
 
 function readRecords(filePath: string): any[] {
   return readFileSync(filePath, 'utf-8')

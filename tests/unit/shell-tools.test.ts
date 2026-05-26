@@ -13,6 +13,10 @@ import {
   getWindowsProcessTreeKillArgs
 } from '../../src/tools/shell-tools'
 import type { ToolResultEnvelope } from '../../src/tools/registry'
+import { canRunShellCommand } from '../_helpers/shell-test'
+
+const subprocessAvailable = canRunShellCommand()
+const itIfSubprocessAvailable = subprocessAvailable ? it : it.skip
 
 describe('shell tool process management', () => {
   const tmpDirs: string[] = []
@@ -68,7 +72,7 @@ describe('shell tool process management', () => {
     expect(getWindowsProcessTreeKillArgs(1234)).toEqual(['/F', '/T', '/PID', '1234'])
   })
 
-  it('runs a simple command on the current platform', async () => {
+  itIfSubprocessAvailable('runs a simple command on the current platform', async () => {
     const cwd = tmp()
     const command = process.platform === 'win32' ? 'Write-Output ok' : 'echo ok'
     const result = toolText(await bashTool.execute({ command }, { cwd }))
@@ -91,7 +95,7 @@ describe('shell tool process management', () => {
     expect(warning.warnings.join('\n')).toContain('curl | sh/bash')
   })
 
-  it('blocks cwd outside registry cwd unless explicitly allowed', async () => {
+  itIfSubprocessAvailable('blocks cwd outside registry cwd unless explicitly allowed', async () => {
     const cwd = tmp()
     const outside = tmp()
     const blocked = expectEnvelope(await bashTool.execute({ command: successCommand(), cwd: outside }, { cwd }))
@@ -114,7 +118,7 @@ describe('shell tool process management', () => {
     expect(result.error).toContain('cwd 不存在')
   })
 
-  it('times out slow synchronous commands with structured metadata', async () => {
+  itIfSubprocessAvailable('times out slow synchronous commands with structured metadata', async () => {
     const cwd = tmp()
     const result = expectEnvelope(
       await bashTool.execute({ command: sleepCommand(500), timeoutMs: 20 }, { cwd })
@@ -128,7 +132,7 @@ describe('shell tool process management', () => {
     })
   })
 
-  it('spills oversized synchronous output to Q_CODE_HOME', async () => {
+  itIfSubprocessAvailable('spills oversized synchronous output to Q_CODE_HOME', async () => {
     const cwd = tmp()
     const home = tmp()
     process.env.Q_CODE_HOME = home
@@ -148,7 +152,7 @@ describe('shell tool process management', () => {
     expect(readFileSync(spillFile!, 'utf-8')).toHaveLength(200000)
   })
 
-  it('emits throttled progress events while synchronous commands run', async () => {
+  itIfSubprocessAvailable('emits throttled progress events while synchronous commands run', async () => {
     const cwd = tmp()
     const events: string[] = []
     await bashTool.execute(
@@ -165,7 +169,7 @@ describe('shell tool process management', () => {
     expect(events.join('\n')).toContain('two')
   })
 
-  it('runs background jobs and supports tail/status/kill lifecycle', async () => {
+  itIfSubprocessAvailable('runs background jobs and supports tail/status/kill lifecycle', async () => {
     const cwd = tmp()
     const home = tmp()
     process.env.Q_CODE_HOME = home
@@ -197,7 +201,7 @@ describe('shell tool process management', () => {
     expect(killed.content).toMatchObject({ jobId, status: 'killed' })
   })
 
-  it('tails background output by offset without returning the whole file', async () => {
+  itIfSubprocessAvailable('tails background output by offset without returning the whole file', async () => {
     const cwd = tmp()
     const home = tmp()
     process.env.Q_CODE_HOME = home
@@ -227,7 +231,7 @@ describe('shell tool process management', () => {
     })
   })
 
-  it('records killed status in the session index during process cleanup', async () => {
+  itIfSubprocessAvailable('records killed status in the session index during process cleanup', async () => {
     const cwd = process.cwd()
     const home = mkdtempSync(join(tmpdir(), 'q-code-shell-cleanup-home-'))
     process.env.Q_CODE_HOME = home
@@ -259,7 +263,7 @@ describe('shell tool process management', () => {
     }
   })
 
-  it('kills commands that start prompting for interactive input', async () => {
+  itIfSubprocessAvailable('kills commands that start prompting for interactive input', async () => {
     const cwd = tmp()
     const started = Date.now()
     const result = expectEnvelope(
@@ -277,7 +281,7 @@ describe('shell tool process management', () => {
     expect(result.code).toBe('interactive_not_supported')
   }, 15000)
 
-  it('abort returns promptly on Windows PowerShell commands', async () => {
+  itIfSubprocessAvailable('abort returns promptly on Windows PowerShell commands', async () => {
     if (process.platform !== 'win32') return
     const cwd = tmp()
     const controller = new AbortController()
@@ -295,7 +299,7 @@ describe('shell tool process management', () => {
     expect(result).toContain('aborted')
   })
 
-  it('abort terminates Windows child processes that keep pipes open', async () => {
+  itIfSubprocessAvailable('abort terminates Windows child processes that keep pipes open', async () => {
     if (process.platform !== 'win32') return
     const cwd = tmp()
     const marker = join(cwd, 'child-finished.txt')
@@ -324,7 +328,7 @@ describe('shell tool process management', () => {
     expect(existsSync(marker) ? readFileSync(marker, 'utf-8') : '').toBe('')
   })
 
-  it('abort terminates the whole process group, including child commands', async () => {
+  itIfSubprocessAvailable('abort terminates the whole process group, including child commands', async () => {
     if (process.platform === 'win32') return
     const cwd = tmp()
     const marker = join(cwd, 'child-finished.txt')
