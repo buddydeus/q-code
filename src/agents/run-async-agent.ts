@@ -80,6 +80,15 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
             })
             updateAsyncAgentProgress(entry.agentId, { lastToolName: event.toolName })
             break
+          case 'tool_progress':
+            void appendTaskOutput(entry.outputFile, {
+              type: 'tool_progress',
+              toolName: event.toolName,
+              ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+              text: event.text
+            })
+            updateAsyncAgentProgress(entry.agentId, { lastToolName: event.toolName })
+            break
           case 'tool_result': {
             const nextToolUseCount = entry.toolUseCount + 1
             entry.toolUseCount = nextToolUseCount

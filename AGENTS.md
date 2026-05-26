@@ -5,6 +5,7 @@
 `q-code` 是一个基于 Vercel AI SDK 的 TypeScript 命令行 Agent 框架。核心能力包括：
 
 - **Agent / 任务**：Agent Loop、Plan Mode、Task V2、TodoWrite、上下文压缩、会话持久化（JSONL append-only）、项目记忆、Skills、SubAgent、Agent Teams、Worktree 隔离。
+- **工具执行**：文件/搜索工具、可配置超时与 spill 的 Shell 工具、后台 Shell job（`f_status` / `f_tail` / `f_kill` / `f_list`）。
 - **集成扩展**：MCP server、Hooks（pre/post tool-use 决策）、Slash 命令注册表、企业 AI 基建同步（Infra）、GitLab Wiki 知识库。
 - **可观测性**：NDJSON 审计日志（默认开启）、崩溃保护（crash guard，默认开启）与 crash report、Usage / Cache / 成本统计、Token Budget。
 - **TUI**：基于 Ink 的交互式 TUI（默认）、`--classic` 经典 readline、可经管道/CI 自动降级。
@@ -66,7 +67,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
 - `src/agent/`：核心 Agent Loop、重试、循环检测。
 - `src/agents/`：SubAgent、后台 Agent、Agent Teams、worktree、mailbox、notification-store。
 - `src/context/`：System Prompt 管道、上下文压缩与 offload、任务、Todo、记忆、运行环境和项目指令加载。
-- `src/tools/`：内置工具定义、注册表（含审计/Hooks 包装层）、文件/命令/搜索/计划/任务/团队/Memory/Skill/GitLab KB/Agent 等工具。
+- `src/tools/`：内置工具定义、注册表（含审计/Hooks 包装层）、文件/搜索/计划/任务/团队/Memory/Skill/GitLab KB/Agent 等工具；`shell-tools.ts` 负责 `f`、后台 shell job、输出 spill、cwd 策略和危险命令/交互保护。
 - `src/mcp/`：MCP 配置、连接、工具适配和注册表。
 - `src/skills/`：Skills 加载、预算、条件激活和斜杠命令展开。
 - `src/slash/`：斜杠命令注册表、解析、suggestions、formatHelp（`/help` 输出由此驱动）。
@@ -102,6 +103,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
 - Prompt、工具描述、项目说明多为中文；新增用户可见文案时优先保持中文一致性。
 - 新增环境变量需同时更新：(a) `.env.example`；(b) `src/config/runtime-config.ts` 的 `SECTION_ALIASES`（让 toml 配置可用）；(c) README 配置表。
 - 工具默认通过 `ToolRegistry.toAISDKFormat` 包装，会自动写 `tool.call` / `tool.result` 审计事件；新增工具入口或绕过 registry 时需自行接审计与 Hooks 管线（参考 `src/observability/audit.ts::getAuditLogger`）。
+- Shell 工具默认只能在当前 `cwd` 内执行；跳出目录必须显式设置 `Q_CODE_SHELL_ALLOW_ABS_CWD=true`。长命令优先使用 `timeoutMs` 或 `background=true`，超大输出通过 `<Q_CODE_HOME>/shell-spills` 恢复全文，后台 job 元数据写 `<Q_CODE_HOME>/shell-jobs`。
 - 新增 Slash 命令通过 `createSlashCommandRegistry` + `command(...)` 注册（见 `src/index.ts::createBuiltinSlashCommands`），并填好 `category`、`aliases`、`usage`，以便 `/help` 输出友好。
 - 新增 Hook 事件类型时同步更新 `src/hooks/events.ts` 与 `src/hooks/types.ts` 的导出，并在 `tests/unit/hooks.test.ts` 加覆盖。
 - 新增企业相关能力（Infra / GitLab KB / 审计 PII 模式）必须保持可禁用：环境变量缺省值不能让首次启动失败。
@@ -116,6 +118,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
   - Hooks 改动：`vitest run tests/unit/hooks.test.ts`
   - Slash 改动：`vitest run tests/unit/slash.test.ts`
   - Tool registry 改动：`vitest run tests/unit/tool-registry.test.ts`
+  - Shell 工具改动：`vitest run tests/unit/shell-tools.test.ts tests/integration/shell-streaming.test.ts`
   - 终端/输入状态机改动：`vitest run tests/unit/terminal.test.ts`
   - 运行时配置/CLI 子命令：`vitest run tests/unit/runtime-config.test.ts tests/unit/cli-info.test.ts tests/unit/update.test.ts`
   - 崩溃保护：`vitest run tests/unit/crash-guard.test.ts tests/unit/mcp-bootstrap.test.ts tests/unit/audit-logger.test.ts`

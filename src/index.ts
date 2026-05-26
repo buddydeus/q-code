@@ -1135,6 +1135,11 @@ async function main() {
         onText: (text) => {
           emitTerminal({ type: 'assistant_delta', text })
         },
+        onToolProgress: (event) => {
+          if (event.type !== 'shell_output' || !event.text) return
+          if (!useTui) print(`\n${event.text}`)
+          emitTerminal({ type: 'jit_context', text: event.text })
+        },
         onToolEvent: (event) => {
           activeStore.appendToolEvent({ type: 'tool_event', ...event })
           if (event.phase === 'start') {

@@ -63,12 +63,22 @@ export interface ToolResultEnvelope {
   metadata?: Record<string, unknown>
 }
 
+export interface ToolProgressEvent {
+  type: string
+  text?: string
+  toolName?: string
+  toolCallId?: string
+  input?: unknown
+  metadata?: Record<string, unknown>
+}
+
 export interface ToolExecutionContext {
   cwd: string
   abortSignal?: AbortSignal
   sessionId?: string
   hooks?: HookRunner
   agent?: HookAgentContext
+  onProgress?: (event: ToolProgressEvent) => void
   /**
    * Set when the tool runs inside a named teammate's loop (Agent Teams).
    * Tools like SendMessage use it to resolve the sender's identity;
@@ -403,6 +413,17 @@ export class ToolRegistry {
               ...(context.sessionId ? { sessionId: context.sessionId } : {}),
               ...(context.hooks ? { hooks: context.hooks } : {}),
               ...(context.agent ? { agent: context.agent } : {}),
+              ...(context.onProgress
+                ? {
+                    onProgress: (event) =>
+                      context.onProgress?.({
+                        ...event,
+                        toolName: event.toolName ?? tool.name,
+                        ...(toolCallId ? { toolCallId } : {}),
+                        input: event.input ?? effectiveInput
+                      })
+                  }
+                : {}),
               ...(context.teammateIdentity ? { teammateIdentity: context.teammateIdentity } : {})
             }
             const raw = await executeFn(effectiveInput, toolContext)

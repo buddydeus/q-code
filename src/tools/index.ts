@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './registry'
 import { readFileTool, writeFileTool, listDirectoryTool, editFileTool } from './file-tools'
 import { pickSearchTool, webFetchTool } from './search-tools'
-import { bashTool } from './shell-tools'
+import { bashTool, shellKillTool, shellListTool, shellStatusTool, shellTailTool } from './shell-tools'
 import { memoryWriteTool } from './memory-tools'
 import { fetchUrlTool, globTool, grepTool, startPreviewTool } from './utility-tools'
 import { createGitLabKbTools } from './gitlab-kb-tools'
@@ -14,6 +14,10 @@ export const allTools: ToolDefinition[] = [
   globTool,
   grepTool,
   bashTool,
+  shellStatusTool,
+  shellTailTool,
+  shellKillTool,
+  shellListTool,
   memoryWriteTool,
   fetchUrlTool,
   startPreviewTool,
