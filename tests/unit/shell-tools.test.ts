@@ -35,7 +35,9 @@ describe('shell tool process management', () => {
 
   afterEach(() => {
     for (const key of envKeys) restoreEnv(key, previousEnv[key])
-    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+    for (const dir of tmpDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    }
   })
 
   it('selects PowerShell7 on Windows and bash elsewhere', () => {
@@ -100,6 +102,16 @@ describe('shell tool process management', () => {
     process.env.Q_CODE_SHELL_ALLOW_ABS_CWD = 'true'
     const allowed = toolText(await bashTool.execute({ command: successCommand(), cwd: outside }, { cwd }))
     expect(allowed).toContain('ok')
+  })
+
+  it('reports missing cwd before spawning shell', async () => {
+    const cwd = tmp()
+    const missing = join(cwd, 'missing-dir')
+    const result = expectEnvelope(await bashTool.execute({ command: successCommand(), cwd: missing }, { cwd }))
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('cwd_not_found')
+    expect(result.error).toContain('cwd 不存在')
   })
 
   it('times out slow synchronous commands with structured metadata', async () => {
@@ -183,6 +195,68 @@ describe('shell tool process management', () => {
 
     const killed = expectEnvelope(await shellKillTool.execute({ jobId }, { cwd, sessionId: 'unit-session' }))
     expect(killed.content).toMatchObject({ jobId, status: 'killed' })
+  })
+
+  it('tails background output by offset without returning the whole file', async () => {
+    const cwd = tmp()
+    const home = tmp()
+    process.env.Q_CODE_HOME = home
+    const started = expectEnvelope(
+      await bashTool.execute(
+        {
+          command: `node -e "process.stdout.write('a'.repeat(200000))"`,
+          background: true
+        },
+        { cwd, sessionId: 'tail-session' }
+      )
+    )
+    const jobId = (started.content as { jobId: string }).jobId
+
+    await vi.waitFor(async () => {
+      const status = expectEnvelope(await shellStatusTool.execute({ jobId }, { cwd }))
+      expect(status.content).toMatchObject({ status: 'completed' })
+    }, { timeout: 5000 })
+
+    const tail = expectEnvelope(await shellTailTool.execute({ jobId, fromOffset: 1000, maxBytes: 128 }, { cwd }))
+    expect(tail.content).toMatchObject({
+      offset: 1000,
+      nextOffset: 1128,
+      bytes: 128,
+      status: 'completed',
+      text: 'a'.repeat(128)
+    })
+  })
+
+  it('records killed status in the session index during process cleanup', async () => {
+    const cwd = process.cwd()
+    const home = mkdtempSync(join(tmpdir(), 'q-code-shell-cleanup-home-'))
+    process.env.Q_CODE_HOME = home
+    process.env.Q_CODE_SHELL_KILL_BG_ON_EXIT = 'true'
+    const started = expectEnvelope(
+      await bashTool.execute(
+        {
+          command: `node -e "setInterval(function(){}, 1000)"`,
+          background: true
+        },
+        { cwd, sessionId: 'cleanup-session' }
+      )
+    )
+    const jobId = (started.content as { jobId: string }).jobId
+
+    process.emit('beforeExit', 0)
+
+    const indexFile = join(home, 'shell-jobs', 'cleanup-session.index')
+    await vi.waitFor(() => {
+      const records = readFileSync(indexFile, 'utf-8')
+      expect(records).toContain(jobId)
+      expect(records).toContain('"status":"killed"')
+    }, { timeout: 3000 })
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    } catch {
+      // Windows may release killed process handles slightly after the assertion.
+    }
   })
 
   it('kills commands that start prompting for interactive input', async () => {

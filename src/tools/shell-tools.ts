@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  readSync,
   readFileSync,
   statSync,
   writeFileSync
@@ -23,6 +24,7 @@ const SUMMARY_HEAD_CHARS = 4000
 const SUMMARY_TAIL_CHARS = 4000
 const INTERACTIVE_GRACE_MS = 5000
 const DEFAULT_TAIL_MAX_BYTES = 64 * 1024
+const SHELL_COMPLETED_JOB_RETENTION = 100
 
 export interface ShellInvocation {
   command: string
@@ -56,6 +58,7 @@ interface ShellJob {
   signal?: NodeJS.Signals | null
   durationMs?: number
   bytes: number
+  sessionId?: string
   child?: ChildProcess
   outputFd?: number
 }
@@ -184,6 +187,7 @@ export const shellKillTool: ToolDefinition = {
     closeJobOutput(job)
     job.child = undefined
     appendJobIndex(job, context.sessionId)
+    pruneCompletedShellJobs()
     return okToolResult(formatJobStatus(job), { jobId })
   }
 }
@@ -411,6 +415,7 @@ function startBackgroundShellCommand(input: ShellToolInput, context: ToolExecuti
     startedAt,
     status: 'running',
     bytes: 0,
+    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
     child,
     outputFd
   }
@@ -424,6 +429,7 @@ function startBackgroundShellCommand(input: ShellToolInput, context: ToolExecuti
     closeJobOutput(job)
     appendFileSync(outputFile, `[spawn error] ${error.message}\n`, 'utf-8')
     appendJobIndex(job, context.sessionId)
+    pruneCompletedShellJobs()
   })
   child.on('close', (code, signal) => {
     if (job.status === 'killed') return
@@ -435,6 +441,7 @@ function startBackgroundShellCommand(input: ShellToolInput, context: ToolExecuti
     job.durationMs = Date.now() - Date.parse(startedAt)
     job.child = undefined
     appendJobIndex(job, context.sessionId)
+    pruneCompletedShellJobs()
   })
   child.unref()
   if (child.stdin) {
@@ -484,6 +491,8 @@ function prepareShellRun(
   }
   const cwd = resolveShellCwd(context.cwd, input.cwd)
   if (!cwd.ok) return { ok: false, error: cwd.error }
+  const cwdValidation = validateShellCwd(cwd.cwd)
+  if (!cwdValidation.ok) return { ok: false, error: cwdValidation.error }
   const timeoutMs = normalizeTimeoutMs(input.timeoutMs)
   const maxBufferBytes = normalizePositiveInt(input.maxBufferBytes, getDefaultMaxBufferBytes())
   return {
@@ -506,6 +515,28 @@ function resolveShellCwd(rootCwd: string, requested: string | undefined) {
       code: 'cwd_not_allowed',
       metadata: { cwd, root }
     })
+  }
+}
+
+function validateShellCwd(cwd: string) {
+  try {
+    const stat = statSync(cwd)
+    if (stat.isDirectory()) return { ok: true as const }
+    return {
+      ok: false as const,
+      error: errorToolResult(`cwd 不是目录: ${cwd}`, {
+        code: 'cwd_not_directory',
+        metadata: { cwd }
+      })
+    }
+  } catch {
+    return {
+      ok: false as const,
+      error: errorToolResult(`cwd 不存在: ${cwd}`, {
+        code: 'cwd_not_found',
+        metadata: { cwd }
+      })
+    }
   }
 }
 
@@ -667,7 +698,7 @@ function getQCodeRoot(): string {
   return process.env.Q_CODE_HOME?.trim() || join(homedir(), '.q-code')
 }
 
-function appendJobIndex(job: ShellJob, sessionId = 'default'): void {
+function appendJobIndex(job: ShellJob, sessionId = job.sessionId ?? 'default'): void {
   const file = join(getQCodeDir('shell-jobs'), `${sessionId}.index`)
   const { child: _child, outputFd: _outputFd, ...record } = job
   appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf-8')
@@ -681,6 +712,23 @@ function closeJobOutput(job: ShellJob): void {
     // best-effort cleanup
   }
   job.outputFd = undefined
+}
+
+function pruneCompletedShellJobs(): void {
+  const completed = [...shellJobs.values()].filter((job) => job.status !== 'running')
+  if (completed.length <= SHELL_COMPLETED_JOB_RETENTION) return
+
+  completed.sort((a, b) => shellJobCompletedAt(a) - shellJobCompletedAt(b))
+  const removeCount = completed.length - SHELL_COMPLETED_JOB_RETENTION
+  for (const job of completed.slice(0, removeCount)) {
+    closeJobOutput(job)
+    shellJobs.delete(job.jobId)
+  }
+}
+
+function shellJobCompletedAt(job: ShellJob): number {
+  const timestamp = Date.parse(job.finishedAt ?? job.startedAt)
+  return Number.isFinite(timestamp) ? timestamp : 0
 }
 
 function formatJobStatus(job: ShellJob): Record<string, unknown> {
@@ -702,24 +750,56 @@ function formatJobStatus(job: ShellJob): Record<string, unknown> {
 }
 
 function readJobTail(job: ShellJob, fromOffset: number | undefined, maxBytes: number | undefined) {
-  const offset = Math.max(0, Math.floor(fromOffset ?? 0))
-  const limit = Math.min(Math.max(1, Math.floor(maxBytes ?? DEFAULT_TAIL_MAX_BYTES)), 1024 * 1024)
+  const offset = normalizeByteOffset(fromOffset)
+  const limit = normalizeTailLimit(maxBytes)
   const totalBytes = currentJobBytes(job)
   if (!existsSync(job.outputFile)) {
     return { jobId: job.jobId, offset, nextOffset: offset, bytes: 0, totalBytes, eof: job.status !== 'running', text: '' }
   }
-  const data = readFileSync(job.outputFile)
-  const slice = data.subarray(offset, Math.min(offset + limit, data.length))
+  if (offset >= totalBytes) {
+    return {
+      jobId: job.jobId,
+      offset,
+      nextOffset: offset,
+      bytes: 0,
+      totalBytes,
+      eof: job.status !== 'running',
+      status: job.status,
+      text: ''
+    }
+  }
+
+  const length = Math.min(limit, totalBytes - offset)
+  const buffer = Buffer.allocUnsafe(length)
+  let bytesRead = 0
+  const fd = openSync(job.outputFile, 'r')
+  try {
+    bytesRead = readSync(fd, buffer, 0, length, offset)
+  } finally {
+    closeSync(fd)
+  }
+  const nextOffset = offset + bytesRead
   return {
     jobId: job.jobId,
     offset,
-    nextOffset: offset + slice.length,
-    bytes: slice.length,
-    totalBytes: data.length,
-    eof: offset + slice.length >= data.length && job.status !== 'running',
+    nextOffset,
+    bytes: bytesRead,
+    totalBytes,
+    eof: nextOffset >= totalBytes && job.status !== 'running',
     status: job.status,
-    text: slice.toString('utf-8')
+    text: buffer.subarray(0, bytesRead).toString('utf-8')
   }
+}
+
+function normalizeByteOffset(value: number | undefined): number {
+  const n = Number(value ?? 0)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+}
+
+function normalizeTailLimit(value: number | undefined): number {
+  const n = Number(value ?? DEFAULT_TAIL_MAX_BYTES)
+  const finite = Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_TAIL_MAX_BYTES
+  return Math.min(Math.max(1, finite), 1024 * 1024)
 }
 
 function currentJobBytes(job: ShellJob): number {
@@ -791,7 +871,9 @@ function registerShellProcessCleanup(): void {
       terminateProcessTree(job.pid)
       closeJobOutput(job)
       job.child = undefined
+      appendJobIndex(job)
     }
+    pruneCompletedShellJobs()
   }
   process.once('beforeExit', cleanup)
   process.once('SIGINT', cleanup)
