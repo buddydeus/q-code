@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   NdjsonAuditLogger,
   createHookDecisionPayload,
   createToolCallPayload,
   createUserPromptPayload,
   getAuditConfig,
-  resetAuditLoggerForTests
+  resetAuditLoggerForTests,
+  setCrashGuardOwnsSignalHandlers
 } from '../../src/observability/audit'
 import { tailAuditLogs, verifyAuditLogs } from '../../src/observability/audit-cli'
 import { setupTempHome, type TempHome } from '../_helpers/temp-home'
@@ -26,6 +27,9 @@ describe('NdjsonAuditLogger', () => {
     delete process.env.Q_CODE_AUDIT_MAX_FILE_BYTES
     delete process.env.Q_CODE_AUDIT_MAX_QUEUE_SIZE
     delete process.env.Q_CODE_AUDIT_PII
+    delete process.env.Q_CODE_CRASH_GUARD
+    setCrashGuardOwnsSignalHandlers(false)
+    vi.restoreAllMocks()
   })
 
   it('默认写入 UTC 日期切分的 NDJSON', async () => {
@@ -284,6 +288,33 @@ describe('NdjsonAuditLogger', () => {
       maxQueueSize: 10,
       piiMode: 'full'
     })
+  })
+
+  it('默认没有 crash guard 接管时，audit logger 注册信号 flush 兜底', () => {
+    home = setupTempHome('audit-process-handlers-')
+    const once = vi.spyOn(process, 'once').mockReturnValue(process)
+
+    new NdjsonAuditLogger({
+      auditDir: join(home.root, 'audit')
+    })
+
+    expect(once).toHaveBeenCalledWith('beforeExit', expect.any(Function))
+    expect(once).toHaveBeenCalledWith('SIGINT', expect.any(Function))
+    expect(once).toHaveBeenCalledWith('SIGTERM', expect.any(Function))
+  })
+
+  it('crash guard 显式接管后，audit logger 不再注册信号退出', () => {
+    home = setupTempHome('audit-process-signal-handlers-')
+    setCrashGuardOwnsSignalHandlers(true)
+    const once = vi.spyOn(process, 'once').mockReturnValue(process)
+
+    new NdjsonAuditLogger({
+      auditDir: join(home.root, 'audit')
+    })
+
+    expect(once).toHaveBeenCalledWith('beforeExit', expect.any(Function))
+    expect(once).not.toHaveBeenCalledWith('SIGINT', expect.any(Function))
+    expect(once).not.toHaveBeenCalledWith('SIGTERM', expect.any(Function))
   })
 
   it('audit CLI 入口会先加载 .env 中的审计目录配置', () => {

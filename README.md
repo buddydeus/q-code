@@ -109,6 +109,7 @@ cp .env.example .env
 | `Q_CODE_AUDIT_MAX_FILE_BYTES`  | ❌   | 单个审计文件最大字节数，默认 50MB，超出后追加序号轮转        |
 | `Q_CODE_AUDIT_MAX_QUEUE_SIZE`  | ❌   | 审计写入内存队列上限，默认 1000                              |
 | `Q_CODE_AUDIT_PII`             | ❌   | 默认不写 prompt/tool 原文；设为 `full` 才写入原文             |
+| `Q_CODE_CRASH_GUARD`           | ❌   | 崩溃保护开关，默认开启；设为 `false` 可关闭全局兜底 handler  |
 | `Q_CODE_SKILL_CHAR_BUDGET`     | ❌   | Skills discovery 注入字符预算，默认 8000                      |
 | `Q_CODE_TEAMS`                 | ❌   | 设为 1/true/yes/on 开启 Agent Teams（等价于 `--agent-teams`） |
 | `Q_CODE_INFRA_ENABLED`         | ❌   | 是否启用企业 AI 基建集成；默认 false，需显式设为 true         |
@@ -444,6 +445,14 @@ CLI 校验与查询：
 q-code audit verify --from 2026-05-25 --to 2026-05-25
 q-code audit tail --session <sessionId> --event tool.result --follow
 ```
+
+#### 崩溃保护
+
+q-code 默认启用崩溃保护。遇到未捕获异常、未处理 Promise rejection 或退出信号时，会尽量恢复终端状态、清理 MCP/后台 Agent 资源、写入审计错误事件，并在 `<Q_CODE_HOME>/crashes` 下生成 `crash-<sessionId>-<timestamp>.json`。
+
+崩溃报告包含 package version、Node/平台信息、sessionId、cwd、当前模型、模式、最后一次用户输入摘要、最后一次工具调用、后台 Agent/MCP 脱敏快照、错误堆栈和内存快照。若崩溃发生在 assistant 流式输出中，会向当前会话追加 `[crashed mid-stream]` 标记，方便 `q-code --continue` 恢复时识别上一轮未完成。
+
+可通过 `Q_CODE_CRASH_GUARD=false` 关闭该兜底 handler。关闭后未捕获异常会回到 Node 默认行为，不再生成 crash 报告。
 
 **预算状态分三级**：
 

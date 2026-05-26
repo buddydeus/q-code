@@ -181,3 +181,34 @@ export function describeTransport(config: ScopedMcpServerConfig): string {
   }
   return `stdio ${config.command} ${config.args.join(' ')} [${config.scope}]`.trim()
 }
+
+export function describeTransportForCrashReport(
+  config: ScopedMcpServerConfig
+): Record<string, unknown> {
+  if (config.type === 'http' || config.type === 'sse') {
+    return {
+      transportType: config.type,
+      scope: config.scope,
+      urlOrigin: redactUrlOrigin(config.url)
+    }
+  }
+
+  return {
+    transportType: 'stdio',
+    scope: config.scope,
+    command: commandName(config.command),
+    argCount: config.args.length
+  }
+}
+
+function redactUrlOrigin(value: string): string {
+  try {
+    return new URL(value).origin
+  } catch {
+    return '[invalid-url]'
+  }
+}
+
+function commandName(command: string): string {
+  return command.split(/[\\/]/).filter(Boolean).at(-1) ?? '[configured]'
+}

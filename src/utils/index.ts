@@ -27,3 +27,5 @@ export function normalizeBaseURL(rawBaseURL: string) {
 
   return url.toString().replace(/\/$/, '')
 }
+
+export { isFalseEnv } from './env'

@@ -87,6 +87,7 @@ import {
   bootstrapMcp,
   closeMcpSubsystem,
   describeTransport,
+  describeTransportForCrashReport,
   reconnectMcpServer,
   summarizeMcpRegistry
 } from './mcp/bootstrap'
@@ -162,6 +163,7 @@ import {
   isDebugMode
 } from './runtime/cli-info'
 import { runCliUpdate } from './runtime/update'
+import { installCrashGuard, sha256ForCrashGuard } from './runtime/crash-guard'
 import { runAuditCli } from './observability/audit-cli'
 import {
   createMessageSummaryPayload,
@@ -212,6 +214,24 @@ const compactTriggerTokens = Math.floor(contextLimitTokens * compactTriggerRatio
 const registry = new ToolRegistry()
 registry.register(...allTools)
 registry.register(createToolSearchTool(registry))
+
+function findLastUserPromptDigest(messages: ModelMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i]
+    if (message.role !== 'user') continue
+    return sha256ForCrashGuard(formatDigestContent(message.content))
+  }
+  return undefined
+}
+
+function formatDigestContent(content: ModelMessage['content']): string {
+  if (typeof content === 'string') return content
+  try {
+    return JSON.stringify(content)
+  } catch {
+    return String(content)
+  }
+}
 
 async function connectMCP(options: { quiet?: boolean; cwd?: string } = {}) {
   const quiet = options.quiet === true
@@ -271,6 +291,9 @@ async function main() {
 
   let terminal: TerminalRuntime | undefined
   let activeTurnAbortController: AbortController | undefined
+  let activeTurnInFlight = false
+  let lastUserPromptDigest: string | undefined
+  let lastToolCall: { name: string; toolCallId?: string } | undefined
   const pendingTerminalEvents: TerminalEvent[] = []
 
   const emitTerminal = (event: TerminalEvent): void => {
@@ -342,6 +365,69 @@ async function main() {
     : new SessionStore({ continueLatest: isContinue, sessionId: requestedSessionId })
   const sessionId = store?.sessionId ?? requestedSessionId ?? 'dump'
   const runtimeCwd = store?.cwd ?? process.cwd()
+  if (store && isContinue && store.exists()) {
+    lastUserPromptDigest = findLastUserPromptDigest(store.load())
+  }
+  const planOptions: PlanFileOptions = {
+    cwd: runtimeCwd,
+    sessionId
+  }
+  const planFilePath = getPlanFilePath(planOptions)
+  let agentMode: ToolVisibilityMode = startInPlanMode ? 'plan' : 'normal'
+  let taskMode: TaskMode = 'task'
+  let needsPlanModeExitAttachment = false
+  let pendingPlanApproval = false
+  let pendingPlanSummary = ''
+  let canEmitSessionInfo = false
+  let statusDetailsVisible = false
+  let defaultModelName: string | undefined
+  let sessionModelOverride: string | undefined
+  const currentModelName = (): string => {
+    if (!defaultModelName) throw new Error('Model has not been initialized')
+    return sessionModelOverride ?? defaultModelName
+  }
+  const currentModelNameForSnapshot = (): string | undefined =>
+    sessionModelOverride ?? defaultModelName
+
+  if (store) {
+    installCrashGuard({
+      sessionStore: store,
+      getTerminal: () => terminal,
+      version: packageVersion,
+      cleanupHandlers: [
+        () => closeMcpSubsystem(),
+        () => {
+          for (const agent of getAllAsyncAgents()) {
+            if (agent.status === 'running') killAsyncAgent(agent.agentId)
+          }
+        }
+      ],
+      getSnapshot: () => ({
+        sessionId,
+        cwd: store.cwd,
+        modelName: currentModelNameForSnapshot(),
+        agentMode,
+        taskMode,
+        lastUserPromptDigest,
+        ...(lastToolCall ? { lastToolCall } : {}),
+        activeTurnInFlight,
+        asyncAgents: getAllAsyncAgents().map((agent) => ({
+          agentId: agent.agentId,
+          agentType: agent.agentType,
+          status: agent.status,
+          isolated: agent.isolated,
+          ...(agent.worktreePath ? { worktreePath: agent.worktreePath } : {}),
+          ...(agent.worktreeBranch ? { worktreeBranch: agent.worktreeBranch } : {})
+        })),
+        mcpServers: getMcpRegistry().map((entry) => ({
+          name: entry.connection.name,
+          status: entry.connection.type,
+          connected: entry.connection.type === 'connected',
+          ...describeTransportForCrashReport(entry.connection.config)
+        }))
+      })
+    })
+  }
   let lastInfraSync: InfraSyncResult | undefined
   if (!dumpSystemPrompt) {
     lastInfraSync = await syncInfraConfig(runtimeCwd).catch((error) => ({
@@ -424,19 +510,6 @@ async function main() {
       }
     }
   }
-  const planOptions: PlanFileOptions = {
-    cwd: store?.cwd ?? process.cwd(),
-    sessionId
-  }
-  const planFilePath = getPlanFilePath(planOptions)
-  let agentMode: ToolVisibilityMode = startInPlanMode ? 'plan' : 'normal'
-  let taskMode: TaskMode = 'task'
-  let needsPlanModeExitAttachment = false
-  let pendingPlanApproval = false
-  let pendingPlanSummary = ''
-  let canEmitSessionInfo = false
-  let statusDetailsVisible = false
-
   function setAgentMode(mode: ToolVisibilityMode): void {
     const previous = agentMode
     agentMode = mode
@@ -518,7 +591,7 @@ async function main() {
   registry.register(
     createAgentTool({
       createModel,
-      getDefaultModelName: () => sessionModelOverride ?? defaultModelName,
+      getDefaultModelName: currentModelName,
       getAvailableTools: () => registry.getVisibleTools(),
       getRuntimeContext: () => runtimeContext,
       getAgentMdContext: () => agentMdContext,
@@ -606,8 +679,7 @@ async function main() {
   if (!store) throw new Error('Session store was not initialized')
   const activeStore = store
   registry.setCwd(activeStore.cwd)
-  const defaultModelName = getRequiredEnv('OPENAI_MODEL')
-  let sessionModelOverride: string | undefined
+  defaultModelName = getRequiredEnv('OPENAI_MODEL')
   let model = createModel(defaultModelName)
   const initialSessionSummary = activeStore.getSummary()
   let latestTotalUsage: TokenUsage | undefined = initialSessionSummary.totalUsage
@@ -625,7 +697,7 @@ async function main() {
       type: 'session_info',
       sessionId,
       cwd: activeStore.cwd,
-      modelName: sessionModelOverride ?? defaultModelName,
+      modelName: currentModelName(),
       agentMode,
       taskMode,
       cacheMode: usageTracker.getCacheMode()
@@ -992,6 +1064,7 @@ async function main() {
 
     messages.push(...userMessages)
     activeStore.appendAll(userMessages)
+    lastUserPromptDigest = sha256ForCrashGuard(userQuery)
     const turnSystem = await buildSystemPrompt(userQuery)
     cachePrefixTracker.observe(
       createCachePrefixSnapshot({
@@ -1011,6 +1084,7 @@ async function main() {
     setStatus('Thinking', 'thinking')
     const turnAbortController = new AbortController()
     activeTurnAbortController = turnAbortController
+    activeTurnInFlight = true
 
     try {
       const loopResult = await agentLoop(model, registry, messages, turnSystem, {
@@ -1019,7 +1093,7 @@ async function main() {
         escalatedMaxOutputTokens,
         maxSteps,
         quiet: useTui,
-        modelName: sessionModelOverride ?? defaultModelName,
+        modelName: currentModelName(),
         abortSignal: turnAbortController.signal,
         sessionId,
         hooks,
@@ -1064,6 +1138,10 @@ async function main() {
         onToolEvent: (event) => {
           activeStore.appendToolEvent({ type: 'tool_event', ...event })
           if (event.phase === 'start') {
+            lastToolCall = {
+              name: event.name,
+              ...(event.toolCallId ? { toolCallId: event.toolCallId } : {})
+            }
             const tool = registry.get(event.name)
             emitTerminal({
               type: 'tool_call',
@@ -1126,6 +1204,7 @@ async function main() {
       if (pendingPlanApproval) await printPlanApprovalHint()
       setStatus('Ready')
     } finally {
+      activeTurnInFlight = false
       if (activeTurnAbortController === turnAbortController) {
         activeTurnAbortController = undefined
       }
@@ -1910,7 +1989,7 @@ async function main() {
   async function handleContextCommand(): Promise<void> {
     const systemPrompt = await buildSystemPrompt()
     const report = buildContextReport(messages, {
-      modelName: sessionModelOverride ?? defaultModelName,
+      modelName: currentModelName(),
       systemPrompt,
       activeToolSchemaTokens: registry.countTokenEstimate().active,
       contextLimitTokens,

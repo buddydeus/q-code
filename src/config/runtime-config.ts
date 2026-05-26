@@ -51,7 +51,8 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     audit_retention_days: 'Q_CODE_AUDIT_RETENTION_DAYS',
     audit_max_file_bytes: 'Q_CODE_AUDIT_MAX_FILE_BYTES',
     audit_max_queue_size: 'Q_CODE_AUDIT_MAX_QUEUE_SIZE',
-    audit_pii: 'Q_CODE_AUDIT_PII'
+    audit_pii: 'Q_CODE_AUDIT_PII',
+    crash_guard: 'Q_CODE_CRASH_GUARD'
   },
   audit: {
     enabled: 'Q_CODE_AUDIT_ENABLED',
