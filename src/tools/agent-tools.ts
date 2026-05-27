@@ -34,7 +34,6 @@ export interface AgentToolController {
   getAvailableTools: () => ToolDefinition[]
   getRuntimeContext?: () => string | undefined
   getAgentMdContext?: () => string | undefined
-  getTokenBudget?: () => number
   getMaxOutputTokens?: () => number
   getEscalatedMaxOutputTokens?: () => number
   getSessionId?: () => string
@@ -218,9 +217,9 @@ export function createAgentTool(
             prompt: input.prompt,
             availableTools,
             model: controller.createModel(modelName),
+            modelName,
             runtimeContext: controller.getRuntimeContext?.(),
             agentMdContext: controller.getAgentMdContext?.(),
-            tokenBudget: controller.getTokenBudget?.(),
             maxOutputTokens: controller.getMaxOutputTokens?.(),
             escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
             sessionId,
@@ -283,9 +282,9 @@ export function createAgentTool(
           prompt: input.prompt,
           availableTools,
           model: controller.createModel(modelName),
+          modelName,
           runtimeContext: controller.getRuntimeContext?.(),
           agentMdContext: controller.getAgentMdContext?.(),
-          tokenBudget: controller.getTokenBudget?.(),
           maxOutputTokens: controller.getMaxOutputTokens?.(),
           escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
           sessionId,

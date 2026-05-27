@@ -37,9 +37,7 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     api_key: 'SUMMARY_API_KEY'
   },
   runtime: {
-    token_budget: 'TOKEN_BUDGET',
     context_limit_tokens: 'CONTEXT_LIMIT_TOKENS',
-    max_steps: 'MAX_STEPS',
     compact_trigger_ratio: 'COMPACT_TRIGGER_RATIO',
     warning_trigger_ratio: 'WARNING_TRIGGER_RATIO',
     blocking_trigger_ratio: 'BLOCKING_TRIGGER_RATIO',
@@ -67,6 +65,24 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     shell_allow_abs_cwd: 'Q_CODE_SHELL_ALLOW_ABS_CWD',
     shell_kill_bg_on_exit: 'Q_CODE_SHELL_KILL_BG_ON_EXIT',
     theme: 'Q_CODE_THEME'
+  },
+  langfuse: {
+    enabled: 'Q_CODE_LANGFUSE_ENABLED',
+    public_key: 'LANGFUSE_PUBLIC_KEY',
+    secret_key: 'LANGFUSE_SECRET_KEY',
+    base_url: 'LANGFUSE_BASE_URL',
+    record_io: 'Q_CODE_LANGFUSE_RECORD_IO',
+    sample_rate: 'Q_CODE_LANGFUSE_SAMPLE_RATE',
+    environment: 'Q_CODE_LANGFUSE_ENVIRONMENT',
+    release: 'Q_CODE_LANGFUSE_RELEASE',
+    flush_at: 'Q_CODE_LANGFUSE_FLUSH_AT',
+    flush_interval_seconds: 'Q_CODE_LANGFUSE_FLUSH_INTERVAL_SECONDS',
+    timeout_seconds: 'Q_CODE_LANGFUSE_TIMEOUT_SECONDS'
+  },
+  eval: {
+    judge_base_url: 'Q_CODE_EVAL_JUDGE_BASE_URL',
+    judge_api_key: 'Q_CODE_EVAL_JUDGE_API_KEY',
+    judge_model: 'Q_CODE_EVAL_JUDGE_MODEL'
   },
   shell: {
     timeout_ms: 'Q_CODE_SHELL_TIMEOUT_MS',

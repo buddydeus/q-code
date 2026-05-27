@@ -27,9 +27,9 @@ export interface RunAsyncAgentLifecycleParams {
   prompt: string
   availableTools: ToolDefinition[]
   model: any
+  modelName?: string
   runtimeContext?: string
   agentMdContext?: string
-  tokenBudget?: number
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
   sessionId?: string
@@ -63,9 +63,9 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
       prompt: params.prompt,
       availableTools: params.availableTools,
       model: params.model,
+      modelName: params.modelName,
       runtimeContext: params.runtimeContext,
       agentMdContext: params.agentMdContext,
-      tokenBudget: params.tokenBudget,
       maxOutputTokens: params.maxOutputTokens,
       escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
       sessionId: params.sessionId,
