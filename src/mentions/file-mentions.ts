@@ -39,6 +39,16 @@ const FALLBACK_SKIP_DIRS = new Set([
   '.q-code',
   '.sessions'
 ])
+const GIT_LOCAL_ENV_KEYS = [
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_INTERNAL_SUPER_PREFIX',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PREFIX',
+  'GIT_QUARANTINE_PATH',
+  'GIT_WORK_TREE'
+]
 
 /** 文件索引的构建来源。 */
 export type FileMentionIndexSource = 'git' | 'walk' | 'empty'
@@ -581,6 +591,7 @@ function readGitFileIndex(cwd: string, maxFiles: number): Promise<FileMentionInd
   return new Promise((resolveIndex) => {
     const child = spawn('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
       cwd,
+      env: createGitFileIndexEnv(),
       stdio: ['ignore', 'pipe', 'ignore']
     })
     const files: string[] = []
@@ -630,6 +641,12 @@ function readGitFileIndex(cwd: string, maxFiles: number): Promise<FileMentionInd
       })
     })
   })
+}
+
+function createGitFileIndexEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const key of GIT_LOCAL_ENV_KEYS) delete env[key]
+  return env
 }
 
 function walkFileIndex(cwd: string, maxFiles: number): FileMentionIndex {

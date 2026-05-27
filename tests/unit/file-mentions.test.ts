@@ -15,6 +15,16 @@ import {
 } from '../../src/mentions'
 
 const tempDirs: string[] = []
+const GIT_LOCAL_ENV_KEYS = [
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_INTERNAL_SUPER_PREFIX',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_PREFIX',
+  'GIT_QUARANTINE_PATH',
+  'GIT_WORK_TREE'
+]
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -79,7 +89,7 @@ describe('file mention fuzzy index', () => {
 
   it('streams git indexes and marks truncated repositories', async () => {
     const cwd = tmp()
-    execFileSync('git', ['init'], { cwd, stdio: 'ignore' })
+    execFileSync('git', ['init'], { cwd, env: createIsolatedGitEnv(), stdio: 'ignore' })
     for (let index = 0; index < 5; index++) {
       writeFileSync(join(cwd, `file-${index}.ts`), String(index), 'utf-8')
     }
@@ -232,4 +242,10 @@ function tmp(): string {
   const dir = mkdtempSync(join(tmpdir(), 'q-code-file-mentions-'))
   tempDirs.push(dir)
   return dir
+}
+
+function createIsolatedGitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const key of GIT_LOCAL_ENV_KEYS) delete env[key]
+  return env
 }
