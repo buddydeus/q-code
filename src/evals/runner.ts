@@ -18,7 +18,7 @@ import { loadEvalCases } from './loader'
 import { exportEvalRunToLangfuse } from './langfuse-export'
 import { createEvalMockModel } from './mock-model'
 import { createEvalMockTools } from './mock-tools'
-import { createEvalChatModel } from './model'
+import { createEvalChatModel, createEvalReasoningProviderOptions } from './model'
 import { ensureEvalRunDirs, writeEvalArtifact, writeTraceFile } from './report'
 import { scoreEvalCase } from './scorers'
 import { EvalTraceRecorder } from './trace-recorder'
@@ -235,12 +235,13 @@ async function runRealAgentCase(args: {
   const restoreEnv = applyTemporaryEnv(real.env ?? {})
 
   try {
-    const { model, modelName } = createEvalChatModel(real)
+    const { model, modelName, providerKind } = createEvalChatModel(real)
     const result = await agentLoop(model, registry, messages, args.caseDef.system ?? '', {
       quiet: true,
       modelName,
       maxSteps: real.maxSteps ?? args.caseDef.run?.maxSteps ?? 16,
       ...(real.maxOutputTokens !== undefined ? { maxOutputTokens: real.maxOutputTokens } : {}),
+      providerOptions: createEvalReasoningProviderOptions(providerKind, modelName),
       abortSignal: abortController.signal,
       telemetry: ({ step }) => {
         recorder.onModelStart(step)

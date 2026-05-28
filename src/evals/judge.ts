@@ -5,7 +5,7 @@
  * 才会调用真实模型，避免 deterministic CI 产生额外成本和非确定性。
  */
 import { generateText } from 'ai'
-import { createEvalJudgeModel, ensureJudgeEnvFallbacks } from './model'
+import { createEvalJudgeModel, createEvalReasoningProviderOptions, ensureJudgeEnvFallbacks } from './model'
 import type { EvalCaseExecution, EvalCaseResult, EvalCheckResult, EvalTraceEvent } from './types'
 
 /** judge 模型返回的结构化分数。 */
@@ -29,12 +29,14 @@ export async function applyJudgeScorer(
   let verdict: EvalJudgeVerdict
   try {
     ensureJudgeEnvFallbacks()
-    const { model, modelName } = createEvalJudgeModel(expectation)
+    const { model, modelName, providerKind } = createEvalJudgeModel(expectation)
+    const providerOptions = createEvalReasoningProviderOptions(providerKind, modelName)
     const response = await generateText({
       model,
       system: JUDGE_SYSTEM_PROMPT,
       prompt: createJudgePrompt(execution, result),
-      maxOutputTokens: expectation.maxOutputTokens ?? 800
+      maxOutputTokens: expectation.maxOutputTokens ?? 800,
+      ...(providerOptions ? { providerOptions } : {})
     })
     verdict = parseJudgeResponse(response.text)
     const passed = verdict.passed ?? verdict.score >= threshold

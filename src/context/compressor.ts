@@ -2,6 +2,7 @@
  * 上下文压缩：microcompact 清理旧工具结果、LLM 摘要压缩长对话，并保留 tool-call 配对安全边界。
  */
 import { generateText, type ModelMessage } from 'ai'
+import type { ProviderOptions } from '../runtime/reasoning-config'
 import { isOffloadMarkerText } from './offload'
 import { estimateMessagesTokens } from './token-budget'
 
@@ -105,6 +106,7 @@ export async function summarize(
     keepRecentMessages?: number
     maxOutputTokens?: number
     focus?: string
+    providerOptions?: ProviderOptions
   } = {}
 ): Promise<CompactionResult> {
   const keepRecentMessages = options.keepRecentMessages ?? KEEP_RECENT_MESSAGES
@@ -137,7 +139,8 @@ export async function summarize(
       model,
       system: COMPRESS_PROMPT,
       prompt: focusedPrompt,
-      maxOutputTokens: options.maxOutputTokens
+      maxOutputTokens: options.maxOutputTokens,
+      ...(options.providerOptions ? { providerOptions: options.providerOptions } : {})
     })
 
     const summaryMessage: ModelMessage = {

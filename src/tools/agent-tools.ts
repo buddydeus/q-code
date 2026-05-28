@@ -26,6 +26,7 @@ import { isAgentTeamsEnabled } from '../utils/agent-teams-enabled'
 import type { HookRunner } from '../hooks'
 import type { TeammateIdentity, ToolDefinition, ToolExecutionContext } from './registry'
 import { createMessageSummaryPayload, getAuditLogger } from '../observability/audit'
+import type { ProviderOptions } from '../runtime/reasoning-config'
 
 /** Agent 工具依赖的模型、工具集与会话运行时注入接口。 */
 export interface AgentToolController {
@@ -36,6 +37,7 @@ export interface AgentToolController {
   getAgentMdContext?: () => string | undefined
   getMaxOutputTokens?: () => number
   getEscalatedMaxOutputTokens?: () => number
+  getProviderOptions?: (modelName: string) => ProviderOptions | undefined
   getModelWaitHeartbeatMs?: () => number | undefined
   getModelSlowRequestWarnMs?: () => number | undefined
   getModelStalledRequestWarnMs?: () => number | undefined
@@ -227,6 +229,7 @@ export function createAgentTool(
             agentMdContext: controller.getAgentMdContext?.(),
             maxOutputTokens: controller.getMaxOutputTokens?.(),
             escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
+            providerOptions: controller.getProviderOptions?.(modelName),
             modelWaitHeartbeatMs: controller.getModelWaitHeartbeatMs?.(),
             modelSlowRequestWarnMs: controller.getModelSlowRequestWarnMs?.(),
             modelStalledRequestWarnMs: controller.getModelStalledRequestWarnMs?.(),
@@ -297,6 +300,7 @@ export function createAgentTool(
           agentMdContext: controller.getAgentMdContext?.(),
           maxOutputTokens: controller.getMaxOutputTokens?.(),
           escalatedMaxOutputTokens: controller.getEscalatedMaxOutputTokens?.(),
+          providerOptions: controller.getProviderOptions?.(modelName),
           modelWaitHeartbeatMs: controller.getModelWaitHeartbeatMs?.(),
           modelSlowRequestWarnMs: controller.getModelSlowRequestWarnMs?.(),
           modelStalledRequestWarnMs: controller.getModelStalledRequestWarnMs?.(),

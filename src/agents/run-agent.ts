@@ -6,6 +6,7 @@
  */
 import type { ModelMessage } from 'ai'
 import { agentLoop } from '../agent/loop'
+import type { ProviderOptions } from '../runtime/reasoning-config'
 import {
   coreRules,
   deferredTools,
@@ -44,6 +45,7 @@ export interface RunChildAgentParams {
   agentMdContext?: string
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
+  providerOptions?: ProviderOptions
   /** 模型首个可见事件等待提示阈值，默认由 agentLoop 决定。 */
   modelWaitHeartbeatMs?: number
   modelSlowRequestWarnMs?: number
@@ -159,6 +161,7 @@ export async function runChildAgent(params: RunChildAgentParams): Promise<AgentR
         agentLoop(params.model, registry, messages, system, {
           maxOutputTokens: params.maxOutputTokens,
           escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
+          providerOptions: params.providerOptions,
           modelWaitHeartbeatMs: params.modelWaitHeartbeatMs,
           modelSlowRequestWarnMs: params.modelSlowRequestWarnMs,
           modelStalledRequestWarnMs: params.modelStalledRequestWarnMs,

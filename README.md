@@ -103,6 +103,9 @@ cp .env.example .env
 | `OPENAI_BASE_URL`              | ❌   | OpenAI 兼容 API 地址，默认 `https://api.openai.com/v1`         |
 | `OPENAI_API_KEY`               | ✅   | API Key                                                       |
 | `OPENAI_MODEL`                 | ❌   | 主模型名称，默认 `gpt-5.4`                                    |
+| `Q_CODE_MODEL_PROVIDER`        | ❌   | 模型 provider 适配：`auto` / `openai` / `deepseek-compatible`，默认 `auto`。推荐只使用规范值 `deepseek-compatible`；中转服务使用别名模型时可显式设置 |
+| `Q_CODE_THINKING_TYPE`         | ❌   | 通用 thinking 开关：`enabled` / `disabled` / `adaptive`。OpenAI 官方 provider 会把 `disabled` 映射为 `reasoningEffort=none`；DeepSeek V4 会映射为 `thinking.type` |
+| `Q_CODE_REASONING_EFFORT`      | ❌   | 通用 reasoning 强度：`none` / `minimal` / `low` / `medium` / `high` / `xhigh`。DeepSeek V4 中 `none` 会关闭 thinking，`xhigh` 会映射为 `max`，其余可用档兼容到 `high` |
 | `SUMMARY_BASE_URL`             | ❌   | 摘要模型 API 地址，默认复用 `OPENAI_BASE_URL`                  |
 | `SUMMARY_API_KEY`              | ❌   | 摘要模型 API Key，默认复用 `OPENAI_API_KEY`                    |
 | `SUMMARY_MODEL`                | ❌   | 摘要模型名称，默认复用 `OPENAI_MODEL`                          |
@@ -225,7 +228,7 @@ pnpm run continue       # 恢复上次会话
 路径含空格 @"My Project/notes.md"
 ```
 
-默认只允许引用当前工作目录内的文件，并会校验 symlink 指向的真实路径；绝对路径如 `@/etc/passwd` 会被阻止，确需引用绝对路径时设置 `Q_CODE_MENTION_ALLOW_ABS=true`。单个引用最多注入 50KB，单轮全部引用合计最多 200KB，超出时会截断或明确提示丢弃。文件候选优先使用 git 索引，非 git 目录会回退递归扫描；索引会缓存到 `<cwd>/.q-code/file-mention-index.json`，下次启动先用缓存并在后台刷新。TUI 会监听文件变更并 debounce 刷新候选；如果 watcher 不可用，会显示简短提示并降级为定时刷新。刷新失败时继续使用旧索引；超过 20000 个文件时候选会裁剪并在 TUI 中提示。fallback walk 默认跳过 `.q-code`、`.sessions` 等本地目录，可用 `Q_CODE_FILE_INDEX_IGNORE=build,out` 追加忽略目录。
+默认只允许引用当前工作目录内的文件，并会校验 symlink 指向的真实路径；绝对路径如 `@/etc/passwd` 会被阻止，确需引用绝对路径时设置 `Q_CODE_MENTION_ALLOW_ABS=true`。单个引用最多注入 50KB，单轮全部引用合计最多 200KB，超出时会截断或明确提示丢弃。文件工具的读类入口（`read_file` / `list_directory` / `glob` / `grep`）除当前目录外，还可只读访问用户级 q-code 信任目录：`~/.q-code`、`~/.agents/skills`、`~/.agents/agents`；写入和编辑仍限制在当前工作目录内。文件候选优先使用 git 索引，非 git 目录会回退递归扫描；索引会缓存到 `<cwd>/.q-code/file-mention-index.json`，下次启动先用缓存并在后台刷新。TUI 会监听文件变更并 debounce 刷新候选；如果 watcher 不可用，会显示简短提示并降级为定时刷新。刷新失败时继续使用旧索引；超过 20000 个文件时候选会裁剪并在 TUI 中提示。fallback walk 默认跳过 `.q-code`、`.sessions` 等本地目录，可用 `Q_CODE_FILE_INDEX_IGNORE=build,out` 追加忽略目录。
 
 ### npm 发布
 
@@ -486,6 +489,8 @@ Offloading 是无损的：摘要模型只看到短 marker 和预览，后续 Age
 | `/status [on|off|toggle]`    | 打开或关闭 TUI 状态详情，默认隐藏 model/cache/context/usage 摘要     |
 
 `/usage` 的成本估算基于内置模型价格表；未知模型仍会统计 token/cache，但成本项会标注不可用。`/cache off` 不能关闭 OpenAI、DeepSeek 等供应商侧的隐式 prompt cache，它只控制 q-code 自身未来可启用的显式 cache hint 策略。
+
+`Q_CODE_THINKING_TYPE` 与 `Q_CODE_REASONING_EFFORT` 是通用 reasoning 配置，会应用到主 Agent、SubAgent、摘要压缩、real-agent eval 与 LLM judge。OpenAI 官方 provider 通过 `providerOptions.openai.reasoningEffort` 接收强度；`Q_CODE_THINKING_TYPE=disabled` 仅会在明确的 OpenAI reasoning 模型上映射为 `reasoningEffort=none`，避免普通兼容模型因未知参数失败。默认 `Q_CODE_MODEL_PROVIDER=auto` 会在 `OPENAI_BASE_URL` 或 `OPENAI_MODEL` 包含 `deepseek` 时改用官方 `@ai-sdk/openai-compatible` provider；如果中转服务隐藏了 DeepSeek URL/模型名，可显式设置 `Q_CODE_MODEL_PROVIDER=deepseek-compatible`（`deepseek` / `openai-compatible-deepseek` 仅作为兼容别名保留）。DeepSeek V4 thinking/tool-call 兼容层会把响应里的 `reasoning_content` 映射为 AI SDK reasoning part 保留在 assistant 消息历史中，并在带工具调用的后续请求里原样回填到 OpenAI-compatible API 的 `reasoning_content` 字段；`deepseek-v4-pro` 默认显式发送 `thinking.type=enabled` 与 `reasoning_effort=high`，`Q_CODE_REASONING_EFFORT=none` 会关闭 thinking，`xhigh` 会映射为 DeepSeek 的 `max`。V4 Pro thinking + tools 时，默认 `tool_choice=auto` 会被兼容层移除；显式指定 `required` 或具体函数会报清晰错误，避免静默吞掉调用意图。这类 reasoning 不会作为普通 assistant 文本流输出到 TUI。
 
 #### 审计日志
 

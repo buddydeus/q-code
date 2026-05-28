@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { editFileTool, listDirectoryTool, readFileTool, writeFileTool } from '../../src/tools/file-tools'
 
 describe('read_file tool', () => {
@@ -47,6 +48,53 @@ describe('read_file tool', () => {
     expect(toolOutputText(write)).toContain('路径越界')
     expect(toolOutputText(list)).toContain('路径越界')
     expect(toolOutputText(edit)).toContain('路径越界')
+  })
+
+  it('ignores removed Q_CODE_ALLOW_OUTSIDE_CWD escape hatch for arbitrary outside paths', async () => {
+    const cwd = tmp()
+    const outside = join(tmp(), 'secret.txt')
+    writeFileSync(outside, 'secret', 'utf-8')
+    process.env.Q_CODE_ALLOW_OUTSIDE_CWD = '1'
+
+    try {
+      const read = await readFileTool.execute({ path: outside }, { cwd })
+      expect(toolOutputText(read)).toContain('路径越界')
+    } finally {
+      delete process.env.Q_CODE_ALLOW_OUTSIDE_CWD
+    }
+  })
+
+  it('allows read-only access to user-level skills while blocking writes', async () => {
+    const cwd = tmp()
+    const skillDir = join(homedir(), '.agents', 'skills', 'q-code-file-tools-test')
+    const skillFile = join(skillDir, 'SKILL.md')
+    tmpDirs.push(skillDir)
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(skillFile, '# Test Skill\n', 'utf-8')
+
+    const read = await readFileTool.execute({ path: skillFile }, { cwd })
+    const write = await writeFileTool.execute({ path: skillFile, content: 'changed' }, { cwd })
+    const edit = await editFileTool.execute(
+      { path: skillFile, old_string: 'Test', new_string: 'Changed' },
+      { cwd }
+    )
+
+    expect(String(read)).toContain('# Test Skill')
+    expect(toolOutputText(write)).toContain('路径越界')
+    expect(toolOutputText(edit)).toContain('路径越界')
+  })
+
+  it('does not allow user-level codex skills', async () => {
+    const cwd = tmp()
+    const skillDir = join(homedir(), '.codex', 'skills', 'q-code-file-tools-test')
+    const skillFile = join(skillDir, 'SKILL.md')
+    tmpDirs.push(skillDir)
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(skillFile, '# Codex Skill\n', 'utf-8')
+
+    const read = await readFileTool.execute({ path: skillFile }, { cwd })
+
+    expect(toolOutputText(read)).toContain('路径越界')
   })
 
   it('write_file uses atomic text writes without leaving temp files', async () => {

@@ -19,6 +19,7 @@ import type { AgentDefinition } from './types'
 import type { TeammateIdentity, ToolDefinition } from '../tools/registry'
 import type { HookRunner } from '../hooks'
 import { getAuditLogger } from '../observability/audit'
+import type { ProviderOptions } from '../runtime/reasoning-config'
 
 /** `runAsyncAgentLifecycle` 的输入（由 `Agent` 工具在后台分支构造）。 */
 export interface RunAsyncAgentLifecycleParams {
@@ -32,6 +33,7 @@ export interface RunAsyncAgentLifecycleParams {
   agentMdContext?: string
   maxOutputTokens?: number
   escalatedMaxOutputTokens?: number
+  providerOptions?: ProviderOptions
   modelWaitHeartbeatMs?: number
   modelSlowRequestWarnMs?: number
   modelStalledRequestWarnMs?: number
@@ -73,6 +75,7 @@ export async function runAsyncAgentLifecycle(params: RunAsyncAgentLifecycleParam
       agentMdContext: params.agentMdContext,
       maxOutputTokens: params.maxOutputTokens,
       escalatedMaxOutputTokens: params.escalatedMaxOutputTokens,
+      providerOptions: params.providerOptions,
       modelWaitHeartbeatMs: params.modelWaitHeartbeatMs,
       modelSlowRequestWarnMs: params.modelSlowRequestWarnMs,
       modelStalledRequestWarnMs: params.modelStalledRequestWarnMs,

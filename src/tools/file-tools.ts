@@ -83,7 +83,7 @@ export const readFileTool: ToolDefinition = {
 }
 
 async function readFileRange(input: ReadFileInput, context: ToolExecutionContext): Promise<string> {
-  const resolved = resolveToolPath(context.cwd, input.path)
+  const resolved = resolveToolPath(context.cwd, input.path, { access: 'read' })
   if (!existsSync(resolved)) return `文件不存在: ${input.path}`
 
   const stat = statSync(resolved)
@@ -391,7 +391,7 @@ export const listDirectoryTool: ToolDefinition = {
   jitHint: '用于先看目录轮廓',
   execute: async ({ path = '.' }: { path?: string }, context: ToolExecutionContext) => {
     try {
-      const resolved = resolveToolPath(context.cwd, path)
+      const resolved = resolveToolPath(context.cwd, path, { access: 'read' })
       return readdirSync(resolved)
         .map((name) => {
           const stat = statSync(join(resolved, name))

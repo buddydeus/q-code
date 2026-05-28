@@ -95,6 +95,89 @@ describe('agentLoop 集成（mock model + mock tools）', () => {
     expect(text.join('')).toContain('代码结构分析完成')
   })
 
+  it('DeepSeek thinking reasoning 会在工具调用后回传给下一次模型请求', async () => {
+    const probe = makeMockTool('probe', () => '工具结果')
+    const registry = makeRegistry(probe)
+    let callCount = 0
+    const model = new MockLanguageModelV3({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async () => {
+        callCount++
+        if (callCount === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'stream-start', warnings: [] },
+                { type: 'response-metadata', id: 'mock-1', modelId: 'mock-model' },
+                { type: 'reasoning-start', id: 'reasoning-1' },
+                { type: 'reasoning-delta', id: 'reasoning-1', delta: '先分析，再调用工具。' },
+                { type: 'reasoning-end', id: 'reasoning-1' },
+                { type: 'tool-input-start', id: 'call-probe', toolName: 'probe' },
+                { type: 'tool-input-delta', id: 'call-probe', delta: '{}' },
+                { type: 'tool-input-end', id: 'call-probe' },
+                { type: 'tool-call', toolCallId: 'call-probe', toolName: 'probe', input: '{}' },
+                {
+                  type: 'finish',
+                  finishReason: 'tool-calls',
+                  usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+                }
+              ] as any[]
+            }),
+            request: { body: '' },
+            response: { headers: {} }
+          }
+        }
+
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'response-metadata', id: 'mock-2', modelId: 'mock-model' },
+              { type: 'text-start', id: 'text-2' },
+              { type: 'text-delta', id: 'text-2', delta: '完成' },
+              { type: 'text-end', id: 'text-2' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
+              }
+            ] as any[]
+          }),
+          request: { body: '' },
+          response: { headers: {} }
+        }
+      }
+    })
+
+    const text: string[] = []
+    const result = await agentLoop(model, registry, [{ role: 'user', content: '需要查工具' }], 'sys', {
+      quiet: true,
+      onText: (delta) => text.push(delta)
+    })
+
+    expect(callCount).toBe(2)
+    expect(text.join('')).toBe('完成')
+    expect(findAssistantReasoning(result.messages)).toContain('先分析，再调用工具。')
+    expect(findAssistantReasoning(model.doStreamCalls[1]?.prompt)).toContain(
+      '先分析，再调用工具。'
+    )
+  })
+
+  it('会把通用 providerOptions 传给模型请求', async () => {
+    const { model } = createMockModel([{ text: '完成', finishReason: 'stop' }])
+    const registry = makeRegistry()
+
+    await agentLoop(model, registry, [{ role: 'user', content: 'q' }], 'sys', {
+      quiet: true,
+      providerOptions: { openai: { reasoningEffort: 'high' } }
+    })
+
+    expect(model.doStreamCalls[0]?.providerOptions).toEqual({
+      openai: { reasoningEffort: 'high' }
+    })
+  })
+
   it('默认不再按 TOKEN_BUDGET 或 MAX_STEPS 硬停主循环', async () => {
     const probe = makeMockTool('probe', () => 'ok')
     const registry = makeRegistry(probe)
@@ -551,4 +634,23 @@ function createAuditStub(records: Array<{ event: string; payload: Record<string,
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function findAssistantReasoning(
+  messages: Array<{ role?: string; content?: unknown }> | undefined
+): string[] {
+  if (!messages) return []
+  return messages
+    .filter((message) => message.role === 'assistant' && Array.isArray(message.content))
+    .flatMap((message) =>
+      (message.content as unknown[])
+        .filter((part): part is { type: 'reasoning'; text: string } =>
+          isRecord(part) && part.type === 'reasoning' && typeof part.text === 'string'
+        )
+        .map((part) => part.text)
+    )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }

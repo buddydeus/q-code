@@ -5,6 +5,15 @@
  * 主流程；配置仍沿用运行时 `.env` / config.toml 写入的环境变量。
  */
 import { createOpenAI } from '@ai-sdk/openai'
+import {
+  createDeepSeekChatModel,
+  shouldUseDeepSeekCompatibleProvider
+} from '../runtime/deepseek-compat'
+import {
+  createReasoningProviderOptions,
+  readReasoningConfig,
+  type ReasoningProviderKind
+} from '../runtime/reasoning-config'
 import { normalizeBaseURL } from '../utils'
 
 /** OpenAI 兼容模型环境变量配置。 */
@@ -16,21 +25,40 @@ export interface EvalModelEnvSpec {
 }
 
 /** 创建 AI SDK chat model，并返回最终模型名。 */
-export function createEvalChatModel(spec: EvalModelEnvSpec = {}): { model: any; modelName: string } {
+export function createEvalChatModel(spec: EvalModelEnvSpec = {}): {
+  model: any
+  modelName: string
+  providerKind: ReasoningProviderKind
+} {
   const baseUrlEnv = spec.baseUrlEnv ?? 'OPENAI_BASE_URL'
   const apiKeyEnv = spec.apiKeyEnv ?? 'OPENAI_API_KEY'
   const modelEnv = spec.modelEnv ?? 'OPENAI_MODEL'
   const modelName = spec.model ?? readRequiredEnv(modelEnv)
+  const baseURL = normalizeBaseURL(readRequiredEnv(baseUrlEnv))
+  const apiKey = readRequiredEnv(apiKeyEnv)
+  const reasoningConfig = readReasoningConfig()
+  if (shouldUseDeepSeekCompatibleProvider(baseURL, modelName)) {
+    return {
+      model: createDeepSeekChatModel({ baseURL, apiKey, modelName, reasoningOptions: reasoningConfig }),
+      modelName,
+      providerKind: 'deepseek-compatible'
+    }
+  }
+
   const openai = createOpenAI({
-    baseURL: normalizeBaseURL(readRequiredEnv(baseUrlEnv)),
-    apiKey: readRequiredEnv(apiKeyEnv)
+    baseURL,
+    apiKey
   })
 
-  return { model: openai.chat(modelName), modelName }
+  return { model: openai.chat(modelName), modelName, providerKind: 'openai' }
 }
 
 /** 创建 judge 模型；默认复用 SUMMARY_*，更适合低成本稳定评分。 */
-export function createEvalJudgeModel(spec: EvalModelEnvSpec = {}): { model: any; modelName: string } {
+export function createEvalJudgeModel(spec: EvalModelEnvSpec = {}): {
+  model: any
+  modelName: string
+  providerKind: ReasoningProviderKind
+} {
   ensureJudgeEnvFallbacks()
   return createEvalChatModel({
     baseUrlEnv: spec.baseUrlEnv ?? 'Q_CODE_EVAL_JUDGE_BASE_URL',
@@ -38,6 +66,14 @@ export function createEvalJudgeModel(spec: EvalModelEnvSpec = {}): { model: any;
     modelEnv: spec.modelEnv ?? 'Q_CODE_EVAL_JUDGE_MODEL',
     model: spec.model
   })
+}
+
+/** 当前 eval/judge 模型需要传给 AI SDK 的 reasoning providerOptions。 */
+export function createEvalReasoningProviderOptions(
+  providerKind: ReasoningProviderKind = 'openai',
+  modelName?: string
+) {
+  return createReasoningProviderOptions(providerKind, readReasoningConfig(), { modelName })
 }
 
 /** judge 专用 env 未配置时，回退到 SUMMARY_*。 */

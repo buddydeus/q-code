@@ -136,7 +136,7 @@ export const globTool: ToolDefinition = {
   ) => {
     let cwd: string
     try {
-      cwd = resolveToolPath(context.cwd, path)
+      cwd = resolveToolPath(context.cwd, path, { access: 'read' })
     } catch (err) {
       return `路径错误: ${err instanceof Error ? err.message : err}`
     }
@@ -177,7 +177,7 @@ export const grepTool: ToolDefinition = {
   ) => {
     let basePath: string
     try {
-      basePath = resolveToolPath(context.cwd, path)
+      basePath = resolveToolPath(context.cwd, path, { access: 'read' })
     } catch (err) {
       return `路径错误: ${err instanceof Error ? err.message : err}`
     }

@@ -5,7 +5,14 @@
  * 步骤级重试、可选 `maxSteps` 与 `stopAfterToolNames` 早停。工具经 `ToolRegistry`
  * 包装审计与 Hooks；步骤事件写入 NDJSON 审计（`agent.step.start` / `end`）。
  */
-import { streamText, type LanguageModelUsage, type ModelMessage, type TelemetrySettings } from 'ai'
+import {
+  streamText,
+  type LanguageModelUsage,
+  type ModelMessage,
+  type ReasoningOutput,
+  type TelemetrySettings
+} from 'ai'
+import type { ProviderOptions } from '../runtime/reasoning-config'
 import { detect, recordCall, recordResult, resetHistory } from './loop-detection'
 import { isRetryable, calculateDelay, sleep } from './retry'
 import {
@@ -117,7 +124,7 @@ export interface AgentStepMetricEvent {
 
 /** 单步模型请求耗时指标，用于审计和 Langfuse 归因。 */
 export interface AgentStepMetrics {
-  /** 从发起 step 请求到首个可见模型事件的耗时；无可见事件时为 null。 */
+  /** 从发起 step 请求到首个模型输出事件的耗时；无输出事件时为 null。 */
   ttftMs: number | null
   /** 当前 step 总耗时。 */
   elapsedMs: number
@@ -158,6 +165,7 @@ export interface AgentLoopOptions {
   onToolEvent?: (event: AgentToolEvent) => void
   onToolResult?: (event: AgentToolResultEvent) => void
   onToolProgress?: (event: AgentToolProgressEvent) => void
+  providerOptions?: ProviderOptions
   telemetry?: (context: { step: number }) => TelemetrySettings | undefined
   stopAfterToolNames?: string[]
   abortSignal?: AbortSignal
@@ -201,6 +209,11 @@ interface ToolResultMessagePart {
   toolCallId: string
   toolName: string
   output: ToolResultOutput
+}
+
+interface PendingReasoningPart {
+  text: string
+  providerMetadata?: ReasoningOutput['providerMetadata']
 }
 
 type ToolResultOutput =
@@ -322,6 +335,8 @@ export async function agentLoop(
           label: options.modelRequestLabel,
           abortController: stepAbortController
         })
+        const reasoningPartsById = new Map<string, PendingReasoningPart>()
+        const reasoningPartOrder: string[] = []
         const toolCallParts: ToolCallMessagePart[] = []
         const toolResultParts: ToolResultMessagePart[] = []
         const outstandingToolCallIds = new Set<string>()
@@ -344,6 +359,7 @@ export async function agentLoop(
             messages,
             maxOutputTokens: outputTokenLimit,
             maxRetries: 0,
+            ...(options.providerOptions ? { providerOptions: options.providerOptions } : {}),
             ...(options.telemetry ? { experimental_telemetry: options.telemetry({ step }) } : {}),
             ...(abortSignal ? { abortSignal } : {}),
             onError: () => {}
@@ -379,6 +395,36 @@ export async function agentLoop(
 
             const part = next.value
             switch (part.type) {
+              case 'reasoning-start':
+                upsertReasoningPart(
+                  reasoningPartsById,
+                  reasoningPartOrder,
+                  part.id,
+                  part.providerMetadata
+                )
+                break
+
+              case 'reasoning-delta': {
+                if (!firstTokenAt) firstTokenAt = Date.now()
+                const reasoningPart = upsertReasoningPart(
+                  reasoningPartsById,
+                  reasoningPartOrder,
+                  part.id,
+                  part.providerMetadata
+                )
+                reasoningPart.text += part.text
+                break
+              }
+
+              case 'reasoning-end':
+                upsertReasoningPart(
+                  reasoningPartsById,
+                  reasoningPartOrder,
+                  part.id,
+                  part.providerMetadata
+                )
+                break
+
               case 'text-delta':
                 if (!firstTokenAt) firstTokenAt = Date.now()
                 if (!quiet) process.stdout.write(part.text)
@@ -510,7 +556,12 @@ export async function agentLoop(
           throw createAbortError(stepAbortController.signal)
         }
 
-        stepMessages = buildStepMessages(fullText, toolCallParts, toolResultParts)
+        stepMessages = buildStepMessages(
+          fullText,
+          collectReasoningParts(reasoningPartsById, reasoningPartOrder),
+          toolCallParts,
+          toolResultParts
+        )
         if (
           stepFinishReason === 'length' &&
           !hasToolCall &&
@@ -919,11 +970,15 @@ function createStepMetrics(
 
 function buildStepMessages(
   text: string,
+  reasoningParts: ReasoningOutput[],
   toolCallParts: ToolCallMessagePart[],
   toolResultParts: ToolResultMessagePart[]
 ): ModelMessage[] {
   const messages: ModelMessage[] = []
-  const assistantContent: Array<{ type: 'text'; text: string } | ToolCallMessagePart> = []
+  const assistantContent: Array<
+    ReasoningOutput | { type: 'text'; text: string } | ToolCallMessagePart
+  > = []
+  assistantContent.push(...reasoningParts)
   if (text) assistantContent.push({ type: 'text', text })
   assistantContent.push(...toolCallParts)
 
@@ -942,6 +997,39 @@ function buildStepMessages(
   }
 
   return messages
+}
+
+function upsertReasoningPart(
+  partsById: Map<string, PendingReasoningPart>,
+  partOrder: string[],
+  id: string,
+  providerMetadata: ReasoningOutput['providerMetadata'] | undefined
+): PendingReasoningPart {
+  let part = partsById.get(id)
+  if (!part) {
+    part = { text: '' }
+    partsById.set(id, part)
+    partOrder.push(id)
+  }
+  if (providerMetadata !== undefined) part.providerMetadata = providerMetadata
+  return part
+}
+
+function collectReasoningParts(
+  partsById: Map<string, PendingReasoningPart>,
+  partOrder: string[]
+): ReasoningOutput[] {
+  const reasoningParts: ReasoningOutput[] = []
+  for (const id of partOrder) {
+    const part = partsById.get(id)
+    if (!part?.text) continue
+    const reasoningPart: ReasoningOutput = { type: 'reasoning', text: part.text }
+    if (part.providerMetadata !== undefined) {
+      reasoningPart.providerMetadata = part.providerMetadata
+    }
+    reasoningParts.push(reasoningPart)
+  }
+  return reasoningParts
 }
 
 function toToolResultOutput(value: string, isError: boolean): ToolResultOutput {

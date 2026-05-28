@@ -20,16 +20,20 @@ const ROOT_ALIASES: Record<string, string> = {
   openai_base_url: 'OPENAI_BASE_URL',
   api_key: 'OPENAI_API_KEY',
   openai_api_key: 'OPENAI_API_KEY',
+  model_provider: 'Q_CODE_MODEL_PROVIDER',
   summary_model: 'SUMMARY_MODEL',
   summary_base_url: 'SUMMARY_BASE_URL',
-  summary_api_key: 'SUMMARY_API_KEY'
+  summary_api_key: 'SUMMARY_API_KEY',
+  thinking_type: 'Q_CODE_THINKING_TYPE',
+  reasoning_effort: 'Q_CODE_REASONING_EFFORT'
 }
 
 const SECTION_ALIASES: Record<string, Record<string, string>> = {
   openai: {
     model: 'OPENAI_MODEL',
     base_url: 'OPENAI_BASE_URL',
-    api_key: 'OPENAI_API_KEY'
+    api_key: 'OPENAI_API_KEY',
+    provider: 'Q_CODE_MODEL_PROVIDER'
   },
   summary: {
     model: 'SUMMARY_MODEL',
@@ -47,7 +51,10 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     model_wait_heartbeat_ms: 'Q_CODE_MODEL_WAIT_HEARTBEAT_MS',
     model_slow_request_warn_ms: 'Q_CODE_MODEL_SLOW_REQUEST_WARN_MS',
     model_stalled_request_warn_ms: 'Q_CODE_MODEL_STALLED_REQUEST_WARN_MS',
-    model_request_timeout_ms: 'Q_CODE_MODEL_REQUEST_TIMEOUT_MS'
+    model_request_timeout_ms: 'Q_CODE_MODEL_REQUEST_TIMEOUT_MS',
+    model_provider: 'Q_CODE_MODEL_PROVIDER',
+    thinking_type: 'Q_CODE_THINKING_TYPE',
+    reasoning_effort: 'Q_CODE_REASONING_EFFORT'
   },
   q_code: {
     session_dir: 'Q_CODE_SESSION_DIR',
@@ -81,7 +88,16 @@ const SECTION_ALIASES: Record<string, Record<string, string>> = {
     model_wait_heartbeat_ms: 'Q_CODE_MODEL_WAIT_HEARTBEAT_MS',
     model_slow_request_warn_ms: 'Q_CODE_MODEL_SLOW_REQUEST_WARN_MS',
     model_stalled_request_warn_ms: 'Q_CODE_MODEL_STALLED_REQUEST_WARN_MS',
-    model_request_timeout_ms: 'Q_CODE_MODEL_REQUEST_TIMEOUT_MS'
+    model_request_timeout_ms: 'Q_CODE_MODEL_REQUEST_TIMEOUT_MS',
+    model_provider: 'Q_CODE_MODEL_PROVIDER',
+    thinking_type: 'Q_CODE_THINKING_TYPE',
+    reasoning_effort: 'Q_CODE_REASONING_EFFORT'
+  },
+  reasoning: {
+    model_provider: 'Q_CODE_MODEL_PROVIDER',
+    provider: 'Q_CODE_MODEL_PROVIDER',
+    thinking_type: 'Q_CODE_THINKING_TYPE',
+    reasoning_effort: 'Q_CODE_REASONING_EFFORT'
   },
   history: {
     scope: 'Q_CODE_HISTORY_SCOPE',

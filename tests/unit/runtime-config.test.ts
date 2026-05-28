@@ -22,6 +22,9 @@ const ENV_KEYS = [
   'Q_CODE_MODEL_SLOW_REQUEST_WARN_MS',
   'Q_CODE_MODEL_STALLED_REQUEST_WARN_MS',
   'Q_CODE_MODEL_REQUEST_TIMEOUT_MS',
+  'Q_CODE_MODEL_PROVIDER',
+  'Q_CODE_THINKING_TYPE',
+  'Q_CODE_REASONING_EFFORT',
   'Q_CODE_HISTORY_SCOPE',
   'Q_CODE_HISTORY_DISABLED',
   'Q_CODE_HISTORY_REDACT',
@@ -180,6 +183,8 @@ describe('runtime config', () => {
         'context_limit_tokens = 12345',
         'model_wait_heartbeat_ms = 11',
         'model_slow_request_warn_ms = 31',
+        'thinking_type = "enabled"',
+        'reasoning_effort = "high"',
         'token_budget = 999999',
         'max_steps = 3',
         '[q_code]',
@@ -195,6 +200,8 @@ describe('runtime config', () => {
         'history_max_line_bytes = 4096',
         'model_stalled_request_warn_ms = 61',
         'model_request_timeout_ms = 120000',
+        'thinking_type = "disabled"',
+        'reasoning_effort = "minimal"',
         'mention_allow_abs = true',
         'shell_timeout_ms = 90000',
         '[langfuse]',
@@ -222,7 +229,11 @@ describe('runtime config', () => {
         'timeout_max_ms = 120000',
         'max_buffer = 2097152',
         'allow_abs_cwd = true',
-        'kill_bg_on_exit = true'
+        'kill_bg_on_exit = true',
+        '[reasoning]',
+        'provider = "deepseek-compatible"',
+        'thinking_type = "adaptive"',
+        'reasoning_effort = "xhigh"'
       ].join('\n')
     )
 
@@ -235,6 +246,9 @@ describe('runtime config', () => {
     expect(process.env.Q_CODE_MODEL_SLOW_REQUEST_WARN_MS).toBe('31')
     expect(process.env.Q_CODE_MODEL_STALLED_REQUEST_WARN_MS).toBe('61')
     expect(process.env.Q_CODE_MODEL_REQUEST_TIMEOUT_MS).toBe('120000')
+    expect(process.env.Q_CODE_MODEL_PROVIDER).toBe('deepseek-compatible')
+    expect(process.env.Q_CODE_THINKING_TYPE).toBe('adaptive')
+    expect(process.env.Q_CODE_REASONING_EFFORT).toBe('xhigh')
     expect(process.env.TOKEN_BUDGET).toBeUndefined()
     expect(process.env.MAX_STEPS).toBeUndefined()
     expect(process.env.Q_CODE_DEBUG).toBe('true')

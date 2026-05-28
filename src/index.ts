@@ -225,6 +225,15 @@ import { runCliUpdate } from './runtime/update';
 import { installCrashGuard, sha256ForCrashGuard } from './runtime/crash-guard';
 import { runAuditCli } from './observability/audit-cli';
 import { runInitCli } from './runtime/init-cli';
+import {
+  createDeepSeekChatModel,
+  shouldUseDeepSeekCompatibleProvider,
+} from './runtime/deepseek-compat';
+import {
+  createReasoningProviderOptions,
+  readReasoningConfig,
+  type ReasoningProviderKind,
+} from './runtime/reasoning-config';
 import { runEvalCli } from './evals';
 import {
   createMessageSummaryPayload,
@@ -363,27 +372,62 @@ async function connectMCP(options: { quiet?: boolean; cwd?: string } = {}) {
   }
 }
 
+/** 主模型工厂返回值，含模型实例与 provider 类型。 */
+interface ModelFactoryResult {
+  model: any;
+  providerKind: ReasoningProviderKind;
+}
+
 /** 使用 `OPENAI_*` 环境变量创建主对话模型。 */
-function createModel(modelName?: string) {
+function createModel(modelName?: string): ModelFactoryResult {
+  const baseURL = normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL'));
+  const resolvedModelName = modelName || getRequiredEnv('OPENAI_MODEL');
+  const apiKey = getRequiredEnv('OPENAI_API_KEY');
+  const reasoningConfig = readReasoningConfig();
+  if (shouldUseDeepSeekCompatibleProvider(baseURL, resolvedModelName)) {
+    return {
+      model: createDeepSeekChatModel({
+        baseURL,
+        apiKey,
+        modelName: resolvedModelName,
+        reasoningOptions: reasoningConfig,
+      }),
+      providerKind: 'deepseek-compatible',
+    };
+  }
+
   const openai = createOpenAI({
-    baseURL: normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL')),
-    apiKey: getRequiredEnv('OPENAI_API_KEY'),
+    baseURL,
+    apiKey,
   });
 
-  return openai.chat(modelName || getRequiredEnv('OPENAI_MODEL'));
+  return { model: openai.chat(resolvedModelName), providerKind: 'openai' };
 }
 
 /** 使用 `SUMMARY_*` 环境变量创建上下文压缩/摘要模型。 */
 function createSummaryModel() {
-  const summaryOpenai = createOpenAI({
-    baseURL: normalizeBaseURL(getRequiredEnv('SUMMARY_BASE_URL')),
-    apiKey: getRequiredEnv('SUMMARY_API_KEY'),
-  });
   const name = getRequiredEnv('SUMMARY_MODEL');
+  const baseURL = normalizeBaseURL(getRequiredEnv('SUMMARY_BASE_URL'));
+  const apiKey = getRequiredEnv('SUMMARY_API_KEY');
+  const reasoningConfig = readReasoningConfig();
+
+  if (shouldUseDeepSeekCompatibleProvider(baseURL, name)) {
+    return {
+      model: createDeepSeekChatModel({ baseURL, apiKey, modelName: name, reasoningOptions: reasoningConfig }),
+      name,
+    providerOptions: createReasoningProviderOptions('deepseek-compatible', reasoningConfig),
+    };
+  }
+
+  const summaryOpenai = createOpenAI({
+    baseURL,
+    apiKey,
+  });
 
   return {
     model: summaryOpenai.chat(name),
     name,
+    providerOptions: createReasoningProviderOptions('openai', reasoningConfig, { modelName: name }),
   };
 }
 
@@ -400,6 +444,11 @@ function getOptionalMillisecondsEnv(name: string): number | undefined {
 function formatModelRequestLabel(modelName: string): string {
   const baseUrl = safeEndpointLabel(process.env.OPENAI_BASE_URL);
   return `${modelName} via ${baseUrl}`;
+}
+
+function getReasoningProviderKind(modelName: string): ReasoningProviderKind {
+  const baseURL = normalizeBaseURL(getRequiredEnv('OPENAI_BASE_URL'));
+  return shouldUseDeepSeekCompatibleProvider(baseURL, modelName) ? 'deepseek-compatible' : 'openai';
 }
 
 function safeEndpointLabel(raw: string | undefined): string {
@@ -816,13 +865,19 @@ async function main() {
     registerBuiltinTools(createSkillTool({ getSessionId: () => sessionId }));
     registerBuiltinTools(
       createAgentTool({
-        createModel,
+        createModel: (modelName) => createModel(modelName).model,
         getDefaultModelName: options.getDefaultModelName,
         getAvailableTools: () => registry.getVisibleTools(),
         getRuntimeContext: () => runtimeContext,
         getAgentMdContext: () => agentMdContext,
         getMaxOutputTokens: () => defaultMaxOutputTokens,
         getEscalatedMaxOutputTokens: () => escalatedMaxOutputTokens,
+        getProviderOptions: (modelName) =>
+          createReasoningProviderOptions(
+            getReasoningProviderKind(modelName),
+            readReasoningConfig(),
+            { modelName },
+          ),
         getModelWaitHeartbeatMs: () => modelWaitHeartbeatMs,
         getModelSlowRequestWarnMs: () => modelSlowRequestWarnMs,
         getModelStalledRequestWarnMs: () => modelStalledRequestWarnMs,
@@ -942,7 +997,9 @@ async function main() {
 
   registry.setCwd(activeStore.cwd);
   defaultModelName = getRequiredEnv('OPENAI_MODEL');
-  let model = createModel(defaultModelName);
+  let modelState = createModel(defaultModelName);
+  let model = modelState.model;
+  let modelProviderKind = modelState.providerKind;
   const initialSessionSummary = activeStore.getSummary();
   let latestTotalUsage: TokenUsage | undefined =
     initialSessionSummary.totalUsage;
@@ -955,7 +1012,11 @@ async function main() {
     records: usageRecords,
   });
   let cachePrefixTracker = new CachePrefixTracker();
-  const { model: summaryModel, name: summaryModelName } = createSummaryModel();
+  const {
+    model: summaryModel,
+    name: summaryModelName,
+    providerOptions: summaryProviderOptions,
+  } = createSummaryModel();
   canEmitSessionInfo = true;
 
   function emitSessionInfo(): void {
@@ -1072,6 +1133,7 @@ async function main() {
       force: true,
       maxOutputTokens: compactMaxOutputTokens,
       focus,
+      providerOptions: summaryProviderOptions,
     });
     if (comp.compressedCount > 0) {
       nextMessages = comp.messages;
@@ -1449,6 +1511,11 @@ async function main() {
             modelStalledRequestWarnMs,
             modelRequestTimeoutMs,
             modelRequestLabel: formatModelRequestLabel(currentModelName()),
+            providerOptions: createReasoningProviderOptions(
+              modelProviderKind,
+              readReasoningConfig(),
+              { modelName: currentModelName() },
+            ),
             abortSignal: turnAbortController.signal,
             sessionId,
             hooks,
@@ -1886,14 +1953,18 @@ async function main() {
 
     if (requested === 'default') {
       sessionModelOverride = undefined;
-      model = createModel(defaultModelName);
+      modelState = createModel(defaultModelName);
+      model = modelState.model;
+      modelProviderKind = modelState.providerKind;
       emitSessionInfo();
       print(`\n  [Model] 已恢复默认模型: ${defaultModelName}`);
       return;
     }
 
     sessionModelOverride = requested;
-    model = createModel(requested);
+    modelState = createModel(requested);
+    model = modelState.model;
+    modelProviderKind = modelState.providerKind;
     emitSessionInfo();
     print(`\n  [Model] 本会话模型已切换为: ${requested}`);
   }
