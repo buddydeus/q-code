@@ -32,7 +32,8 @@ describe('CLI session switch integration', () => {
         OPENAI_MODEL: process.env.OPENAI_MODEL ?? 'mock-model',
         OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? 'dummy'
       },
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32'
     })
     const output = collectOutput(child)
 

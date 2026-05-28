@@ -1,6 +1,6 @@
 {
   "name": "@q-code-cli/q-code",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "An AI coding agent CLI with tools, skills, sub-agents, worktree isolation, and MCP support.",
   "homepage": "https://github.com/v833/q-code#readme",
   "repository": {

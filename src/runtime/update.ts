@@ -3,7 +3,7 @@
  *
  * 在进入主交互循环前由早期 CLI 路由调用；支持 `--dry-run` 与可注入 runner（测试用）。
  */
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 
 const PACKAGE_NAME = '@q-code-cli/q-code'
 const UPDATE_ARGS = ['install', '-g', `${PACKAGE_NAME}@latest`] as const
@@ -14,8 +14,17 @@ export interface UpdateRunResult {
   error?: unknown
 }
 
+/** `UpdateRunner` 启动子进程时使用的少量选项。 */
+export interface UpdateRunOptions {
+  shell?: boolean
+}
+
 /** 可替换的更新命令执行器（单元测试注入 mock）。 */
-export type UpdateRunner = (command: string, args: readonly string[]) => Promise<UpdateRunResult>
+export type UpdateRunner = (
+  command: string,
+  args: readonly string[],
+  options?: UpdateRunOptions
+) => Promise<UpdateRunResult>
 
 /** `runCliUpdate` 的输入选项。 */
 export interface RunCliUpdateOptions {
@@ -36,11 +45,13 @@ export function getUpdateCommand(platform: NodeJS.Platform = process.platform): 
   command: string
   args: readonly string[]
   display: string
+  shell: boolean
 } {
   return {
     command: platform === 'win32' ? 'npm.cmd' : 'npm',
     args: UPDATE_ARGS,
-    display: `npm ${UPDATE_ARGS.join(' ')}`
+    display: `npm ${UPDATE_ARGS.join(' ')}`,
+    shell: platform === 'win32'
   }
 }
 
@@ -73,7 +84,14 @@ export async function runCliUpdate(options: RunCliUpdateOptions): Promise<number
 
   stdout('正在更新 q-code 到 npm latest...')
   const runner = options.runner ?? defaultUpdateRunner
-  const result = await runner(updateCommand.command, updateCommand.args)
+  let result: UpdateRunResult
+  try {
+    result = await runner(updateCommand.command, updateCommand.args, {
+      shell: updateCommand.shell
+    })
+  } catch (error) {
+    result = { exitCode: 1, error }
+  }
 
   if (result.exitCode === 0) {
     stdout('更新完成。请运行 q-code --version 确认当前版本。')
@@ -87,18 +105,36 @@ export async function runCliUpdate(options: RunCliUpdateOptions): Promise<number
   return result.exitCode || 1
 }
 
-async function defaultUpdateRunner(command: string, args: readonly string[]): Promise<UpdateRunResult> {
+async function defaultUpdateRunner(
+  command: string,
+  args: readonly string[],
+  options: UpdateRunOptions = {}
+): Promise<UpdateRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, [...args], {
-      stdio: 'inherit',
-      windowsHide: true
-    })
+    let settled = false
+    const finish = (result: UpdateRunResult) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+
+    let child: ChildProcess
+    try {
+      child = spawn(command, [...args], {
+        stdio: 'inherit',
+        windowsHide: true,
+        shell: options.shell
+      })
+    } catch (error) {
+      finish({ exitCode: 1, error })
+      return
+    }
 
     child.on('error', (error) => {
-      resolve({ exitCode: 1, error })
+      finish({ exitCode: 1, error })
     })
     child.on('close', (code) => {
-      resolve({ exitCode: code ?? 1 })
+      finish({ exitCode: code ?? 1 })
     })
   })
 }

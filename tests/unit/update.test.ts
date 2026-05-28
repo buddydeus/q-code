@@ -4,7 +4,9 @@ import { getUpdateCommand, runCliUpdate, type UpdateRunner } from '../../src/run
 describe('cli update', () => {
   it('uses npm.cmd on Windows and npm elsewhere', () => {
     expect(getUpdateCommand('win32').command).toBe('npm.cmd')
+    expect(getUpdateCommand('win32').shell).toBe(true)
     expect(getUpdateCommand('linux').command).toBe('npm')
+    expect(getUpdateCommand('linux').shell).toBe(false)
     expect(getUpdateCommand('win32').args).toEqual([
       'install',
       '-g',
@@ -34,9 +36,9 @@ describe('cli update', () => {
 
   it('runs npm update command and reports success', async () => {
     const stdout: string[] = []
-    const calls: Array<{ command: string; args: readonly string[] }> = []
-    const runner: UpdateRunner = async (command, args) => {
-      calls.push({ command, args })
+    const calls: Array<{ command: string; args: readonly string[]; shell: boolean | undefined }> = []
+    const runner: UpdateRunner = async (command, args, options) => {
+      calls.push({ command, args, shell: options?.shell })
       return { exitCode: 0 }
     }
 
@@ -52,7 +54,8 @@ describe('cli update', () => {
     expect(calls).toEqual([
       {
         command: 'npm.cmd',
-        args: ['install', '-g', '@q-code-cli/q-code@latest']
+        args: ['install', '-g', '@q-code-cli/q-code@latest'],
+        shell: true
       }
     ])
     expect(stdout.join('\n')).toContain('更新完成')
@@ -71,6 +74,23 @@ describe('cli update', () => {
     expect(code).toBe(7)
     expect(stderr.join('\n')).toContain('更新失败，退出码: 7')
     expect(stderr.join('\n')).toContain('permission denied')
+    expect(stderr.join('\n')).toContain('可手动执行: npm install -g @q-code-cli/q-code@latest')
+  })
+
+  it('reports runner throw errors as update failures', async () => {
+    const stderr: string[] = []
+    const code = await runCliUpdate({
+      currentVersion: '1.2.3',
+      argv: ['update'],
+      runner: () => {
+        throw new Error('spawn EINVAL')
+      },
+      stderr: (text) => stderr.push(text)
+    })
+
+    expect(code).toBe(1)
+    expect(stderr.join('\n')).toContain('更新失败，退出码: 1')
+    expect(stderr.join('\n')).toContain('spawn EINVAL')
     expect(stderr.join('\n')).toContain('可手动执行: npm install -g @q-code-cli/q-code@latest')
   })
 
