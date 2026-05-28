@@ -139,6 +139,7 @@ cp .env.example .env
 | `Q_CODE_HISTORY_MAX_BYTES`     | ❌   | 单个历史文件最大字节数，默认 5MB                             |
 | `Q_CODE_HISTORY_RUNTIME_LIMIT` | ❌   | 启动时载入内存的最近历史数量，默认 2000                      |
 | `Q_CODE_HISTORY_MAX_LINE_BYTES` | ❌   | 单条 JSONL 历史记录最大字节数，默认 32KB                     |
+| `Q_CODE_TUI_CURSOR`            | ❌   | TUI 输入光标模式：`auto` / `ansi` / `inline` / `off`；默认 auto，IDE 集成终端自动使用 inline |
 | `Q_CODE_LANGFUSE_ENABLED`      | ❌   | Langfuse/OpenTelemetry 导出开关，默认 false                  |
 | `LANGFUSE_PUBLIC_KEY`          | ❌   | Langfuse project public key，仅开启 Langfuse 时需要          |
 | `LANGFUSE_SECRET_KEY`          | ❌   | Langfuse project secret key，仅开启 Langfuse 时需要          |
@@ -630,7 +631,7 @@ q-code 默认启用崩溃保护。遇到未捕获异常、未处理 Promise reje
 
 #### Shell 工具
 
-`f` 默认执行同步命令，Windows 使用 PowerShell7，其他平台使用 Bash。参数支持 `cwd`、`timeoutMs`、`maxBufferBytes`、`stdin`、`env`、`label` 和 `background`：
+`f` 默认执行同步命令，Windows 优先使用 PowerShell7（`pwsh`），缺失时回退到 Windows PowerShell 5.1（`powershell.exe`），其他平台使用 Bash。参数支持 `cwd`、`timeoutMs`、`maxBufferBytes`、`stdin`、`env`、`label` 和 `background`：
 
 - 同步模式默认超时 60s，受 `Q_CODE_SHELL_TIMEOUT_MS` 控制；用户传入的 `timeoutMs` 会被 `Q_CODE_SHELL_TIMEOUT_MAX_MS` 限制。
 - 输出超过 `maxBufferBytes`（默认 4MB）不会杀进程，会把完整输出写入 `<Q_CODE_HOME>/shell-spills/<jobId>.log`，工具结果返回 head/tail 摘要和文件路径。
