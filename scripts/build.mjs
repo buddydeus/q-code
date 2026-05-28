@@ -1,4 +1,4 @@
-import { copyFile, chmod, mkdir, rm } from 'node:fs/promises'
+import { copyFile, chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
@@ -28,18 +28,23 @@ await rm('dist', { recursive: true, force: true })
 await mkdir('dist', { recursive: true })
 
 await build({
-  entryPoints: ['src/index.ts'],
-  outfile: 'dist/index.js',
+  entryPoints: ['src/cli/bootstrap.ts'],
+  outdir: 'dist',
   bundle: true,
+  splitting: true,
   platform: 'node',
   format: 'esm',
   target: 'node22',
   packages: 'external',
-  banner: {
-    js: '#!/usr/bin/env node'
-  }
+  entryNames: 'index',
+  chunkNames: 'chunks/[name]-[hash]'
 })
 
+const entryPath = join(ROOT, 'dist/index.js')
+const entryCode = await readFile(entryPath, 'utf-8')
+if (!entryCode.startsWith('#!')) {
+  await writeFile(entryPath, `#!/usr/bin/env node\n${entryCode}`)
+}
 await chmod('dist/index.js', 0o755)
 
 if (existsSync(CHANGELOG_JSON)) {

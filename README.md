@@ -128,6 +128,7 @@ cp .env.example .env
 | `Q_CODE_HOME`                  | ❌   | q-code 全局配置目录，默认 `~/.q-code`                         |
 | `Q_CODE_DEBUG`                 | ❌   | 设为 1/true/yes/on 显示启动诊断信息（等价于 `--debug`）       |
 | `Q_CODE_CHANGELOG`             | ❌   | 启动时展示版本更新说明，默认开启；设为 0/false/off/no 可关闭 |
+| `Q_CODE_STARTUP_TRACE`         | ❌   | 设为 1/true/yes/on 输出轻量启动阶段耗时；`--debug` 会自动启用 |
 | `Q_CODE_THEME`                 | ❌   | TUI Markdown / 代码块高亮主题，`dark` / `light` / `auto`，默认 `auto` |
 | `Q_CODE_AUDIT_ENABLED`         | ❌   | 审计日志开关，默认开启；设为 false/0/off/no 可关闭            |
 | `Q_CODE_AUDIT_DIR`             | ❌   | 审计日志目录，默认 `<Q_CODE_HOME>/logs`                       |
@@ -219,7 +220,9 @@ pnpm run continue       # 恢复上次会话
 | `--no-color`           | 关闭 ANSI 语法高亮和颜色输出                               |
 | `--debug`              | 显示启动诊断信息，包括 Prompt Pipe 和工具加载概览        |
 
-默认在交互式 TTY 中启动 Ink TUI；非 TTY、`--classic` 或 `Q_CODE_TUI=0` 会回退到传统 readline。TUI 将 Agent 输出、工具调用、上下文占用、任务进度、SubAgent 状态和 token 用量统一渲染为事件流，支持 `Ctrl+J` 多行输入、`Ctrl+R` 历史搜索、`Esc` 清空/恢复输入、忙时 `Ctrl+C` 中断当前任务和 Markdown 代码块/列表/表格展示。多工具任务中，Agent 会在关键工具调用前后输出简短的公开进度说明；TUI 会按时间线把这些说明和工具调用交错展示，避免执行过程中只剩工具流水账。Markdown 行内内容会保留语义高亮：`**重点**`、inline code、URL、issue ref、文件路径和 `src/foo.ts:123` 行号会使用不同视觉通道，便于在长回复中快速定位关键信息。代码块使用 24-bit ANSI 主题 palette，TypeScript / TSX、diff 等内容在明暗终端中都保持较高对比；可通过 `Q_CODE_THEME=dark|light|auto` 控制配色，终端无法暴露背景色或 auto 判断不准时建议手动指定 `light` / `dark`，也可使用 `--no-color` / `NO_COLOR=1` 关闭全部颜色。输入区使用真实终端光标锚定输入法候选窗，避免 macOS IME 跑到屏幕角落。
+发布产物使用薄入口启动：`help` / `version` 只加载颜色环境、argv 解析和帮助/版本格式化后立即退出；`update`、`audit`、`init`、`eval` 与主交互循环按需动态加载各自模块，避免互相支付依赖成本。主交互路径也只在确认进入 TUI 时动态加载 Ink/React；非 TTY、`--classic` 或 `Q_CODE_TUI=0` 会回退到传统 readline，且不会加载 TUI 运行时。TUI 会先渲染会话和输入界面，再继续完成 Custom Tools、Hooks、Skills、Agents、MCP、runtime context 与项目指令预热；如果用户在预热完成前提交会触发 Agent 或依赖预热状态的命令，ready gate 会显示“正在完成启动预热...”并在能力完整后自动继续。需要观察阶段耗时时，可设置 `Q_CODE_STARTUP_TRACE=true` 或使用 `--debug`，输出形如 `[Startup] bootstrap 12ms` 的阶段计时，不包含 API key、token 或工具输出。
+
+默认在交互式 TTY 中启动 Ink TUI。TUI 将 Agent 输出、工具调用、上下文占用、任务进度、SubAgent 状态和 token 用量统一渲染为事件流，支持 `Ctrl+J` 多行输入、`Ctrl+R` 历史搜索、`Esc` 清空/恢复输入、忙时 `Ctrl+C` 中断当前任务和 Markdown 代码块/列表/表格展示。多工具任务中，Agent 会在关键工具调用前后输出简短的公开进度说明；TUI 会按时间线把这些说明和工具调用交错展示，避免执行过程中只剩工具流水账。Markdown 行内内容会保留语义高亮：`**重点**`、inline code、URL、issue ref、文件路径和 `src/foo.ts:123` 行号会使用不同视觉通道，便于在长回复中快速定位关键信息。代码块使用 24-bit ANSI 主题 palette，TypeScript / TSX、diff 等内容在明暗终端中都保持较高对比；可通过 `Q_CODE_THEME=dark|light|auto` 控制配色，终端无法暴露背景色或 auto 判断不准时建议手动指定 `light` / `dark`，也可使用 `--no-color` / `NO_COLOR=1` 关闭全部颜色。输入区使用真实终端光标锚定输入法候选窗，避免 macOS IME 跑到屏幕角落。
 
 ### @file 文件引用
 
@@ -265,7 +268,11 @@ npm publish --access public
 
 ```
 src/
-├── index.ts              # 入口：启动、交互循环、压缩调度
+├── index.ts              # 开发态兼容入口，委托给 cli/bootstrap.ts
+├── cli/
+│   ├── bootstrap.ts      # 薄 CLI 入口：early commands、动态 import 和启动 trace
+│   ├── main.ts           # 主交互循环、模式切换、上下文压缩调度
+│   └── startup-ready.ts  # 启动预热 ready gate
 ├── agent/
 │   ├── loop.ts           # Agent Loop 核心（ReAct 模式）
 │   ├── loop-detection.ts # 死循环检测
@@ -340,13 +347,13 @@ src/
 ┌─────────────────────────────────────────────────────────────┐
 │                        启动阶段                              │
 │                                                              │
-│  1. 加载环境变量 (.env)                                      │
-│  2. 并行启动: MCP 连接 + Skills 加载 + Agents 加载           │
-│  3. 加载运行环境信息 + AGENT.md 项目指令                      │
-│  4. 初始化会话存储 (新建 / 恢复)                              │
-│  5. 注册所有工具 + 设置模式                                   │
-│  6. 构建 System Prompt 管道                                  │
-│  7. 输出启动信息 (工具数 / Skills / Agents / 任务系统 / 上下文配置) │
+│  1. 薄入口处理 help/version；其他子命令按需动态 import        │
+│  2. 主交互路径加载环境变量，初始化会话/历史/模型基础状态       │
+│  3. 仅 TUI 模式动态加载 Ink/React，并先渲染输入界面            │
+│  4. 显式 startupWarmupPromise 并行预热 Hooks/Custom Tools/Infra│
+│  5. 继续并行加载 runtime context、项目指令、MCP、Skills、Agents │
+│  6. ready gate 在预热完成后注册完整工具并构建 System Prompt    │
+│  7. 用户输入若早于预热完成，会等待 gate 后继续执行             │
 └───────────────────────────┬─────────────────────────────────┘
                             │
                             ▼

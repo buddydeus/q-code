@@ -22,6 +22,7 @@ const ENV_KEYS = [
   'Q_CODE_MODEL_SLOW_REQUEST_WARN_MS',
   'Q_CODE_MODEL_STALLED_REQUEST_WARN_MS',
   'Q_CODE_MODEL_REQUEST_TIMEOUT_MS',
+  'Q_CODE_STARTUP_TRACE',
   'Q_CODE_PLAN_INTENT',
   'Q_CODE_PLAN_INTENT_MODEL_TIMEOUT_MS',
   'Q_CODE_TUI_CURSOR',
@@ -186,6 +187,7 @@ describe('runtime config', () => {
         'context_limit_tokens = 12345',
         'model_wait_heartbeat_ms = 11',
         'model_slow_request_warn_ms = 31',
+        'startup_trace = true',
         'plan_intent = "suggest"',
         'plan_intent_model_timeout_ms = 2500',
         'tui_cursor = "inline"',
@@ -250,6 +252,7 @@ describe('runtime config', () => {
     expect(process.env.CONTEXT_LIMIT_TOKENS).toBe('12345')
     expect(process.env.Q_CODE_MODEL_WAIT_HEARTBEAT_MS).toBe('11')
     expect(process.env.Q_CODE_MODEL_SLOW_REQUEST_WARN_MS).toBe('31')
+    expect(process.env.Q_CODE_STARTUP_TRACE).toBe('true')
     expect(process.env.Q_CODE_MODEL_STALLED_REQUEST_WARN_MS).toBe('61')
     expect(process.env.Q_CODE_MODEL_REQUEST_TIMEOUT_MS).toBe('120000')
     expect(process.env.Q_CODE_PLAN_INTENT).toBe('suggest')

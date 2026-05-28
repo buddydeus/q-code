@@ -7,6 +7,30 @@ import type { SessionSummary } from '../session/store'
 import type { SlashCommandSuggestion } from '../slash'
 import type { CacheMode } from '../usage'
 
+/** 启动 Ink TUI 的选项；保持在无 React/Ink 依赖的轻量模块中，供主循环类型引用。 */
+export interface TerminalRuntimeOptions {
+  title?: string
+  sessionId?: string
+  cwd?: string
+  /** 渲染前预灌入的事件（如启动横幅）。 */
+  initialEvents?: TerminalEvent[]
+  slashCommands?: SlashCommandSuggestion[]
+  fileMentionIndex?: import('../mentions').FileMentionIndex
+  fileMentionIndexStore?: import('../mentions').FileMentionIndexStore
+  inputHistoryStore?: import('./history-store').HistoryStore
+  onSubmit: (input: string) => Promise<void> | void
+  onSessionPickerSelect?: (sessionId: string) => Promise<void> | void
+  onAgentKill?: (agentId: string) => Promise<boolean> | boolean
+  onAgentKillAll?: (agentIds: string[]) => Promise<number> | number
+  onAgentClearCompleted?: () => Promise<number> | number
+  onInterrupt?: () => Promise<void> | void
+  onModeToggle?: () => Promise<void> | void
+  onPlanEntryAccept?: (input: string) => Promise<void> | void
+  onPlanEntryDecline?: (input: string) => Promise<void> | void
+  onPlanEntryCancel?: (input: string) => Promise<void> | void
+  onExit: () => Promise<void> | void
+}
+
 /** transcript 消息角色。 */
 export type TerminalRole = 'assistant' | 'user' | 'system' | 'tool' | 'error'
 /** 状态栏展示的 Agent/工具执行阶段。 */
@@ -231,6 +255,17 @@ export type TerminalEventListener = (event: TerminalEvent) => void
 export interface TerminalEventBus {
   emit(event: TerminalEvent): void
   subscribe(listener: TerminalEventListener): () => void
+}
+
+/** 已启动的终端运行时句柄；定义在轻量事件模块中，避免主循环静态加载 Ink。 */
+export interface TerminalRuntime {
+  bus: TerminalEventBus
+  instance: { unmount(): void; waitUntilExit(): Promise<void> }
+  /** 以 system 消息写入 transcript。 */
+  print(text: string): void
+  emit(event: TerminalEvent): void
+  /** 等待用户退出 TUI（Ink `waitUntilExit`）。 */
+  waitUntilExit(): Promise<void>
 }
 
 /**

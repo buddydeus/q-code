@@ -79,7 +79,8 @@ pnpm changelog              # 手动从 git tag / conventional commit 生成 CHA
 
 ## 目录边界
 
-- `src/index.ts`：CLI 启动、交互循环、模式切换、上下文压缩调度和整体编排。
+- `src/index.ts`：开发态兼容入口，委托给 `src/cli/bootstrap.ts`。
+- `src/cli/`：薄 CLI 入口（early commands、动态 import、启动 trace）、主交互循环（模式切换、上下文压缩调度和整体编排）与启动预热 ready gate。
 - `src/agent/`：核心 Agent Loop、重试、循环检测、模型等待心跳与单步模型请求超时。
 - `src/agents/`：SubAgent、后台 Agent、Agent Teams、worktree、mailbox、notification-store。
 - `src/context/`：System Prompt 管道、鸭子人格（`duck-persona.ts`，主题鸭通过本轮 transient 用户消息注入，不进 system prompt / 会话历史）、上下文压缩与 offload、Plan Mode 附件/计划文件/意图识别、任务、Todo、记忆、运行环境和项目指令加载。
@@ -90,7 +91,7 @@ pnpm changelog              # 手动从 git tag / conventional commit 生成 CHA
 - `src/hooks/`：Pre/Post tool-use Hooks 的配置加载、matcher、command-runner 与 DefaultHookRunner。
 - `src/observability/`：NDJSON 审计日志（`audit.ts`）、可选 Langfuse/OpenTelemetry 导出（`langfuse.ts`，含 Agent step TTFT/吞吐/等待状态 attributes）与 `q-code audit verify|tail` 子命令实现（`audit-cli.ts`）。
 - `src/evals/`：Agent eval 子系统，包含 case loader、mock/cli-subprocess/real-agent runner、trace recorder、deterministic scorers、LLM judge、报告、Langfuse eval trace/dataset/scores 导出、趋势看板与 `q-code eval` CLI。
-- `src/runtime/`：早期 CLI 子命令路由（help/version/update/audit/init/eval）、`init-cli` 交互式配置向导、通用 reasoning 配置与 DeepSeek reasoning 兼容层、Shell 启动参数与 Windows PowerShell fallback、颜色环境 bootstrap、`getPackageVersion`、`runCliUpdate`、启动更新说明（`changelog.ts`）、`installCrashGuard` 与崩溃报告生成。
+- `src/runtime/`：早期 CLI 子命令识别/帮助文案、`init-cli` 交互式配置向导、通用 reasoning 配置与 DeepSeek reasoning 兼容层、Shell 启动参数与 Windows PowerShell fallback、颜色环境 bootstrap、启动耗时 trace、`getPackageVersion`、`runCliUpdate`、启动更新说明（`changelog.ts`）、`installCrashGuard` 与崩溃报告生成。
 - `src/config/`：`runtime-config.ts` 负责加载 `~/.q-code/config.toml`、`<cwd>/.q-code/config.toml`、`.env`，统一映射到 `process.env`（支持多 section/alias）。
 - `src/session/`：`SessionStore`（JSONL append-only、metadata、trash/restore、export/search、cache 模式与 usage 记录持久化）。
 - `src/mentions/`：`@file` 文件引用解析、git/递归文件索引、项目级候选缓存与 watcher 刷新 store、fuzzy 排序、路径安全校验、文件内容截断和本轮上下文注入。
@@ -135,7 +136,8 @@ pnpm changelog              # 手动从 git tag / conventional commit 生成 CHA
 - TUI 输入光标由 `Q_CODE_TUI_CURSOR=auto|ansi|inline|off` 控制；auto 下 VSCode、Cursor、Windsurf、Trae、JetBrains/IntelliJ IDEA 等 IDE 集成终端默认使用 inline 块光标，避免 ANSI 光标同步错位、闪烁或抖动。修改相关逻辑需覆盖 `src/terminal/cursor-mode.ts` 单测。
 - 自定义工具目录固定为 `~/.q-code/tools/<name>/` 与 `<cwd>/.q-code/tools/<name>/`；项目级覆盖用户级，用户级覆盖内置工具。每个工具目录必须提供 `schema.json`，其结构为 `Omit<ToolDefinition, 'isEnabled' | 'execute'> & { execute: string }`，其中 `execute` 会在该工具目录下作为 shell 命令运行。
 - Skills 目录支持 `~/.q-code/skills/<name>/SKILL.md`、`~/.agents/skills/<name>/SKILL.md`、`<cwd>/.q-code/skills/<name>/SKILL.md` 与 `<cwd>/.agents/skills/<name>/SKILL.md`；同名优先级为项目级 `.agents/skills` > 项目级 `.q-code/skills` > 用户级 `.agents/skills` > 用户级 `.q-code/skills`。
-- 新增 Slash 命令通过 `createSlashCommandRegistry` + `command(...)` 注册（见 `src/index.ts::createBuiltinSlashCommands`），并填好 `category`、`aliases`、`usage`，以便 `/help` 输出友好。
+- 启动性能路径由 `src/cli/bootstrap.ts` 保持薄入口：`help` / `version` 不得静态加载 Ink/React、AI SDK、MCP SDK、Langfuse 或 eval 主模块；TUI 运行时必须通过动态 import 加载，`--classic` / 非 TTY 不应加载 Ink/React。新增启动阶段可用 `Q_CODE_STARTUP_TRACE=true` 或 `--debug` 输出耗时，输出不得包含密钥、token 或工具结果原文。
+- 新增 Slash 命令通过 `createSlashCommandRegistry` + `command(...)` 注册（见 `src/cli/main.ts::createBuiltinSlashCommands`），并填好 `category`、`aliases`、`usage`，以便 `/help` 输出友好。
 - 新增 Hook 事件类型时同步更新 `src/hooks/events.ts` 与 `src/hooks/types.ts` 的导出，并在 `tests/unit/hooks.test.ts` 加覆盖。
 - 新增企业/外部观测相关能力（Infra / GitLab KB / 审计 PII 模式 / Langfuse）必须保持可禁用：环境变量缺省值不能让首次启动失败。Langfuse 默认关闭，且 `Q_CODE_LANGFUSE_RECORD_IO` 默认不得上传 prompt、文件内容、shell 输出或工具结果原文。
 - 崩溃保护默认开启，新增崩溃处理逻辑必须避免依赖 Ink 输出；用户提示走裸 `stderr.write`，报告默认写 `<Q_CODE_HOME>/crashes`，测试里使用 `register: false` 和 mock `exit`。

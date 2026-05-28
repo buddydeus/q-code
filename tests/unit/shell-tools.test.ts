@@ -62,7 +62,7 @@ describe('shell tool process management', () => {
 
     expect(getShellInvocation('echo ok', 'linux')).toEqual({
       command: 'bash',
-      args: ['-lc', 'echo ok'],
+      args: ['-c', 'echo ok'],
       detached: true,
       unavailableMessage:
         '[bash 不可用] 当前环境不支持 shell 命令。本地终端运行 pnpm start 可使用 bash 工具。'
@@ -128,7 +128,7 @@ describe('shell tool process management', () => {
       ok: true,
       shell: {
         command: 'bash',
-        args: ['-lc', 'echo ok'],
+        args: ['-c', 'echo ok'],
         detached: true
       }
     })

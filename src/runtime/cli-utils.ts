@@ -39,13 +39,13 @@ export function getRatioEnv(name: string, fallback: number): number {
  *
  * @param name - 完整开关名，如 `--session`
  */
-export function getStringArg(name: string): string | undefined {
-  const eq = process.argv.find((arg) => arg.startsWith(`${name}=`))
+export function getStringArg(name: string, argv: readonly string[] = process.argv): string | undefined {
+  const eq = argv.find((arg) => arg.startsWith(`${name}=`))
   if (eq) return eq.slice(name.length + 1).trim() || undefined
 
-  const index = process.argv.indexOf(name)
+  const index = argv.indexOf(name)
   if (index < 0) return undefined
-  const value = process.argv[index + 1]
+  const value = argv[index + 1]
   if (!value || value.startsWith('--')) return undefined
   return value.trim() || undefined
 }

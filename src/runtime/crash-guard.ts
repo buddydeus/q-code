@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type { SessionStore } from '../session/store'
-import type { TerminalRuntime } from '../terminal/runtime'
+import type { TerminalRuntime } from '../terminal/events'
 import { getAuditLogger, setCrashGuardOwnsSignalHandlers } from '../observability/audit'
 import { isFalseEnv } from '../utils/env'
 

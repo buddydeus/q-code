@@ -3,47 +3,9 @@
  * 并向 CLI 主循环暴露 `print` / `emit` / `waitUntilExit`。
  */
 import React from 'react'
-import { render, type Instance } from 'ink'
-import { InMemoryTerminalEventBus, type TerminalEvent, type TerminalEventBus } from './events'
+import { render } from 'ink'
+import { InMemoryTerminalEventBus, type TerminalRuntime, type TerminalRuntimeOptions } from './events'
 import { TerminalApp } from './App'
-import type { SlashCommandSuggestion } from '../slash'
-import type { FileMentionIndex, FileMentionIndexStore } from '../mentions'
-import type { HistoryStore } from './history-store'
-
-/** {@link startTerminalRuntime} 的启动选项。 */
-export interface TerminalRuntimeOptions {
-  title?: string
-  sessionId?: string
-  cwd?: string
-  /** 渲染前预灌入的事件（如启动横幅）。 */
-  initialEvents?: TerminalEvent[]
-  slashCommands?: SlashCommandSuggestion[]
-  fileMentionIndex?: FileMentionIndex
-  fileMentionIndexStore?: FileMentionIndexStore
-  inputHistoryStore?: HistoryStore
-  onSubmit: (input: string) => Promise<void> | void
-  onSessionPickerSelect?: (sessionId: string) => Promise<void> | void
-  onAgentKill?: (agentId: string) => Promise<boolean> | boolean
-  onAgentKillAll?: (agentIds: string[]) => Promise<number> | number
-  onAgentClearCompleted?: () => Promise<number> | number
-  onInterrupt?: () => Promise<void> | void
-  onModeToggle?: () => Promise<void> | void
-  onPlanEntryAccept?: (input: string) => Promise<void> | void
-  onPlanEntryDecline?: (input: string) => Promise<void> | void
-  onPlanEntryCancel?: (input: string) => Promise<void> | void
-  onExit: () => Promise<void> | void
-}
-
-/** 已启动的 Ink 终端运行时句柄。 */
-export interface TerminalRuntime {
-  bus: TerminalEventBus
-  instance: Instance
-  /** 以 system 消息写入 transcript。 */
-  print(text: string): void
-  emit(event: TerminalEvent): void
-  /** 等待用户退出 TUI（Ink `waitUntilExit`）。 */
-  waitUntilExit(): Promise<void>
-}
 
 /**
  * 启动 Ink TUI 并返回可与 `index.ts` 主循环对接的运行时句柄。

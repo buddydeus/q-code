@@ -49,7 +49,7 @@ export function getShellInvocations(
   return [
     {
       command: 'bash',
-      args: ['-lc', command],
+      args: ['-c', command],
       detached: true,
       unavailableMessage:
         '[bash 不可用] 当前环境不支持 shell 命令。本地终端运行 pnpm start 可使用 bash 工具。'

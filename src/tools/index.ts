@@ -8,7 +8,7 @@ import { bashTool, shellKillTool, shellListTool, shellStatusTool, shellTailTool 
 import { memoryWriteTool } from './memory-tools'
 import { fetchUrlTool, globTool, grepTool, startPreviewTool } from './utility-tools'
 import { createGitLabKbTools } from './gitlab-kb-tools'
-export { loadAllCustomTools, getProjectToolsDir, getUserToolsDir } from './load-tools-dir'
+export { loadAllCustomTools, getProjectToolsDir, getUserToolsDir, type LoadedCustomToolsResult } from './load-tools-dir'
 
 /** 启动时注册到 ToolRegistry 的默认内置工具集合（不含 Plan/Task/Agent 等需控制器注入的工具）。 */
 export const allTools: ToolDefinition[] = [
