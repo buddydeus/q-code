@@ -35,6 +35,10 @@ function writeSkill(baseDir: string, dirName: string, content: string): string {
   return skillDir
 }
 
+function normalizePathForAssert(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
 describe('skill loader', () => {
   it('loads skills from user .q-code/skills and .agents/skills', async () => {
     const home = trackHome('q-code-skills-')
@@ -57,8 +61,10 @@ describe('skill loader', () => {
       'agents-only:user agents skills',
       'q-code-only:user q-code skills'
     ])
-    expect(loaded.skills.find((skill) => skill.name === 'agents-only')?.baseDir).toBe(
-      realpathSync(join(home.root, '.agents', 'skills', 'agents-only'))
+    expect(
+      normalizePathForAssert(loaded.skills.find((skill) => skill.name === 'agents-only')?.baseDir ?? '')
+    ).toBe(
+      normalizePathForAssert(realpathSync(join(home.root, '.agents', 'skills', 'agents-only')))
     )
   })
 
@@ -98,8 +104,10 @@ describe('skill loader', () => {
       'project-only:project only',
       'shared:project agents shared'
     ])
-    expect(loaded.skills.find((skill) => skill.name === 'project-only')?.baseDir).toBe(
-      realpathSync(join(getProjectAgentsSkillsDir(home.cwd), 'project-only'))
+    expect(
+      normalizePathForAssert(loaded.skills.find((skill) => skill.name === 'project-only')?.baseDir ?? '')
+    ).toBe(
+      normalizePathForAssert(realpathSync(join(getProjectAgentsSkillsDir(home.cwd), 'project-only')))
     )
   })
 

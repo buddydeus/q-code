@@ -30,6 +30,10 @@ function trackHome(label?: string): TempHome {
   return home
 }
 
+function normalizePathForAssert(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
 function writeCustomTool(baseDir: string, toolName: string, schema: Record<string, unknown>): string {
   const toolDir = join(baseDir, toolName)
   mkdirSync(toolDir, { recursive: true })
@@ -210,15 +214,27 @@ describe('custom tool loader', () => {
       { value: 'hello' },
       { cwd: home.cwd, sessionId: 's1' }
     )
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       content: {
         value: 'hello',
-        cwd: realpathSync(toolDir),
         sessionId: 's1',
         version: true
       }
     })
+    if (
+      typeof result !== 'object' ||
+      result === null ||
+      !('content' in result) ||
+      typeof result.content !== 'object' ||
+      result.content === null ||
+      !('cwd' in result.content)
+    ) {
+      throw new Error('expected custom tool result content with cwd')
+    }
+    expect(normalizePathForAssert(String(result.content.cwd))).toBe(
+      normalizePathForAssert(realpathSync(toolDir))
+    )
   })
 
   it('warns when a tool directory is missing schema.json', async () => {

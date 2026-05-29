@@ -1,11 +1,11 @@
 /**
- * `q-code update` 子命令：通过全局 `npm install -g @q-code-cli/q-code@latest` 升级 CLI。
+ * `q-code update` 子命令：通过全局 `npm install -g q-code@latest` 升级 CLI。
  *
  * 在进入主交互循环前由早期 CLI 路由调用；支持 `--dry-run` 与可注入 runner（测试用）。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 
-const PACKAGE_NAME = '@q-code-cli/q-code'
+const PACKAGE_NAME = 'q-code'
 const UPDATE_ARGS = ['install', '-g', `${PACKAGE_NAME}@latest`] as const
 
 /** `UpdateRunner` 执行 npm 子进程后的结果。 */

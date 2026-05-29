@@ -14,7 +14,7 @@ export type EarlyCliCommand = 'help' | 'version' | 'update' | 'audit' | 'init' |
 let cachedPackageVersion: string | undefined
 
 /**
- * 解析 `@q-code-cli/q-code` 的 package.json 版本（向上遍历至多 6 层目录）。
+ * 解析 `q-code` 的 package.json 版本（向上遍历至多 6 层目录）。
  *
  * 找不到时回退 `npm_package_version` 或 `0.0.0`；结果进程内缓存。
  */
@@ -28,7 +28,7 @@ export function getPackageVersion(): string {
         name?: unknown
         version?: unknown
       }
-      if (parsed.name === '@q-code-cli/q-code' && typeof parsed.version === 'string') {
+      if (parsed.name === 'q-code' && typeof parsed.version === 'string') {
         cachedPackageVersion = parsed.version
         return cachedPackageVersion
       }
