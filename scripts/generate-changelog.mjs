@@ -3,7 +3,7 @@
  *
  * 供 CI 与本地 `pnpm changelog` 使用；会过滤 `chore: release` 类提交。
  */
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,8 +25,8 @@ const TYPE_LABELS = {
   revert: '回退'
 }
 
-function exec(command) {
-  return execSync(command, { cwd: ROOT, encoding: 'utf-8' }).trim()
+function git(args) {
+  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf-8' }).trim()
 }
 
 function compareSemver(a, b) {
@@ -61,7 +61,7 @@ function getPackageVersion() {
 }
 
 function getVersionTags() {
-  const raw = exec('git tag -l "v*"')
+  const raw = git(['tag', '-l', 'v*'])
   if (!raw) return []
   const unique = [...new Set(raw.split('\n').map(normalizeTag).filter(Boolean))]
   return unique.sort(compareSemver)
@@ -69,9 +69,7 @@ function getVersionTags() {
 
 function getCommitsInRange(range) {
   try {
-    const log = exec(
-      `git log ${range} --pretty=format:'%h|%s|%ad' --date=short`
-    )
+    const log = git(['log', range, '--pretty=format:%h|%s|%ad', '--date=short'])
     if (!log) return []
     return log
       .split('\n')
@@ -96,7 +94,7 @@ function getCommitsInRange(range) {
 function getReleaseDate(version, changes) {
   if (changes.length > 0) return changes[0].date
   try {
-    return exec(`git log -1 --format=%ad --date=short v${version}`)
+    return git(['log', '-1', '--format=%ad', '--date=short', `v${version}`])
   } catch {
     return new Date().toISOString().slice(0, 10)
   }

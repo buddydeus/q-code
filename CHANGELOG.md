@@ -2,18 +2,11 @@
 
 本文件由 CI 根据 git tag 与 conventional commit 自动生成。
 
-当前版本：**1.2.3**
+当前版本：**1.2.4**
 
-## 1.2.3 (2026-05-29)
+## 1.2.4 (2026-05-29)
 
-- 修复: 主题鸭人格从 system prompt pipe 改为用户消息注入，避免破坏 system/tools cache
-- 维护: 同步更新日志
-- 重构: 小黄鸭默认人格与主题鸭可选 pipe
-- 维护: 同步更新日志
-- 其他: Merge pull request #1 from cheezone/feat/changelog-ci-and-startup-notice
-- 新功能: 主 Agent 降压鸭/屁老鸭人格与 /ya 切换
-- 修复: 更新日志改为 build/CI 自动生成，取消 PR 手动同步
-- 新功能: 添加更新日志 CI 与启动版本变更提示
+- 新功能: 添加更新日志 CI 与启动版本变更提示 (#64)
 - 新功能: add semantic markdown highlighting (#62)
 - 回退: restore scoped npm package name
 - 测试: stabilize session switch exit flow
@@ -22,16 +15,28 @@
 - 修复: 修正 skills 加载优先级并改进 /skills TUI 展示 (#61)
 - 修复: improve TUI cursor input (#57)
 - 新功能: add /models list picker (#53)
+
+## 1.2.3 (2026-05-28)
+
 - 修复: prevent explore agent recursive delegation (#52)
 - 新功能: make TUI cursor mode configurable (#51)
 - 修复: stabilize TUI sessions picker and cursor (#50)
 - 其他: Codex/powershell5 fallback (#48)
 - 修复: speed up initial /sessions list rendering (#47)
+
+## 1.2.2 (2026-05-28)
+
 - 新功能: add DeepSeek reasoning compatibility
 - 修复: add model wait observability (#42)
+
+## 1.2.1 (2026-05-28)
+
 - 其他: fix update command on Windows
 - 新功能: cache and refresh file mention index (#40)
 - 新功能: add persistent TUI input history (#39)
+
+## 1.2.0 (2026-05-27)
+
 - 新功能: add TUI session management (#38)
 - 新功能: add optional langfuse observability exporter (#36)
 - 新功能: add interactive q-code init wizard
