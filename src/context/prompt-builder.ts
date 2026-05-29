@@ -66,7 +66,7 @@ export class PromptBuilder {
   }
 }
 
-/** 核心行为准则 pipe。 */
+/** 核心行为准则 pipe（稳定前缀，便于 provider cache 命中）。 */
 export function coreRules(): PipeFn {
   return () => `你是 q-code，一个有工具调用能力的 AI 助手。
 你的行为准则：

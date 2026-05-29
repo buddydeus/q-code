@@ -63,6 +63,7 @@ export interface TerminalSessionInfo {
   agentMode: string
   taskMode: string
   cacheMode: CacheMode
+  duckPersona?: string
 }
 
 /** TUI 全局 UI 状态，由 {@link terminalReducer} 根据事件更新。 */
@@ -90,6 +91,16 @@ export interface TerminalState {
     activeModelName: string
     endpointLabel: string
   }
+  duckPicker?: {
+    personas: Array<{
+      id: string
+      displayName: string
+      subtitle: string
+      themed: boolean
+    }>
+    selectedIndex: number
+    activePersonaId: string
+  }
   progressItems: TerminalProgressItem[]
   backgroundAgents: TerminalBackgroundAgentItem[]
   jitMessages: string[]
@@ -112,6 +123,7 @@ export function createInitialTerminalState(): TerminalState {
     slashCommands: [],
     sessionPicker: undefined,
     modelsPicker: undefined,
+    duckPicker: undefined,
     progressItems: [],
     backgroundAgents: [],
     jitMessages: [],
@@ -384,7 +396,8 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
           modelName: event.modelName,
           agentMode: event.agentMode,
           taskMode: event.taskMode,
-          cacheMode: event.cacheMode
+          cacheMode: event.cacheMode,
+          ...(event.duckPersona ? { duckPersona: event.duckPersona } : {}),
         }
       }
 
@@ -475,6 +488,22 @@ export function terminalReducer(state: TerminalState, event: TerminalEvent): Ter
       return {
         ...state,
         modelsPicker: undefined
+      }
+
+    case 'duck_picker':
+      return {
+        ...state,
+        duckPicker: {
+          personas: event.personas,
+          selectedIndex: event.selectedIndex,
+          activePersonaId: event.activePersonaId
+        }
+      }
+
+    case 'duck_picker_close':
+      return {
+        ...state,
+        duckPicker: undefined
       }
 
     case 'progress':

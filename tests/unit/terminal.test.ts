@@ -372,6 +372,28 @@ describe('terminal state reducer', () => {
     expect(state.modelsPicker).toBeUndefined()
   })
 
+  it('tracks duck picker state without adding transcript noise', () => {
+    let state = createInitialTerminalState()
+    state = terminalReducer(state, {
+      type: 'duck_picker',
+      personas: [
+        { id: 'yellow', displayName: '小黄鸭', subtitle: '默认清爽款', themed: false },
+        { id: 'shanghai', displayName: '降压鸭', subtitle: '上海码农款', themed: true },
+        { id: 'heilongjiang', displayName: '屁老鸭', subtitle: '黑龙江直球款', themed: true }
+      ],
+      selectedIndex: 1,
+      activePersonaId: 'yellow'
+    })
+
+    expect(state.duckPicker?.selectedIndex).toBe(1)
+    expect(state.duckPicker?.personas[1]?.id).toBe('shanghai')
+    expect(state.duckPicker?.activePersonaId).toBe('yellow')
+    expect(state.transcript).toHaveLength(0)
+
+    state = terminalReducer(state, { type: 'duck_picker_close' })
+    expect(state.duckPicker).toBeUndefined()
+  })
+
   it('keeps status details hidden by default and toggles them without transcript noise', () => {
     let state = createInitialTerminalState()
     expect(state.statusDetailsVisible).toBe(false)
@@ -810,6 +832,7 @@ describe('terminal layout helpers', () => {
 
     expect(banner).toContain('小黄鸭已就位')
     expect(banner).toContain('/mode plan')
+    expect(banner).toContain('/ya 换鸭')
     expect(banner).toContain('pnpm run continue')
     expect(banner).not.toContain('/teams')
     expect(STARTUP_DUCK_SOURCE).toBe('startup_duck')
@@ -819,6 +842,11 @@ describe('terminal layout helpers', () => {
     const banner = formatStartupDuckBanner({ teamsEnabled: true })
 
     expect(banner).toContain('/teams 团队')
+  })
+
+  it('uses heilongjiang duck line in startup banner when requested', () => {
+    const banner = formatStartupDuckBanner({ duckPersona: 'heilongjiang' })
+    expect(banner).toContain('屁老鸭已就位')
   })
 
   it('estimates wrapped rows for long terminal lines', () => {

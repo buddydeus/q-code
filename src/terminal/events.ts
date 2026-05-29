@@ -111,6 +111,7 @@ export type TerminalEvent =
       agentMode: string
       taskMode: string
       cacheMode: CacheMode
+      duckPersona?: string
     })
   | (TerminalBaseEvent & {
       type: 'status_details_visibility'
@@ -161,6 +162,20 @@ export type TerminalEvent =
     })
   | (TerminalBaseEvent & {
       type: 'models_picker_close'
+    })
+  | (TerminalBaseEvent & {
+      type: 'duck_picker'
+      personas: Array<{
+        id: string
+        displayName: string
+        subtitle: string
+        themed: boolean
+      }>
+      selectedIndex: number
+      activePersonaId: string
+    })
+  | (TerminalBaseEvent & {
+      type: 'duck_picker_close'
     })
 
 export type TerminalEventListener = (event: TerminalEvent) => void

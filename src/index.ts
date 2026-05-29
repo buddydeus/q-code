@@ -57,6 +57,17 @@ import {
   toolGuide,
 } from './context/prompt-builder';
 import {
+  buildThemedDuckPersonaPrompt,
+  DEFAULT_DUCK_PERSONA_ID,
+  formatDuckPersonaHelp,
+  getDuckPersona,
+  isThemedDuckPersona,
+  listDuckPersonaPickerOptions,
+  resolveDuckPersonaArg,
+  resolveNextDuckPersona,
+  type DuckPersonaId,
+} from './context/duck-persona';
+import {
   deleteSession,
   exportSession,
   getSessionSummary,
@@ -232,6 +243,7 @@ import {
   isDebugMode,
 } from './runtime/cli-info';
 import { runCliUpdate } from './runtime/update';
+import { maybeShowChangelogNotice } from './runtime/changelog';
 import { installCrashGuard, sha256ForCrashGuard } from './runtime/crash-guard';
 import { runAuditCli } from './observability/audit-cli';
 import { runInitCli } from './runtime/init-cli';
@@ -619,6 +631,7 @@ async function main() {
   let planFilePath = getPlanFilePath(planOptions);
   let agentMode: ToolVisibilityMode = startInPlanMode ? 'plan' : 'normal';
   let taskMode: TaskMode = 'task';
+  let duckPersona: DuckPersonaId = DEFAULT_DUCK_PERSONA_ID;
   let needsPlanModeExitAttachment = false;
   let pendingPlanApproval = false;
   let pendingPlanSummary = '';
@@ -659,6 +672,7 @@ async function main() {
         modelName: currentModelNameForSnapshot(),
         agentMode,
         taskMode,
+        duckPersona,
         lastUserPromptDigest,
         ...(lastToolCall ? { lastToolCall } : {}),
         activeTurnInFlight,
@@ -1054,6 +1068,7 @@ async function main() {
       agentMode,
       taskMode,
       cacheMode: usageTracker.getCacheMode(),
+      duckPersona,
     });
   }
 
@@ -1296,6 +1311,7 @@ async function main() {
     print(
       `任务系统: ${taskMode} (${taskMode === 'task' ? 'Task V2 持久化任务图' : 'TodoWrite V1 会话清单'})`,
     );
+    print(`鸭子人格: ${getDuckPersona(duckPersona).name}`);
     if (agentMode === 'plan') print(`Plan 文件: ${planFilePath}`);
     print(
       `Context 上限: ${contextLimitTokens} tokens，压缩阈值: ${compactTriggerTokens} tokens (${Math.round(
@@ -1755,6 +1771,7 @@ async function main() {
           const result = await agentLoop(model, registry, messages, turnSystem, {
             maxOutputTokens: defaultMaxOutputTokens,
             escalatedMaxOutputTokens,
+            transientMessages: getDuckPersonaTransientMessages(),
             quiet: useTui,
             modelName: currentModelName(),
             modelWaitHeartbeatMs,
@@ -1981,6 +1998,17 @@ async function main() {
     activeStore.append(attachment);
   }
 
+  /** 主题鸭人格只作为本轮临时消息追加到请求末尾，不进入 system prompt 或会话历史。 */
+  function getDuckPersonaTransientMessages(): ModelMessage[] {
+    if (!isThemedDuckPersona(duckPersona)) return [];
+    return [
+      {
+        role: 'user',
+        content: buildThemedDuckPersonaPrompt(duckPersona),
+      },
+    ];
+  }
+
   async function handleModeCommand(command: string): Promise<void> {
     const requestedMode = command.slice('/mode'.length).trim();
     if (!requestedMode) {
@@ -2203,11 +2231,70 @@ async function main() {
         'Agents',
         (input) => handleTeamsCommand(input.raw),
       ),
+      command(
+        '/ya',
+        '查看或切换鸭子人格（默认小黄鸭；主题鸭：降压鸭 / 屁老鸭）',
+        '/ya [list|yellow|shanghai|heilongjiang|toggle]',
+        'Core',
+        (input) => handleYaCommand(input.args),
+        ['/duck'],
+      ),
       command('/exit', '退出当前会话', '/exit', 'Core', () => closeCli(), [
         '/quit',
         '/bye',
       ]),
     ];
+  }
+
+  function openDuckPicker(): void {
+    const personas = listDuckPersonaPickerOptions();
+    const preferredIndex = personas.findIndex((persona) => persona.id === duckPersona);
+    emitTerminal({
+      type: 'duck_picker',
+      personas,
+      selectedIndex: preferredIndex >= 0 ? preferredIndex : 0,
+      activePersonaId: duckPersona,
+    });
+  }
+
+  function handleYaCommand(rawArgs: string): void {
+    const arg = rawArgs.trim();
+    if (!arg) {
+      if (useTui) {
+        openDuckPicker();
+        return;
+      }
+      print(formatDuckPersonaHelp(duckPersona));
+      return;
+    }
+
+    const resolved = resolveDuckPersonaArg(arg);
+    if (!resolved) {
+      print(
+        '\n  [Ya] 未知选项。可用: list、yellow（小黄鸭）、shanghai（降压鸭）、heilongjiang（屁老鸭）、toggle',
+      );
+      return;
+    }
+
+    if (resolved === 'list') {
+      if (useTui) {
+        openDuckPicker();
+        return;
+      }
+      print(formatDuckPersonaHelp(duckPersona));
+      return;
+    }
+
+    const next = resolveNextDuckPersona(duckPersona, resolved);
+    if (next === duckPersona) {
+      print(`\n  [Ya] 当前已是 ${getDuckPersona(next).name}`);
+      return;
+    }
+
+    duckPersona = next;
+    emitSessionInfo();
+    const persona = getDuckPersona(next);
+    print(`\n  [Ya] 已切换到 ${persona.name}（${persona.subtitle}）`);
   }
 
   function handleModelCommand(input: SlashCommandInput): void {
@@ -3671,7 +3758,20 @@ async function main() {
 
   const startupDuckBanner = formatStartupDuckBanner({
     teamsEnabled: isAgentTeamsEnabled(),
+    duckPersona,
   });
+  if (!dumpSystemPrompt) {
+    await maybeShowChangelogNotice({
+      currentVersion: packageVersion,
+      print: (text) => {
+        if (useTui) {
+          emitTerminal({ type: 'message', role: 'system', text });
+        } else {
+          console.log(`\n${text}\n`);
+        }
+      },
+    });
+  }
   if (useTui) {
     emitTerminal({
       type: 'message',
