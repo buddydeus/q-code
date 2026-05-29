@@ -38,21 +38,25 @@ describe('CLI session switch integration', () => {
     const output = collectOutput(child)
 
     await waitForOutput(output, 'You:')
+    let promptCount = countPromptOccurrences(output)
     const pid = child.pid
 
     child.stdin.write('/sessions switch alpha-session\n')
     await waitForOutput(output, '已切换到会话 "Alpha Session" (alpha-session)')
+    promptCount = await waitForNextPrompt(output, promptCount)
 
     child.stdin.write('/sessions switch beta-session\n')
     await waitForOutput(output, '已切换到会话 "Beta Session" (beta-session)')
+    promptCount = await waitForNextPrompt(output, promptCount)
 
     child.stdin.write('/sessions switch alpha-session\n')
     await waitForOutput(output, '已切换到会话 "Alpha Session" (alpha-session)，1 条活跃历史。')
+    await waitForNextPrompt(output, promptCount)
 
     expect(child.pid).toBe(pid)
 
     child.stdin.write('/exit\n')
-    await waitForExit(child)
+    await waitForExit(child, output)
 
     const events = readAuditEvents(join(home.qcodeHome, 'logs'))
     const switches = events.filter((event) => event.event === 'session.switch')
@@ -61,7 +65,7 @@ describe('CLI session switch integration', () => {
       'beta-session',
       'alpha-session'
     ])
-  }, 20000)
+  }, 30000)
 })
 
 function seedSession(cwd: string, sessionDir: string, sessionId: string, displayName: string, prompt: string): void {
@@ -97,12 +101,35 @@ async function waitForOutput(output: { text: string }, needle: string, timeoutMs
   }
 }
 
-async function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs = 10000): Promise<void> {
+async function waitForNextPrompt(
+  output: { text: string },
+  previousCount: number,
+  timeoutMs = 10000
+): Promise<number> {
+  const started = Date.now()
+  while (countPromptOccurrences(output) <= previousCount) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`Timed out waiting for next prompt.\nOutput:\n${output.text}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return countPromptOccurrences(output)
+}
+
+function countPromptOccurrences(output: { text: string }): number {
+  return output.text.match(/\nYou: /g)?.length ?? 0
+}
+
+async function waitForExit(
+  child: ChildProcessWithoutNullStreams,
+  output: { text: string },
+  timeoutMs = 20000
+): Promise<void> {
   if (child.exitCode !== null) return
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill('SIGTERM')
-      reject(new Error('Timed out waiting for q-code process to exit'))
+      reject(new Error(`Timed out waiting for q-code process to exit.\nOutput:\n${output.text}`))
     }, timeoutMs)
     child.once('exit', (code) => {
       clearTimeout(timer)
