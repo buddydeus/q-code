@@ -10,7 +10,7 @@ describe('cli update', () => {
     expect(getUpdateCommand('win32').args).toEqual([
       'install',
       '-g',
-      'q-code@latest'
+      '@q-code-cli/q-code@latest'
     ])
   })
 
@@ -31,7 +31,7 @@ describe('cli update', () => {
     expect(code).toBe(0)
     expect(called).toBe(false)
     expect(stdout.join('\n')).toContain('q-code 当前版本: 1.2.3')
-    expect(stdout.join('\n')).toContain('npm install -g q-code@latest')
+    expect(stdout.join('\n')).toContain('npm install -g @q-code-cli/q-code@latest')
   })
 
   it('runs npm update command and reports success', async () => {
@@ -54,7 +54,7 @@ describe('cli update', () => {
     expect(calls).toEqual([
       {
         command: 'npm.cmd',
-        args: ['install', '-g', 'q-code@latest'],
+        args: ['install', '-g', '@q-code-cli/q-code@latest'],
         shell: true
       }
     ])
@@ -74,7 +74,7 @@ describe('cli update', () => {
     expect(code).toBe(7)
     expect(stderr.join('\n')).toContain('更新失败，退出码: 7')
     expect(stderr.join('\n')).toContain('permission denied')
-    expect(stderr.join('\n')).toContain('可手动执行: npm install -g q-code@latest')
+    expect(stderr.join('\n')).toContain('可手动执行: npm install -g @q-code-cli/q-code@latest')
   })
 
   it('reports runner throw errors as update failures', async () => {
@@ -91,7 +91,7 @@ describe('cli update', () => {
     expect(code).toBe(1)
     expect(stderr.join('\n')).toContain('更新失败，退出码: 1')
     expect(stderr.join('\n')).toContain('spawn EINVAL')
-    expect(stderr.join('\n')).toContain('可手动执行: npm install -g q-code@latest')
+    expect(stderr.join('\n')).toContain('可手动执行: npm install -g @q-code-cli/q-code@latest')
   })
 
   it('rejects unknown update arguments', async () => {

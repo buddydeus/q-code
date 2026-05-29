@@ -64,7 +64,7 @@ pnpm build                  # 调 scripts/build.mjs，产出 dist/
 
 - `q-code help` / `--help` / `-h`：打印帮助。
 - `q-code version` / `--version` / `-v`：打印版本号。
-- `q-code update [--dry-run]`：把全局 `q-code` 升级到 npm latest。
+- `q-code update [--dry-run]`：把全局 `@q-code-cli/q-code` 升级到 npm latest。
 - `q-code audit verify [--from YYYY-MM-DD] [--to YYYY-MM-DD]`：校验本地 NDJSON 审计日志。
 - `q-code audit tail [--session <id>] [--event <name>] [--follow]`：按会话/事件过滤查看审计日志。
 - `q-code init [--user|-u] [--local|-l]`：交互式初始化 `config.toml`（默认用户目录；`--local` 写入项目 `.q-code/config.toml`）。
