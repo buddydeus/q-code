@@ -2,7 +2,21 @@
 
 本文件由 CI 根据 git tag 与 conventional commit 自动生成。
 
-当前版本：**1.2.4**
+当前版本：**1.2.5**
+
+## 1.2.5 (2026-06-02)
+
+- 新功能: add output styles and user commands (#80)
+- 新功能: stabilize hooks lifecycle protocol (#78)
+- 其他: docs vitepress site (#75)
+- 文档: add VitePress internal documentation site (#74)
+- 修复: restore sessions with current model (#73)
+- 其他: fix terminal cursor compatibility (#70)
+- 修复: store large subagent outputs as artifacts (#69)
+- 其他: Improve prompt cache stability observability (#68)
+- 修复: stabilize system prompt cache (#67)
+- 其他: fix startup warmup and cli bootstrap
+- 新功能: **agent-monitor** 新增SubAgent监控面板与SubAgent管理功能 (#66)
 
 ## 1.2.4 (2026-05-29)
 

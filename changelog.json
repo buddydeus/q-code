@@ -1,7 +1,91 @@
 {
-  "generatedAt": "2026-05-29T10:52:36.348Z",
-  "currentVersion": "1.2.4",
+  "generatedAt": "2026-06-01T17:40:38.587Z",
+  "currentVersion": "1.2.5",
   "releases": [
+    {
+      "version": "1.2.5",
+      "date": "2026-06-02",
+      "changes": [
+        {
+          "hash": "feeec7a",
+          "subject": "feat: add output styles and user commands (#80)",
+          "date": "2026-06-02",
+          "type": "feat",
+          "message": "add output styles and user commands (#80)"
+        },
+        {
+          "hash": "6289085",
+          "subject": "feat: stabilize hooks lifecycle protocol (#78)",
+          "date": "2026-06-02",
+          "type": "feat",
+          "message": "stabilize hooks lifecycle protocol (#78)"
+        },
+        {
+          "hash": "f45e77a",
+          "subject": "docs vitepress site (#75)",
+          "date": "2026-06-01",
+          "type": "other",
+          "message": "docs vitepress site (#75)"
+        },
+        {
+          "hash": "05b6d14",
+          "subject": "docs: add VitePress internal documentation site (#74)",
+          "date": "2026-06-01",
+          "type": "docs",
+          "message": "add VitePress internal documentation site (#74)"
+        },
+        {
+          "hash": "0b31cc2",
+          "subject": "fix: restore sessions with current model (#73)",
+          "date": "2026-06-01",
+          "type": "fix",
+          "message": "restore sessions with current model (#73)"
+        },
+        {
+          "hash": "474c082",
+          "subject": "fix terminal cursor compatibility (#70)",
+          "date": "2026-06-01",
+          "type": "other",
+          "message": "fix terminal cursor compatibility (#70)"
+        },
+        {
+          "hash": "1cbd7ba",
+          "subject": "fix: store large subagent outputs as artifacts (#69)",
+          "date": "2026-05-31",
+          "type": "fix",
+          "message": "store large subagent outputs as artifacts (#69)"
+        },
+        {
+          "hash": "fa2fae6",
+          "subject": "Improve prompt cache stability observability (#68)",
+          "date": "2026-05-30",
+          "type": "other",
+          "message": "Improve prompt cache stability observability (#68)"
+        },
+        {
+          "hash": "93da8b6",
+          "subject": "fix: stabilize system prompt cache (#67)",
+          "date": "2026-05-30",
+          "type": "fix",
+          "message": "stabilize system prompt cache (#67)"
+        },
+        {
+          "hash": "a6b7876",
+          "subject": "fix startup warmup and cli bootstrap",
+          "date": "2026-05-29",
+          "type": "other",
+          "message": "fix startup warmup and cli bootstrap"
+        },
+        {
+          "hash": "440c78c",
+          "subject": "feat(agent-monitor): 新增SubAgent监控面板与SubAgent管理功能 (#66)",
+          "date": "2026-05-29",
+          "type": "feat",
+          "scope": "agent-monitor",
+          "message": "新增SubAgent监控面板与SubAgent管理功能 (#66)"
+        }
+      ]
+    },
     {
       "version": "1.2.4",
       "date": "2026-05-29",
