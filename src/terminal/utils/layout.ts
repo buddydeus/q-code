@@ -92,9 +92,10 @@ export function takeUnprintedStaticItems(
 function isLiveTurn(items: TranscriptItem[]): boolean {
   const hasUser = items.some((item) => item.role === 'user')
   if (!hasUser) return false
+  if (!items.some(isFinalAssistantItem)) return true
   if (items.some((item) => item.role === 'assistant' && item.isStreaming === true)) return true
   if (items.some((item) => item.kind === 'tool' && item.status === 'running')) return true
-  return !items.some(isFinalAssistantItem)
+  return false
 }
 
 function isFinalAssistantItem(item: TranscriptItem): boolean {

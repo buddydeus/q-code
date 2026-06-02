@@ -1219,6 +1219,28 @@ describe('terminal layout helpers', () => {
     expect(liveItems.map((item) => item.id)).toEqual(['1', '2'])
   })
 
+  it('keeps completed tool-only turns live until the final assistant answer removes tools', () => {
+    const beforeAnswer = [
+      transcriptItem('1', 'message', 'user', '介绍一下 hooks'),
+      { ...transcriptItem('2', 'tool', 'tool', 'Input: {"pattern":"src/hooks/**/*.ts"}\nResult: ok'), status: 'done' as const },
+      { ...transcriptItem('3', 'tool', 'tool', 'Input: {"path":"src/hooks/types.ts"}\nResult: ok'), status: 'done' as const },
+      { ...transcriptItem('4', 'tool', 'tool', 'Input: {"path":"src/hooks/events.ts"}\nResult: ok'), status: 'done' as const }
+    ]
+
+    const pending = splitStaticAndLiveTranscript(beforeAnswer)
+    expect(pending.staticItems).toEqual([])
+    expect(pending.liveItems.map((item) => item.id)).toEqual(['1', '2', '3', '4'])
+
+    const afterAnswer = [
+      ...beforeAnswer,
+      transcriptItem('5', 'message', 'assistant', 'Hooks 是生命周期事件钩子系统。')
+    ]
+
+    const completed = splitStaticAndLiveTranscript(afterAnswer)
+    expect(completed.staticItems.map((item) => item.id)).toEqual(['1', '5'])
+    expect(completed.liveItems).toEqual([])
+  })
+
   it('treats tool calls as one terminal row', () => {
     const item = transcriptItem(
       '1',
