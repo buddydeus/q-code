@@ -169,8 +169,8 @@ cp .env.example .env
 | `Q_CODE_HISTORY_MAX_BYTES`     | ❌   | 单个历史文件最大字节数，默认 5MB                             |
 | `Q_CODE_HISTORY_RUNTIME_LIMIT` | ❌   | 启动时载入内存的最近历史数量，默认 2000                      |
 | `Q_CODE_HISTORY_MAX_LINE_BYTES` | ❌   | 单条 JSONL 历史记录最大字节数，默认 32KB                     |
-| `Q_CODE_TUI_CURSOR`            | ❌   | TUI 输入光标模式：`auto` / `ansi` / `inline` / `off`，默认 `auto`；IDE 集成终端默认 `inline`，普通终端默认 `ansi` |
-| `Q_CODE_TUI_CURSOR_BLINK_MS`   | ❌   | 假光标闪烁间隔毫秒；默认不闪烁以减少 IDE 终端重绘抖动，设为正数后启用，设为 <=0 保持静态 |
+| `Q_CODE_TUI_CURSOR`            | ❌   | TUI 输入光标模式：`ansi` / `inline` / `off`；默认 `inline`（假光标） |
+| `Q_CODE_TUI_CURSOR_BLINK_MS`   | ❌   | 假光标闪烁间隔毫秒；默认不闪烁，仅在 `Q_CODE_TUI_CURSOR=inline` 且设为正数时启用 |
 | `Q_CODE_LANGFUSE_ENABLED`      | ❌   | Langfuse/OpenTelemetry 导出开关，默认 false                  |
 | `LANGFUSE_PUBLIC_KEY`          | ❌   | Langfuse project public key，仅开启 Langfuse 时需要          |
 | `LANGFUSE_SECRET_KEY`          | ❌   | Langfuse project secret key，仅开启 Langfuse 时需要          |
@@ -272,21 +272,7 @@ Hooks 用来把安全检查、审计、质量门控和上下文注入从“提�
 
 完整协议、退出码和示例脚本见 `docs/guide/hooks.md`。
 
-默认在交互式 TTY 中启动 Ink TUI。TUI 将 Agent 输出、工具调用、上下文占用、任务进度、SubAgent 状态和 token 用量统一渲染为事件流，支持 `Ctrl+J` 多行输入、`Ctrl+R` 历史搜索、`Esc` 清空/恢复输入、忙时 `Ctrl+C` 中断当前任务和 Markdown 代码块/列表/表格展示。多工具任务中，Agent 会在关键工具调用前后输出简短的公开进度说明；TUI 会按时间线把这些说明和工具调用交错展示，避免执行过程中只剩工具流水账。Markdown 行内内容会保留语义高亮：`**重点**`、inline code、URL、issue ref、文件路径和 `src/foo.ts:123` 行号会使用不同视觉通道，便于在长回复中快速定位关键信息。代码块使用 24-bit ANSI 主题 palette，TypeScript / TSX、diff 等内容在明暗终端中都保持较高对比；可通过 `Q_CODE_THEME=dark|light|auto` 控制配色，终端无法暴露背景色或 auto 判断不准时建议手动指定 `light` / `dark`，也可使用 `--no-color` / `NO_COLOR=1` 关闭全部颜色。输入区默认通过 `Q_CODE_TUI_CURSOR=auto` 选择光标策略：VSCode/Cursor/Windsurf/Trae/JetBrains 等 IDE 集成终端使用静态 inline 光标，避免 ANSI 光标追帧导致错位、闪烁和软换行抖动；普通终端保留真实 ANSI 光标以继续锚定输入法候选窗。
-
-TUI cursor mode 的 auto 策略由终端能力画像驱动，而不是只看单个产品名。调试时用 `--debug` 可看到类似 `TUI cursor mode: inline (...)` 的选择原因；排障时可临时设置 `Q_CODE_TUI_CURSOR=ansi|inline|off` 强制对比。
-
-| 环境 | auto mode | 状态 |
-| --- | --- | --- |
-| Windows + VSCode integrated terminal | `inline` | 稳定性优先，避免 xterm.js / ConPTY 追帧 |
-| Windows + Cursor / Windsurf / Trae terminal | `inline` | VSCode-compatible 终端同策略 |
-| JetBrains / IntelliJ IDEA / Gateway terminal | `inline` | 避免 JediTerm 光标同步漂移 |
-| Windows Terminal + PowerShell 7 / 5.1 | `ansi` | 保留真实光标 |
-| Git Bash / WSL | `ansi` | 普通终端路径 |
-| macOS Terminal / iTerm2 / WezTerm / Ghostty / Alacritty | `ansi` | 普通终端路径 |
-| CI / 非 TTY | `off` | 不渲染输入光标 |
-
-手工 dogfood 建议覆盖：中文输入、emoji / ZWJ、长路径、`@file` mention、多行输入、左右键、Home/End、历史搜索、`Esc` 清空/恢复、终端 resize，以及 `Q_CODE_TUI_CURSOR=ansi|inline|off` 强制模式对比。
+默认在交互式 TTY 中启动 Ink TUI。TUI 将 Agent 输出、工具调用、上下文占用、任务进度、SubAgent 状态和 token 用量统一渲染为事件流，支持 `Ctrl+J` 多行输入、`Ctrl+R` 历史搜索、`Esc` 清空/恢复输入、忙时 `Ctrl+C` 中断当前任务和 Markdown 代码块/列表/表格展示。多工具任务中，Agent 会在关键工具调用前后输出简短的公开进度说明；TUI 会按时间线把这些说明和工具调用交错展示，避免执行过程中只剩工具流水账。Markdown 行内内容会保留语义高亮：`**重点**`、inline code、URL、issue ref、文件路径和 `src/foo.ts:123` 行号会使用不同视觉通道，便于在长回复中快速定位关键信息。代码块使用 24-bit ANSI 主题 palette，TypeScript / TSX、diff 等内容在明暗终端中都保持较高对比；可通过 `Q_CODE_THEME=dark|light|auto` 控制配色，终端无法暴露背景色或 auto 判断不准时建议手动指定 `light` / `dark`，也可使用 `--no-color` / `NO_COLOR=1` 关闭全部颜色。输入区使用真实终端光标锚定输入法候选窗，避免 macOS IME 跑到屏幕角落。
 
 ### @file 文件引用
 
