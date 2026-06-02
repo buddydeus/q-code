@@ -1,7 +1,20 @@
 {
-  "generatedAt": "2026-06-01T17:40:38.587Z",
-  "currentVersion": "1.2.5",
+  "generatedAt": "2026-06-02T03:35:12.702Z",
+  "currentVersion": "1.2.6",
   "releases": [
+    {
+      "version": "1.2.6",
+      "date": "2026-06-02",
+      "changes": [
+        {
+          "hash": "bcab2dd",
+          "subject": "Revert \"fix terminal cursor compatibility (#70)\"",
+          "date": "2026-06-02",
+          "type": "other",
+          "message": "Revert \"fix terminal cursor compatibility (#70)\""
+        }
+      ]
+    },
     {
       "version": "1.2.5",
       "date": "2026-06-02",

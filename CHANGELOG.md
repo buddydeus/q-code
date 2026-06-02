@@ -2,7 +2,11 @@
 
 本文件由 CI 根据 git tag 与 conventional commit 自动生成。
 
-当前版本：**1.2.5**
+当前版本：**1.2.6**
+
+## 1.2.6 (2026-06-02)
+
+- 其他: Revert "fix terminal cursor compatibility (#70)"
 
 ## 1.2.5 (2026-06-02)
 
