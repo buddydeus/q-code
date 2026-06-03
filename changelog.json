@@ -1,7 +1,28 @@
 {
-  "generatedAt": "2026-06-02T03:35:12.702Z",
-  "currentVersion": "1.2.6",
+  "generatedAt": "2026-06-03T15:11:34.154Z",
+  "currentVersion": "1.2.7",
   "releases": [
+    {
+      "version": "1.2.7",
+      "date": "2026-06-02",
+      "changes": [
+        {
+          "hash": "af8d7e7",
+          "subject": "feat: enhance file-based project memory (#81)",
+          "date": "2026-06-02",
+          "type": "feat",
+          "message": "enhance file-based project memory (#81)"
+        },
+        {
+          "hash": "0ae0634",
+          "subject": "fix(tui): avoid duplicating tool-only turns",
+          "date": "2026-06-02",
+          "type": "fix",
+          "scope": "tui",
+          "message": "avoid duplicating tool-only turns"
+        }
+      ]
+    },
     {
       "version": "1.2.6",
       "date": "2026-06-02",

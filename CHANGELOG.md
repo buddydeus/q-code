@@ -2,7 +2,12 @@
 
 本文件由 CI 根据 git tag 与 conventional commit 自动生成。
 
-当前版本：**1.2.6**
+当前版本：**1.2.7**
+
+## 1.2.7 (2026-06-02)
+
+- 新功能: enhance file-based project memory (#81)
+- 修复: **tui** avoid duplicating tool-only turns
 
 ## 1.2.6 (2026-06-02)
 
