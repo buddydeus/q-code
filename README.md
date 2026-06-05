@@ -714,6 +714,7 @@ q-code 默认启用崩溃保护。遇到未捕获异常、未处理 Promise reje
 - 同步模式默认超时 60s，受 `Q_CODE_SHELL_TIMEOUT_MS` 控制；用户传入的 `timeoutMs` 会被 `Q_CODE_SHELL_TIMEOUT_MAX_MS` 限制。
 - 输出超过 `maxBufferBytes`（默认 4MB）不会杀进程，会把完整输出写入 `<Q_CODE_HOME>/shell-spills/<jobId>.log`，工具结果返回 head/tail 摘要和文件路径。
 - 执行过程中 stdout/stderr 会以节流进度写入 TUI 的 JIT 状态；`--classic` 下会直接打印进度行。
+- Windows 下 `command` 已经在 PowerShell 中执行，macOS/Linux 下 `command` 已经在 Bash 中执行；直接写当前系统的原生 shell 命令，不需要再套同类 shell，也不要混用其他平台方言。Windows 上常见的 `mkdir -p`、`dir /s /b`、`2>nul`、嵌套 `powershell -Command` 等脆弱写法会返回 lint warning；命令失败时，工具错误会包含 `stderrTail`、`stdoutTail`、`cwd`、`shell`、退出码和按实际 shell 生成的排查建议，便于模型换用其他思路。
 - `cwd` 默认只能位于当前工作目录内；确需跳出时设置 `Q_CODE_SHELL_ALLOW_ABS_CWD=true`。
 - 交互提示（如 `password:`、`(y/n)`、`Enter ...`）会在短暂宽限后终止并返回 `interactive_not_supported`；针对根目录的 `rm -rf /`（含 `-fr`、拆分 `-r`/`-f`、`--recursive`/`--force` 长选项、`sudo rm -rf /` 等常见写法）、fork bomb、`mkfs`、危险 `dd` 会直接拦截。
 

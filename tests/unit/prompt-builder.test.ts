@@ -156,6 +156,8 @@ describe('PromptBuilder System Prompt 管道', () => {
 
       expect(String(out)).toContain('[JIT Context Discipline]')
       expect(String(out)).toContain('list_directory/glob → grep → read_file')
+      expect(String(out)).toContain('Windows 下 command 已在 PowerShell 中运行')
+      expect(String(out)).toContain('macOS/Linux 下 command 已在 Bash 中运行')
       expect(String(out)).not.toContain('42')
       expect(String(out)).not.toContain('Agent/Explore')
       expect(String(out)).not.toContain('高成本: read_file')

@@ -173,6 +173,28 @@ describe('shell tool process management', () => {
     expect(warning.warnings.join('\n')).toContain('curl | sh/bash')
   })
 
+  it('warns about fragile Windows shell dialects', () => {
+    const warning = lintShellCommand(
+      'powershell -Command "$src = \'packages\\data-model\\src\'; mkdir -p output 2>nul; dir /s /b *Attributes*"',
+      'win32'
+    )
+
+    expect(warning.blocked).toBe(false)
+    expect(warning.warnings.join('\n')).toContain('不要再套 powershell -Command')
+    expect(warning.warnings.join('\n')).toContain('mkdir -p')
+    expect(warning.warnings.join('\n')).toContain('dir /s /b')
+    expect(warning.warnings.join('\n')).toContain('2>nul')
+  })
+
+  it('does not apply Windows shell dialect warnings on non-Windows platforms', () => {
+    const command = 'powershell -Command "mkdir -p output 2>nul; dir /s /b *Attributes*"'
+
+    expect(lintShellCommand(command, 'linux').warnings.join('\n')).not.toContain('PowerShell')
+    expect(lintShellCommand(command, 'linux').warnings.join('\n')).not.toContain('powershell -Command')
+    expect(lintShellCommand(command, 'darwin').warnings.join('\n')).not.toContain('PowerShell')
+    expect(lintShellCommand(command, 'darwin').warnings.join('\n')).not.toContain('powershell -Command')
+  })
+
   itIfSubprocessAvailable('blocks cwd outside registry cwd unless explicitly allowed', async () => {
     const cwd = tmp()
     const outside = tmp()
@@ -194,6 +216,59 @@ describe('shell tool process management', () => {
     expect(result.ok).toBe(false)
     expect(result.code).toBe('cwd_not_found')
     expect(result.error).toContain('cwd 不存在')
+  })
+
+  itIfSubprocessAvailable('includes concrete diagnostics in failed shell output', async () => {
+    const cwd = tmp()
+    const command =
+      process.platform === 'win32'
+        ? "Write-Error 'boom-detail'; exit 7"
+        : "echo boom-detail >&2; exit 7"
+    const result = expectEnvelope(await bashTool.execute({ command }, { cwd }))
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('exit_nonzero')
+    expect(result.error).toContain('code: exit_nonzero')
+    expect(result.error).toContain('exitCode: 7')
+    expect(result.error).toContain('cwd:')
+    expect(result.error).toContain(cwd)
+    expect(result.error).toContain('shellCommand:')
+    expect(result.error).toContain('shell:')
+    expect(result.error).toContain('stderrTail:')
+    expect(result.error).toContain('boom-detail')
+    expect(result.error).toContain('排查建议')
+    expect(result.error).toContain(
+      process.platform === 'win32'
+        ? 'PowerShell 原生命令'
+        : 'Bash 原生命令'
+    )
+  })
+
+  itIfSubprocessAvailable('classifies recovery advice by actual shell executable', async () => {
+    if (process.platform === 'win32') return
+    const cwd = tmp()
+    const result = expectEnvelope(
+      await bashTool.execute(
+        { command: "command -v powershell >/dev/null 2>&1; echo 'powershell failed here' >&2; exit 8" },
+        { cwd }
+      )
+    )
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('shellCommand: bash')
+    expect(result.error).toContain('Bash 原生命令')
+    expect(result.error).not.toContain('PowerShell 原生命令')
+  })
+
+  itIfSubprocessAvailable('includes shell dialect warnings in failed shell output', async () => {
+    if (process.platform !== 'win32') return
+    const cwd = tmp()
+    const result = expectEnvelope(await bashTool.execute({ command: 'mkdir -p output; exit 9' }, { cwd }))
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('warnings:')
+    expect(result.error).toContain('mkdir -p')
+    expect(result.error).toContain('PowerShell')
   })
 
   itIfSubprocessAvailable('times out slow synchronous commands with structured metadata', async () => {

@@ -169,6 +169,7 @@ export function toolDiscipline(): PipeFn {
       '- 代码/文件探索优先使用低成本到高成本阶梯：list_directory/glob → grep → read_file 的精确行段。',
       '- 只把能推进当前判断的最小证据放进当前上下文；不要调用当前工具列表中不存在的委派工具。',
       '- Skill、SubAgent、MCP 工具都遵循渐进式披露：先看名称/摘要/Schema，必要时再加载正文或执行高成本工具。',
+      '- 使用 f 执行 shell 命令时先看运行环境：Windows 下 command 已在 PowerShell 中运行，macOS/Linux 下 command 已在 Bash 中运行；直接写当前系统的原生 shell 命令，不要再套同类 shell，也不要混用其他平台方言。',
     ]
       .join('\n')
   }

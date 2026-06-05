@@ -83,11 +83,15 @@ let shellProcessCleanupRegistered = false
 export const bashTool: ToolDefinition = {
   name: 'f',
   description:
-    '执行 shell 命令。支持 timeoutMs/maxBufferBytes/cwd/env/stdin/background；长任务可后台运行后用 f_tail/f_status/f_kill 查询',
+    '执行 shell 命令。Windows 下 command 已在 PowerShell 中运行；macOS/Linux 下 command 已在 Bash 中运行。按当前系统直接写对应 shell 脚本，避免嵌套同类 shell 或混用其他平台方言。支持 timeoutMs/maxBufferBytes/cwd/env/stdin/background；长任务可后台运行后用 f_tail/f_status/f_kill 查询',
   parameters: {
     type: 'object',
     properties: {
-      command: { type: 'string', description: '要执行的 shell 命令' },
+      command: {
+        type: 'string',
+        description:
+          '要执行的 shell 命令。Windows 下直接写 PowerShell；macOS/Linux 下直接写 Bash。不要再套同类 shell，也不要混用其他平台方言。'
+      },
       cwd: { type: 'string', description: '可选工作目录，默认当前项目目录' },
       timeoutMs: {
         type: 'number',
@@ -225,7 +229,9 @@ async function runShellCommand(input: ShellToolInput, context: ToolExecutionCont
     return shellError('命令执行失败 (aborted)', 'aborted', {
       killedBy: 'abort',
       cwd: prepared.cwd,
+      shellCommand: prepared.shell.command,
       shell: formatShellInvocation(prepared.shell),
+      warnings: prepared.lint.warnings,
       stdoutTail: '',
       stderrTail: formatAbortReason(context.abortSignal),
       durationMs: 0
@@ -343,7 +349,9 @@ async function runShellCommand(input: ShellToolInput, context: ToolExecutionCont
         finish(
           shellError(message, isShellNotFoundError(error) ? 'shell_unavailable' : 'spawn_error', {
             cwd: prepared.cwd,
+            shellCommand: currentShell.command,
             shell: formatShellInvocation(currentShell),
+            warnings: prepared.lint.warnings,
             durationMs: Date.now() - started,
             stdoutTail,
             stderrTail
@@ -358,8 +366,10 @@ async function runShellCommand(input: ShellToolInput, context: ToolExecutionCont
           signal,
           killedBy,
           durationMs,
+          shellCommand: currentShell.command,
           shell: formatShellInvocation(currentShell),
           cwd: prepared.cwd,
+          warnings: prepared.lint.warnings,
           stderrTail: stderrTail.slice(-2000),
           stdoutTail: stdoutTail.slice(-500),
           ...(spillFile ? { spillFile } : {}),
@@ -432,7 +442,9 @@ function startBackgroundShellCommand(input: ShellToolInput, context: ToolExecuti
       : `命令执行失败 (spawn error): ${formatUnknownError(error)}`
     return shellError(message, code, {
       cwd: prepared.cwd,
+      shellCommand: shell.command,
       shell: formatShellInvocation(shell),
+      warnings: prepared.lint.warnings,
       durationMs: Date.now() - Date.parse(startedAt)
     })
   }
@@ -649,7 +661,10 @@ function isRmRecursiveForceRoot(command: string): boolean {
  * 对 shell 命令做静态 lint：拦截危险命令（如根目录 `rm -rf /`、fork bomb、mkfs、危险 dd），
  * 并对 curl/wget 管道到 sh/bash 给出警告。
  */
-export function lintShellCommand(command: string): ShellCommandLintResult {
+export function lintShellCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform
+): ShellCommandLintResult {
   const normalized = command.toLowerCase().replace(/\s+/g, ' ').trim()
   const warnings: string[] = []
   if (isRmRecursiveForceRoot(command)) {
@@ -669,6 +684,23 @@ export function lintShellCommand(command: string): ShellCommandLintResult {
   }
   if (/\bwget\b[\s\S]*\|\s*(?:sh|bash)\b/.test(normalized)) {
     warnings.push('检测到 wget | sh/bash，请确认来源可信。')
+  }
+  if (platform === 'win32') {
+    if (/\bpowershell(?:\.exe)?\s+(?:-[a-z]+\s+)*-command\b/.test(normalized)) {
+      warnings.push('f.command 已在 PowerShell 中运行，通常不要再套 powershell -Command；嵌套会让引号和 $变量 被二次解析。')
+    }
+    if (/\bmkdir\s+-p\b/.test(normalized)) {
+      warnings.push('Windows f.command 使用 PowerShell；mkdir -p 是 bash 写法，请改用 New-Item -ItemType Directory -Force。')
+    }
+    if (/\bdir\s+\/s\s+\/b\b/.test(normalized)) {
+      warnings.push('Windows f.command 使用 PowerShell；dir /s /b 是 cmd 写法，请改用 Get-ChildItem -Recurse -File。')
+    }
+    if (/\b(?:cmd|cmd\.exe)\s+\/c\b/.test(normalized)) {
+      warnings.push('f.command 已有 shell 包装；只有确需 cmd 内建语义时才使用 cmd /c，否则优先写 PowerShell 原生命令。')
+    }
+    if (/(^|[\s;&|])2>nul(?=$|[\s;&|])/.test(normalized)) {
+      warnings.push('PowerShell 中 2>nul 不等同 cmd 习惯写法；需要静默错误时优先用 -ErrorAction SilentlyContinue 或重定向到 $null。')
+    }
   }
   return { blocked: false, warnings }
 }
@@ -706,7 +738,58 @@ function renderShellSuccess(args: {
 }
 
 function shellError(message: string, code: string, metadata: Record<string, unknown>) {
-  return errorToolResult(message, { code, metadata })
+  return errorToolResult(formatShellError(message, code, metadata), { code, metadata })
+}
+
+function formatShellError(message: string, code: string, metadata: Record<string, unknown>): string {
+  const lines = [message, `code: ${code}`]
+  appendMetadataLine(lines, 'exitCode', metadata.exitCode)
+  appendMetadataLine(lines, 'signal', metadata.signal)
+  appendMetadataLine(lines, 'killedBy', metadata.killedBy)
+  appendMetadataLine(lines, 'durationMs', metadata.durationMs)
+  appendMetadataLine(lines, 'cwd', metadata.cwd)
+  appendMetadataLine(lines, 'shellCommand', metadata.shellCommand)
+  appendMetadataLine(lines, 'shell', metadata.shell)
+  appendMetadataLine(lines, 'spillFile', metadata.spillFile)
+  appendWarnings(lines, metadata.warnings)
+  appendTextBlock(lines, 'stderrTail', metadata.stderrTail)
+  appendTextBlock(lines, 'stdoutTail', metadata.stdoutTail)
+  lines.push(formatShellRecoveryAdvice(metadata.shellCommand, metadata.shell))
+  return lines.join('\n')
+}
+
+function formatShellRecoveryAdvice(shellCommand: unknown, shell: unknown): string {
+  const shellCommandText = typeof shellCommand === 'string' ? shellCommand.toLowerCase() : ''
+  const shellText = shellCommandText || getShellExecutableName(shell)
+  const shellAdvice =
+    shellText === 'powershell' || shellText === 'powershell.exe' || shellText === 'pwsh'
+      ? 'Windows 下 f.command 已在 PowerShell 中运行，优先改写为 PowerShell 原生命令，避免重复嵌套 powershell/cmd 或混用 bash 语法。'
+      : shellText === 'bash'
+        ? 'macOS/Linux 下 f.command 已在 Bash 中运行，优先改写为 Bash 原生命令，避免重复嵌套 bash/sh 或混用 PowerShell/cmd 语法。'
+        : '按当前 shell 改写为原生命令，避免重复嵌套 shell 或混用其他平台方言。'
+  return `排查建议: 根据 stderr/stdout 的具体错误调整命令；${shellAdvice}`
+}
+
+function getShellExecutableName(shell: unknown): string {
+  if (typeof shell !== 'string') return ''
+  return shell.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? ''
+}
+
+function appendMetadataLine(lines: string[], label: string, value: unknown): void {
+  if (value === undefined || value === null || value === '') return
+  lines.push(`${label}: ${String(value)}`)
+}
+
+function appendTextBlock(lines: string[], label: string, value: unknown): void {
+  if (typeof value !== 'string' || value.trim() === '') return
+  lines.push(`${label}:\n${value.trimEnd()}`)
+}
+
+function appendWarnings(lines: string[], value: unknown): void {
+  if (!Array.isArray(value)) return
+  const warnings = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '')
+  if (warnings.length === 0) return
+  lines.push(['warnings:', ...warnings.map((warning) => `- ${warning}`)].join('\n'))
 }
 
 function buildChildEnv(extra: Record<string, string> | undefined): NodeJS.ProcessEnv {
