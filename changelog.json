@@ -1,7 +1,21 @@
 {
-  "generatedAt": "2026-06-03T15:11:34.154Z",
-  "currentVersion": "1.2.7",
+  "generatedAt": "2026-06-05T06:49:07.953Z",
+  "currentVersion": "1.2.8",
   "releases": [
+    {
+      "version": "1.2.8",
+      "date": "2026-06-05",
+      "changes": [
+        {
+          "hash": "249137e",
+          "subject": "fix(shell): surface diagnostics and platform shell guidance",
+          "date": "2026-06-05",
+          "type": "fix",
+          "scope": "shell",
+          "message": "surface diagnostics and platform shell guidance"
+        }
+      ]
+    },
     {
       "version": "1.2.7",
       "date": "2026-06-02",

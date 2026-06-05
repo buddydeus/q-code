@@ -2,7 +2,11 @@
 
 本文件由 CI 根据 git tag 与 conventional commit 自动生成。
 
-当前版本：**1.2.7**
+当前版本：**1.2.8**
+
+## 1.2.8 (2026-06-05)
+
+- 修复: **shell** surface diagnostics and platform shell guidance
 
 ## 1.2.7 (2026-06-02)
 
