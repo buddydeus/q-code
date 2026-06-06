@@ -18,21 +18,9 @@ const RENAME_RETRY_DELAY_MS = 10
 const RENAME_MAX_RETRY_DELAY_MS = 250
 
 /**
- * 原子写入 JSON：即使在写入过程中崩溃，也尽量保证文件可恢复。
- *
- * 朴素的 `fs.writeFile(path, JSON.stringify(value))` 对稍大一点的
- * 内容会拆成多次 `write(2)` 系统调用。如果进程在中途被 SIGKILL
- * （Ctrl+C、OOM、内核 panic、系统挂起）打断，文件就可能只写了一半；
- * 下一次 `JSON.parse` 会直接失败，连整个 mailbox / team roster 都读不出来。
- *
- * 这里采用的模式是：先写到 `<path>.tmp-<pid>-<ts>`，fsync，再 `rename`
- * 覆盖正式路径。POSIX `rename(2)` 在同一文件系统上是原子的，因此读取方
- * 要么看到旧版本，要么看到新版本，不会看到半截文件。临时文件名带唯一后缀，
- * 可以避免两个写入者互相踩到对方的 tmp 文件（同一路径的并发写本来会由别处的
- * 进程内锁避免，这里只是再加一层防御）。
- */
-/**
  * 原子写入 JSON（pretty-print 两空格缩进）。
+ *
+ * 先写入唯一 tmp 文件，fsync 后再 rename 到目标路径，读取方只会看到旧版本或新版本。
  *
  * @param filePath - 目标文件路径
  * @param value - 可 `JSON.stringify` 的值

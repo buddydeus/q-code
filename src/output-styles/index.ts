@@ -8,21 +8,34 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { writeJsonAtomic } from '../utils/atomic-write'
 
+/** Output Style 来源：内置、用户级或项目级。 */
 export type OutputStyleSource = 'built-in' | 'user' | 'project'
 
+/** 一个可被 `/output-style` 激活的回答风格配置。 */
 export interface OutputStyleConfig {
+  /** 风格显示名，大小写不影响查找。 */
   name: string
+  /** `/output-style list` 展示的简短说明。 */
   description: string
+  /** 注入本轮动态上下文的风格 prompt。 */
   prompt: string
+  /** 是否明确保留默认编码指令。 */
   keepCodingInstructions: boolean
+  /** 配置来源；项目级同名覆盖用户级和内置。 */
   source: OutputStyleSource
 }
 
+/** 加载 Output Styles 后返回给 CLI/TUI 的完整状态。 */
 export interface OutputStyleLoadResult {
+  /** 去重后的全部风格。 */
   styles: OutputStyleConfig[]
+  /** 当前激活风格名；配置无效时回退 default。 */
   activeName: string
+  /** 读取或解析配置时产生的非阻塞告警。 */
   warnings: string[]
+  /** 用户级 settings.json 路径。 */
   userSettingsPath: string
+  /** 项目级 settings.json 路径。 */
   projectSettingsPath: string
 }
 
@@ -36,8 +49,10 @@ interface RawStyleFrontmatter {
   keepCodingInstructions?: unknown
 }
 
+/** 未显式设置时使用的内置风格名。 */
 export const DEFAULT_OUTPUT_STYLE_NAME = 'default'
 
+/** q-code 内置 Output Styles，始终先加载再被自定义同名风格覆盖。 */
 export const BUILT_IN_OUTPUT_STYLES: OutputStyleConfig[] = [
   {
     name: 'default',
@@ -149,11 +164,17 @@ export async function persistOutputStyle(
   return target
 }
 
+/**
+ * 在风格列表中按规范化名称查找。
+ *
+ * @returns 找到的风格；无匹配时返回 `undefined`
+ */
 export function findOutputStyle(styles: OutputStyleConfig[], name: string): OutputStyleConfig | undefined {
   const key = normalizeStyleName(name)
   return styles.find((style) => normalizeStyleName(style.name) === key)
 }
 
+/** 去掉首尾空白并转小写，用作 Output Style 查找 key。 */
 export function normalizeStyleName(name: string): string {
   return name.trim().toLowerCase()
 }

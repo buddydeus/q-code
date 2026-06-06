@@ -7,30 +7,50 @@ import { homedir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 
+/** Markdown User Command 来源：用户级或项目级。 */
 export type UserCommandSource = 'user' | 'project'
 
+/** 从单个 Markdown 模板解析出的用户命令配置。 */
 export interface UserCommandConfig {
+  /** 斜杠命令名，不含开头 `/`，子目录用 `:` 命名空间表示。 */
   name: string
+  /** `/commands` 列表中展示的说明。 */
   description: string
+  /** 参数提示文案。 */
   argumentHint?: string
+  /** 本轮模型覆盖值；只影响命令展开后的单轮请求。 */
   model?: string
+  /** 本轮允许工具收窄列表。 */
   allowedTools?: string[]
+  /** Markdown 正文模板。 */
   prompt: string
+  /** 命令来源；项目级同名覆盖用户级。 */
   source: UserCommandSource
+  /** 模板文件绝对路径。 */
   filePath: string
+  /** 当前命令解析出的非阻塞告警。 */
   warnings: string[]
 }
 
+/** 加载用户命令目录后的结果。 */
 export interface UserCommandLoadResult {
+  /** 按命令名排序、去重后的命令。 */
   commands: UserCommandConfig[]
+  /** 所有命令解析与冲突告警。 */
   warnings: string[]
+  /** 用户级 commands 目录。 */
   userCommandsDir: string
+  /** 项目级 commands 目录。 */
   projectCommandsDir: string
 }
 
+/** 单次命令展开后的 prompt 与参数 token。 */
 export interface ExpandedUserCommand {
+  /** 被展开的命令配置。 */
   command: UserCommandConfig
+  /** 替换占位符后的用户 prompt。 */
   prompt: string
+  /** shell 风格 tokenizer 拆出的参数。 */
   args: string[]
 }
 
@@ -151,6 +171,7 @@ export function tokenizeCommandArgs(input: string): string[] {
   return args
 }
 
+/** 去掉开头 `/`、首尾空白并转小写，作为命令冲突检测 key。 */
 export function normalizeCommandName(name: string): string {
   return name.replace(/^\//, '').trim().toLowerCase()
 }

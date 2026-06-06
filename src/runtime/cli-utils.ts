@@ -23,6 +23,9 @@ export function getNumberEnv(name: string, fallback: number): number {
 /**
  * 读取 (0,1) 区间比例；可写小数 `0.85` 或百分数 `85`。
  *
+ * @param name - 环境变量名
+ * @param fallback - 未设置或为空时的默认比例
+ * @returns 归一化到 (0,1) 的比例值
  * @throws 结果不在 (0,1) 时
  */
 export function getRatioEnv(name: string, fallback: number): number {
@@ -38,6 +41,8 @@ export function getRatioEnv(name: string, fallback: number): number {
  * 从 `process.argv` 解析 `--name value` 或 `--name=value`。
  *
  * @param name - 完整开关名，如 `--session`
+ * @param argv - 要解析的 argv，默认 `process.argv`
+ * @returns 开关后的非空字符串；未提供或下一项仍是开关时返回 `undefined`
  */
 export function getStringArg(name: string, argv: readonly string[] = process.argv): string | undefined {
   const eq = argv.find((arg) => arg.startsWith(`${name}=`))
@@ -63,7 +68,9 @@ export function stripAnsi(text: string): string {
 /**
  * 截断过长字符串或 JSON，避免 Ink 终端渲染超大工具输出。
  *
+ * @param value - 要预览的值
  * @param maxChars - 保留字符上限，默认 2000
+ * @returns 字符串预览；非字符串会先尝试 JSON 序列化
  */
 export function previewTerminalValue(value: unknown, maxChars = 2000): unknown {
   if (typeof value === 'string') return truncateTerminalText(value, maxChars)

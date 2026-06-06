@@ -5,21 +5,34 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { getProjectStorageInfo } from '../context/project-paths'
 
+/** SubAgent finalText 可直接内联回传的默认字符上限。 */
 export const DEFAULT_FINAL_OUTPUT_INLINE_CHAR_LIMIT = 8000
+/** 长 finalText 生成 head/tail preview 的默认字符上限。 */
 export const DEFAULT_FINAL_OUTPUT_PREVIEW_CHAR_LIMIT = 2000
+/** 失败/kill 错误文本可内联回传的默认字符上限。 */
 export const DEFAULT_ERROR_INLINE_CHAR_LIMIT = 4000
 
 /** SubAgent finalText 的控制面描述。 */
 export interface FinalOutputReference {
+  /** 未超限时的完整内联文本。 */
   inlineText?: string
+  /** UI、Hook 和通知使用的预览文本。 */
   preview: string
+  /** 原始 finalText 字符数。 */
   originalChars: number
+  /** 返回给控制面的结果是否被截断。 */
   resultTruncated: boolean
+  /** 长结果成功写入后的 artifact 文件路径。 */
   artifactFile?: string
+  /** 用户或调用方恢复完整内容的提示。 */
   recoveryHint?: string
 }
 
-/** 为 SubAgent finalText 生成可恢复引用，长结果会写入 `.sessions/projects/.../agent-artifacts/`。 */
+/**
+ * 为 SubAgent finalText 生成可恢复引用，长结果会写入 `.sessions/projects/.../agent-artifacts/`。
+ *
+ * @returns 控制面引用；artifact 写入失败时仍返回 preview 与恢复提示
+ */
 export async function createFinalOutputReference(params: {
   cwd: string
   sessionId: string
@@ -70,7 +83,11 @@ export async function createFinalOutputReference(params: {
   }
 }
 
-/** 计算 SubAgent final artifact 路径（不创建文件）。 */
+/**
+ * 计算 SubAgent final artifact 路径（不创建文件）。
+ *
+ * @returns `.sessions/projects/<project>/agent-artifacts/<session>/<agent>.final.md`
+ */
 export function getFinalOutputArtifactPath(params: {
   cwd: string
   sessionId: string
@@ -85,7 +102,11 @@ export function getFinalOutputArtifactPath(params: {
   )
 }
 
-/** 保护失败/kill 错误信息，避免异常文本撑大通知和 hook payload。 */
+/**
+ * 保护失败/kill 错误信息，避免异常文本撑大通知和 hook payload。
+ *
+ * @returns 截断后的文本、原始字符数和截断标记
+ */
 export function createBoundedText(value: string, maxChars = DEFAULT_ERROR_INLINE_CHAR_LIMIT): {
   text: string
   originalChars: number

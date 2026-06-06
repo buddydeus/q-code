@@ -1,9 +1,8 @@
 /**
- * Optional Langfuse/OpenTelemetry exporter.
+ * Langfuse / OpenTelemetry 可选导出器。
  *
- * Langfuse is intentionally an add-on: q-code keeps local audit/eval artifacts
- * as the source of truth and only exports compact, privacy-preserving telemetry
- * when explicitly enabled.
+ * 本模块只在显式启用时初始化 Langfuse SDK；默认保留本地审计/eval 产物为事实来源，
+ * 并在 `recordIO=false` 时只上传摘要、计数、hash 和诊断元数据。
  */
 import { createHash } from 'node:crypto'
 import type { AttributeValue } from '@opentelemetry/api'
@@ -36,46 +35,88 @@ const DEFAULT_FLUSH_INTERVAL_SECONDS = 5
 const DEFAULT_TIMEOUT_SECONDS = 5
 const MAX_METADATA_VALUE_LENGTH = 200
 
+/** 从环境变量解析后的 Langfuse 运行时配置。 */
 export interface LangfuseConfig {
+  /** 是否启用 Langfuse 导出。 */
   enabled: boolean
+  /** Langfuse public key；缺失时导出不会启动。 */
   publicKey?: string
+  /** Langfuse secret key；缺失时导出不会启动。 */
   secretKey?: string
+  /** Langfuse API base URL。 */
   baseUrl: string
+  /** 是否记录完整 prompt、工具输入输出和异常文本。 */
   recordIO: boolean
+  /** 单轮 trace 抽样比例，范围为 0 到 1。 */
   sampleRate: number
+  /** 可选环境标签。 */
   environment?: string
+  /** 可选发布版本标签。 */
   release?: string
+  /** span processor 批量 flush 条数。 */
   flushAt: number
+  /** span processor flush 间隔秒数。 */
   flushIntervalSeconds: number
+  /** Langfuse 请求超时秒数。 */
   timeoutSeconds: number
 }
 
+/** 单轮 Agent 请求导出所需的会话、模型和 Agent 身份上下文。 */
 export interface LangfuseTurnContext {
+  /** q-code 会话 ID。 */
   sessionId: string
+  /** 当前工作目录。 */
   cwd: string
+  /** 本轮使用的模型名。 */
   modelName: string
+  /** 原始用户请求；仅在 `recordIO=true` 时作为 input 上传。 */
   userQuery: string
+  /** 主 Agent 或 SubAgent 身份。 */
   agent: HookAgentContext
 }
 
+/** Agent loop 在一轮请求期间回传 Langfuse 观测事件的接口。 */
 export interface LangfuseTurnObserver {
+  /** 当前 observer 是否真的写入 Langfuse。 */
   readonly enabled: boolean
+  /** 已创建 trace 的 ID；noop observer 不提供。 */
   readonly traceId?: string
+  /**
+   * 返回 AI SDK step 级 telemetry 设置。
+   *
+   * @param step - Agent loop 的 1-based step 序号
+   * @returns 启用导出时返回 telemetry 配置，否则返回 `undefined`
+   */
   telemetryForStep(step: number): TelemetrySettings | undefined
+  /** 累计模型文本输出字符数。 */
   onText(text: string): void
+  /** 记录工具流式进度摘要。 */
   onToolProgress(event: AgentToolProgressEvent): void
+  /** 记录工具 start/end 生命周期。 */
   onToolEvent(event: AgentToolEvent): void
+  /** 记录工具最终输出摘要并关闭对应 span。 */
   onToolResult(event: AgentToolResultEvent): void
+  /** 记录本轮与累计 token 用量。 */
   onUsage(turnUsage: TokenUsage, totalUsage: TokenUsage): void
+  /** 记录单 step 的模型用量与诊断指标。 */
   onStepUsage(stepUsage: AgentStepUsage): void
+  /** 记录单 step 结束时的 TTFT、耗时和 TPS。 */
   onStepMetrics(event: AgentStepMetricEvent): void
+  /** 记录模型首 token 等待心跳/慢请求/停滞提示。 */
   onModelWait(event: AgentModelWaitEvent): void
+  /** 结束本轮 trace，并关闭未结束的工具/step span。 */
   end(args?: { status?: 'completed' | 'error'; error?: unknown }): void
 }
 
 let sdk: NodeSDK | undefined
 let configCache: LangfuseConfig | undefined
 
+/**
+ * 读取 Langfuse 配置；默认进程环境会缓存，测试传入自定义 env 时不缓存。
+ *
+ * @param env - 环境变量来源
+ * @returns 规范化后的 Langfuse 配置
+ */
 export function getLangfuseConfig(env: NodeJS.ProcessEnv = process.env): LangfuseConfig {
   if (env !== process.env) return buildLangfuseConfig(env)
   configCache ??= buildLangfuseConfig(env)
@@ -107,11 +148,17 @@ function buildLangfuseConfig(env: NodeJS.ProcessEnv): LangfuseConfig {
   }
 }
 
+/** 重置 SDK 与配置缓存，供单测隔离使用。 */
 export function resetLangfuseForTests(): void {
   sdk = undefined
   configCache = undefined
 }
 
+/**
+ * 在配置完整且启用时启动 Langfuse NodeSDK。
+ *
+ * @returns 启用状态和用户可见初始化说明
+ */
 export function initializeLangfuse(): { enabled: boolean; message: string } {
   const config = getLangfuseConfig()
   if (!config.enabled) return { enabled: false, message: 'disabled' }
@@ -142,12 +189,14 @@ export function initializeLangfuse(): { enabled: boolean; message: string } {
   return { enabled: true, message: `exporting to ${config.baseUrl}` }
 }
 
+/** 关闭已启动的 Langfuse SDK 并清空模块级引用。 */
 export async function shutdownLangfuse(): Promise<void> {
   if (!sdk) return
   await sdk.shutdown()
   sdk = undefined
 }
 
+/** 创建不写入任何遥测的 observer，供未启用或未抽中样本时使用。 */
 export function createNoopLangfuseTurnObserver(): LangfuseTurnObserver {
   return {
     enabled: false,
@@ -164,6 +213,14 @@ export function createNoopLangfuseTurnObserver(): LangfuseTurnObserver {
   }
 }
 
+/**
+ * 包裹一轮 Agent 执行并在启用时创建 Langfuse agent trace。
+ *
+ * @param args - 本轮会话、目录、模型和 Agent 上下文
+ * @param fn - 接收 observer 的业务执行函数
+ * @returns `fn` 的返回值
+ * @throws 透传 `fn` 抛出的原始错误；`recordIO=false` 时 Langfuse span 只记录脱敏错误
+ */
 export async function observeLangfuseTurn<T>(
   args: LangfuseTurnContext,
   fn: (observer: LangfuseTurnObserver) => Promise<T>
@@ -505,6 +562,11 @@ function maskLangfuseData(value: unknown): unknown {
   return result
 }
 
+/**
+ * 将任意值转为 Langfuse 安全摘要 payload。
+ *
+ * @returns 包含字符数与 sha256 的对象，不包含原文
+ */
 export function createLangfuseSummaryPayload(value: unknown): Record<string, unknown> {
   const text = typeof value === 'string' ? value : safeStringify(value)
   return summarizeText(text)

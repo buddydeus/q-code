@@ -12,6 +12,7 @@ import type { InfraState } from './types'
  * 返回项目级 `.q-code` 目录绝对路径。
  *
  * @param cwd - 项目工作目录
+ * @returns `<cwd>/.q-code` 的绝对路径
  */
 export function getProjectInfraDir(cwd: string): string {
   return path.join(path.resolve(cwd), '.q-code')
@@ -21,6 +22,7 @@ export function getProjectInfraDir(cwd: string): string {
  * 返回 `infra-state.json` 的绝对路径。
  *
  * @param cwd - 项目工作目录
+ * @returns Infra 状态文件绝对路径
  */
 export function getProjectInfraStatePath(cwd: string): string {
   return path.join(getProjectInfraDir(cwd), 'infra-state.json')
@@ -30,6 +32,7 @@ export function getProjectInfraStatePath(cwd: string): string {
  * 读取本地 Infra 同步状态；文件不存在或解析失败时返回 `null`。
  *
  * @param cwd - 项目工作目录
+ * @returns 解析成功的状态；不可读或解析失败时为 `null`
  */
 export async function readInfraState(cwd: string): Promise<InfraState | null> {
   try {
