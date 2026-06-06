@@ -13,13 +13,21 @@ export type AsyncAgentExecution = 'foreground' | 'background'
 
 /** 单个 SubAgent 的运行时条目（后台条目含可中止的 `AbortController`）。 */
 export interface AsyncAgentEntry {
+  /** 进程内唯一 Agent ID。 */
   agentId: string
+  /** Agent 定义类型，如内置或自定义 agent 名称。 */
   agentType: string
+  /** 用户请求中的任务描述。 */
   description: string
+  /** 实际传给 SubAgent 的 prompt。 */
   prompt: string
+  /** ISO 8601 启动时间。 */
   startedAt: string
+  /** 当前生命周期状态。 */
   status: AsyncAgentStatus
+  /** 前台同步或后台并行执行。 */
   execution: AsyncAgentExecution
+  /** 后台中止控制器；前台条目也保留同形字段。 */
   abortController: AbortController
   /** JSONL 任务输出文件路径（见 `task-output.ts`）。 */
   outputFile: string
@@ -27,33 +35,57 @@ export interface AsyncAgentEntry {
   cwd: string
   /** 所属主会话 id，用于 artifact/output 归档路径。 */
   sessionId: string
+  /** 是否使用了隔离执行环境。 */
   isolated: boolean
+  /** worktree 隔离路径。 */
   worktreePath?: string
+  /** worktree 隔离分支。 */
   worktreeBranch?: string
+  /** 已观察到的工具调用总数。 */
   toolUseCount: number
+  /** 最近一次工具名。 */
   lastToolName?: string
+  /** 累计 token 数。 */
   totalTokens?: number
+  /** 输入 token 数。 */
   inputTokens?: number
+  /** 输出 token 数。 */
   outputTokens?: number
+  /** SubAgent turn 数。 */
   turnCount?: number
+  /** 短 finalText 或 artifact preview。 */
   finalText?: string
+  /** 失败或终止错误文本。 */
   error?: string
+  /** 总耗时毫秒。 */
   durationMs?: number
+  /** 完成、失败或终止原因。 */
   reason?: string
 }
 
 /** `registerAsyncAgent` 的初始化字段（不含运行时派生状态）。 */
 export interface RegisterAsyncAgentInit {
+  /** 进程内唯一 Agent ID。 */
   agentId: string
+  /** Agent 定义类型。 */
   agentType: string
+  /** 任务描述。 */
   description: string
+  /** 传给 SubAgent 的 prompt。 */
   prompt: string
+  /** JSONL 输出文件路径。 */
   outputFile: string
+  /** 原始 cwd；缺省为当前进程 cwd。 */
   cwd?: string
+  /** 主会话 id；缺省为 `default`。 */
   sessionId?: string
+  /** 执行方式；缺省为后台。 */
   execution?: AsyncAgentExecution
+  /** 是否处于隔离执行。 */
   isolated?: boolean
+  /** worktree 隔离路径。 */
   worktreePath?: string
+  /** worktree 隔离分支。 */
   worktreeBranch?: string
 }
 
@@ -65,6 +97,9 @@ const listeners = new Set<AsyncAgentListener>()
 /**
  * 登记新的 SubAgent。`agentId` 重复时抛错。
  * 初始状态为 `running` 并通知订阅者。
+ *
+ * @returns 新建的运行时条目
+ * @throws `agentId` 已存在时抛错
  */
 export function registerAsyncAgent(init: RegisterAsyncAgentInit): AsyncAgentEntry {
   if (entries.has(init.agentId)) {
@@ -209,14 +244,17 @@ export function markAsyncAgentKilled(
   notify(agentId, next)
 }
 
+/** 按 ID 读取 SubAgent 条目。 */
 export function getAsyncAgent(agentId: string): AsyncAgentEntry | undefined {
   return entries.get(agentId)
 }
 
+/** 返回当前进程内的全部 SubAgent 条目。 */
 export function getAllAsyncAgents(): AsyncAgentEntry[] {
   return [...entries.values()]
 }
 
+/** 返回仍处于 running 状态的 SubAgent 条目。 */
 export function getRunningAsyncAgents(): AsyncAgentEntry[] {
   return getAllAsyncAgents().filter((entry) => entry.status === 'running')
 }

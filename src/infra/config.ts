@@ -13,6 +13,8 @@ const DEFAULT_TIMEOUT_MS = 5000
  * 从 `process.env` 加载 Infra 运行时配置。
  *
  * 缺省不启用；启用后需配合 `Q_CODE_INFRA_BASE_URL` 与 `Q_CODE_INFRA_TOKEN` 使用。
+ *
+ * @returns 规范化后的 Infra 配置；超时无效时使用默认值
  */
 export function loadInfraConfig(): InfraConfig {
   const baseUrl = clean(process.env.Q_CODE_INFRA_BASE_URL)
@@ -42,6 +44,8 @@ export function loadInfraConfig(): InfraConfig {
  * 加载上报给管理端的用户身份信息。
  *
  * `id` 可来自 `Q_CODE_INFRA_USER_ID`，否则回退到系统用户名。
+ *
+ * @returns 用户 ID、显示名和逗号分隔 groups
  */
 export function loadInfraUserInfo(): InfraUserInfo {
   return {

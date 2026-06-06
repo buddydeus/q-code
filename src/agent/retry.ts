@@ -57,6 +57,7 @@ export function calculateDelay(attempt: number, baseMs = 500, maxMs = 30000): nu
  * 异步等待指定毫秒（重试间隔用）。
  *
  * @param ms - 等待时长
+ * @returns 在计时器触发后 resolve 的 Promise
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

@@ -55,7 +55,9 @@ export interface TeamMember {
 export interface TeamFile {
   /** 磁盘 JSON 的 schema 版本。写入时总会带上；旧文件可能缺失。 */
   schemaVersion?: number
+  /** TeamCreate 时传入并经过 sanitize 后用于目录名的团队名。 */
   name: string
+  /** 用户提供的团队目标说明。 */
   description?: string
   /** TeamCreate 运行时的 epoch 毫秒时间戳。 */
   createdAt: number
@@ -97,6 +99,7 @@ export function getTeamDir(teamName: string): string {
   return path.join(getTeamsRoot(), sanitizeName(teamName))
 }
 
+/** 返回指定团队的 `team.json` 绝对路径。 */
 export function getTeamFilePath(teamName: string): string {
   return path.join(getTeamDir(teamName), 'team.json')
 }
@@ -161,6 +164,9 @@ export class TeamFileMissingError extends Error {
  *
  * 如果 team file 已丢失，会抛出 `TeamFileMissingError`；
  * 调用方（AgentTool 启动路径）会将其视为硬失败并回滚。
+ *
+ * @returns 写入后的团队文件
+ * @throws TeamFileMissingError 当团队文件不存在或不可读
  */
 export async function addTeamMember(teamName: string, member: TeamMember): Promise<TeamFile> {
   const file = await readTeamFileAsync(teamName)
@@ -175,6 +181,8 @@ export async function addTeamMember(teamName: string, member: TeamMember): Promi
 /**
  * 更新指定成员的 `isActive` 标志。
  * 团队文件不存在时返回 null（与 `addTeamMember` 的硬失败不同）。
+ *
+ * @returns 变更后的团队文件；没有变化时返回当前文件；文件缺失时为 `null`
  */
 export async function setMemberActive(
   teamName: string,
@@ -199,7 +207,11 @@ export async function setMemberActive(
   return next
 }
 
-/** 从 roster 移除成员；不存在则无操作并返回当前文件。 */
+/**
+ * 从 roster 移除成员；不存在则无操作并返回当前文件。
+ *
+ * @returns 变更后的团队文件；文件缺失时为 `null`
+ */
 export async function removeTeamMember(
   teamName: string,
   memberName: string
@@ -221,6 +233,8 @@ export async function removeTeamMember(
  * team.json，把这些过期的 active 标记清掉。
  *
  * 返回本次被修正过的团队名列表（用于启动横幅输出）。
+ *
+ * @returns 被清理过陈旧 active 标记的团队名列表
  */
 export async function reconcileStaleActiveMembers(): Promise<string[]> {
   const touched: string[] = []

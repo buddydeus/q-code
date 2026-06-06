@@ -58,6 +58,7 @@ function hash(input: string): string {
  *
  * @param toolName - 工具名
  * @param params - 工具入参
+ * @returns 形如 `<toolName>:<sha256-prefix>` 的指纹
  */
 export function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${hash(stableStringify(params))}`
@@ -67,6 +68,7 @@ export function hashToolCall(toolName: string, params: unknown): string {
  * 工具结果的稳定指纹（用于无进展 streak 检测）。
  *
  * @param result - 工具输出（已规范化为文本后传入）
+ * @returns 16 位 sha256 前缀
  */
 export function hashResult(result: unknown): string {
   return hash(stableStringify(result))
@@ -93,6 +95,10 @@ export function recordCall(toolName: string, params: unknown): void {
  * 为最近一条匹配的 `recordCall` 回填结果指纹（在 `tool-result` 时调用）。
  *
  * 从窗口末尾向前找首个「同名 + 同 argsHash 且尚无 resultHash」的记录。
+ *
+ * @param toolName - 工具名
+ * @param params - 工具入参
+ * @param result - 工具输出
  */
 export function recordResult(toolName: string, params: unknown, result: unknown): void {
   const argsHash = hashToolCall(toolName, params)
@@ -166,6 +172,7 @@ function getPingPongCount(currentHash: string): number {
  *
  * @param toolName - 工具名
  * @param params - 工具入参
+ * @returns 循环检测结果；`stuck=true` 时包含级别、检测器和提示文案
  */
 export function detect(toolName: string, params: unknown): DetectionResult {
   const argsHash = hashToolCall(toolName, params)
