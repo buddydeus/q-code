@@ -21,7 +21,6 @@ describe('dashboard data', () => {
   it('collects local artifacts and keeps sensitive text redacted', async () => {
     const store = new SessionStore({
       cwd: home.cwd,
-      sessionDir: '.sessions',
       sessionId: 'dash-session'
     })
     store.updateMetadata({ displayName: 'Dashboard Demo', model: 'test-model' })
@@ -171,7 +170,6 @@ describe('dashboard data', () => {
 
     const snapshot = collectDashboardData({
       cwd: home.cwd,
-      sessionDir: '.sessions',
       auditDir
     })
 
@@ -211,8 +209,7 @@ describe('dashboard data', () => {
     expect(JSON.stringify(snapshot.dataSources)).not.toContain(home.root)
 
     const detail = collectDashboardSessionDetail('dash-session', {
-      cwd: home.cwd,
-      sessionDir: '.sessions'
+      cwd: home.cwd
     })
     expect(detail?.messages).toHaveLength(2)
     expect(detail?.messages[0]?.preview).toContain('[redacted')

@@ -28,11 +28,7 @@ export interface FinalOutputReference {
   recoveryHint?: string
 }
 
-/**
- * 为 SubAgent finalText 生成可恢复引用，长结果会写入 `.sessions/projects/.../agent-artifacts/`。
- *
- * @returns 控制面引用；artifact 写入失败时仍返回 preview 与恢复提示
- */
+/** 为 SubAgent finalText 生成可恢复引用，长结果会写入 `~/sessions/<projectKey>/agent-artifacts/`。 */
 export async function createFinalOutputReference(params: {
   cwd: string
   sessionId: string
@@ -86,7 +82,7 @@ export async function createFinalOutputReference(params: {
 /**
  * 计算 SubAgent final artifact 路径（不创建文件）。
  *
- * @returns `.sessions/projects/<project>/agent-artifacts/<session>/<agent>.final.md`
+ * @returns `~/sessions/<projectKey>/agent-artifacts/<session>/<agent>.final.md`（或 `Q_CODE_SESSION_DIR` 覆盖后的等价路径）
  */
 export function getFinalOutputArtifactPath(params: {
   cwd: string

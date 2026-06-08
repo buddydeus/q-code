@@ -1,13 +1,15 @@
 /**
  * 本地 Dashboard 数据采集：读取会话、审计、SubAgent artifact 与 eval artifact。
  *
+ * 会话/tasks/agents 路径与 `getProjectStorageInfo` 一致（默认 `~/sessions/<projectKey>/`）。
+ * 审计事件仅采样最近若干 NDJSON 文件的 tail，非全量历史。
  * Dashboard 默认只展示摘要、计数和哈希，不渲染 prompt、文件内容、shell 输出或工具结果原文。
  */
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { ModelMessage } from 'ai'
-import { PROJECTS_DIR, getProjectStorageInfo } from '../context/project-paths'
+import { getProjectStorageInfo } from '../context/project-paths'
 import type { AuditRecord } from '../observability/audit'
 import { getAuditConfig } from '../observability/audit'
 import type { SessionSummary, TranscriptEntry } from '../session/store'
@@ -150,7 +152,10 @@ export interface DashboardCompactionSummary {
 
 /** 审计模块摘要。 */
 export interface DashboardAuditSummary {
+  /** 最近若干审计文件 tail 采样的事件数，非全量历史。 */
   totalEvents: number
+  /** 为 true 时表示 totalEvents/byEvent 等仅覆盖采样窗口。 */
+  sampled: boolean
   recentEvents: DashboardAuditEvent[]
   byEvent: Record<string, number>
   byTool: Record<string, number>
@@ -427,6 +432,7 @@ function collectAuditSummary(options: DashboardDataOptions): DashboardAuditSumma
 
   return {
     totalEvents: records.length,
+    sampled: true,
     recentEvents: recentRecords.map(summarizeAuditRecord),
     byEvent,
     byTool,
@@ -436,7 +442,7 @@ function collectAuditSummary(options: DashboardDataOptions): DashboardAuditSumma
 
 function collectAgentArtifacts(cwd: string, sessionDir?: string): DashboardAgentArtifactSummary {
   const storage = getProjectStorageInfo(cwd, sessionDir)
-  const projectsDir = join(storage.rootDir, PROJECTS_DIR)
+  const projectsDir = storage.projectDir
   const outputFiles = walkFiles(projectsDir, (filePath) => filePath.endsWith('.output'))
   const finalArtifactFiles = walkFiles(projectsDir, (filePath) => filePath.endsWith('.final.md'))
   const finalByKey = new Map<string, string>()
@@ -464,7 +470,7 @@ function collectAgentArtifacts(cwd: string, sessionDir?: string): DashboardAgent
 
 function collectTaskGraph(cwd: string, sessionDir?: string): DashboardTaskGraphSummary {
   const storage = getProjectStorageInfo(cwd, sessionDir)
-  const tasksRoot = join(storage.rootDir, PROJECTS_DIR)
+  const tasksRoot = storage.projectDir
   const taskFiles = walkFiles(tasksRoot, (filePath) => {
     return filePath.includes(`${separatorFragment()}tasks${separatorFragment()}`) && filePath.endsWith('.json')
   })

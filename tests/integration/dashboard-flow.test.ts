@@ -19,7 +19,6 @@ describe('dashboard flow', () => {
   it('serves dashboard html, api snapshot, filters and session detail', async () => {
     const store = new SessionStore({
       cwd: home.cwd,
-      sessionDir: '.sessions',
       sessionId: 'server-session'
     })
     store.append({ role: 'user', content: 'server secret prompt' })
@@ -56,7 +55,6 @@ describe('dashboard flow', () => {
 
     const dashboard = await startDashboardServer({
       cwd: home.cwd,
-      sessionDir: '.sessions',
       auditDir,
       host: '127.0.0.1',
       port: 0

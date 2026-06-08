@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ModelMessage } from 'ai'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { microcompact } from '../../src/context/compressor'
 import {
   buildOffloadManifest,
@@ -140,7 +140,7 @@ describe('Context Offloading', () => {
     expect(result.warnings).toEqual([])
     expect(result.entries[0]?.originalChars).toBe(largeOutput.length)
     const filePath = toSlashPath(result.entries[0]!.filePath)
-    expect(filePath).toContain('/.sessions/projects/')
+    expect(filePath).toContain(`${toSlashPath(home.userHome)}/sessions/`)
     expect(filePath).toContain('/offloads/jit-session/')
     expect(existsSync(result.entries[0]!.filePath)).toBe(true)
     expect(readFileSync(result.entries[0]!.filePath, 'utf-8')).toBe(largeOutput)
@@ -186,15 +186,7 @@ describe('Context Offloading', () => {
     })
 
     expect(result.offloaded).toBe(1)
-    const filePath = toSlashPath(result.entries[0]!.filePath)
-    const offloadDir = join(
-      home.cwd,
-      '.sessions',
-      'projects',
-      filePath.split('/.sessions/projects/')[1]!.split('/offloads/')[0]!,
-      'offloads',
-      'atomic-session'
-    )
+    const offloadDir = dirname(result.entries[0]!.filePath)
     expect(readdirSync(offloadDir).some((name) => name.includes('.tmp-'))).toBe(false)
   })
 

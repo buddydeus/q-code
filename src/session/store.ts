@@ -15,6 +15,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { basename, dirname, extname, join, resolve } from 'node:path'
@@ -25,6 +26,7 @@ import type { CacheMode, NormalizedUsage, UsageCost, UsageRecord, UsageTotals } 
 
 const LATEST_FILE = 'latest'
 const LEGACY_DEFAULT_SESSION_ID = 'default'
+const PROJECT_SESSION_LINK_ROOT = '.sessions'
 const TRASH_DIR = '.trash'
 const EXPORTS_DIR = 'exports'
 const META_EXTENSION = '.meta.json'
@@ -41,8 +43,10 @@ export interface SessionStoreOptions {
   sessionId?: string
   /** 为 true 时读取 `latest` 指针续接最近会话 */
   continueLatest?: boolean
-  /** 覆盖默认 `.sessions` 根目录（`Q_CODE_SESSION_DIR` 同级语义） */
+  /** 覆盖默认 `~/sessions` 根目录（`Q_CODE_SESSION_DIR` 同级语义） */
   sessionDir?: string
+  /** 启用 debug 便利映射（等价于 `Q_CODE_DEBUG` 的 session 链接行为）。 */
+  debug?: boolean
 }
 
 /** 当前会话在磁盘上的路径集合。 */
@@ -205,18 +209,25 @@ export class SessionStore {
     this.cwd = storage.cwd
     this.projectKey = storage.projectKey
     const requestedSessionId = normalizeSessionId(normalizedOptions.sessionId)
-    const latestSessionId = normalizedOptions.continueLatest
-      ? readLatestSessionId(storage.rootDir, this.projectKey)
-      : null
-    const fallbackSessionId =
-      normalizedOptions.continueLatest && hasLegacyDefaultSession(storage.rootDir)
-        ? LEGACY_DEFAULT_SESSION_ID
-        : null
+    const requestedStorage = requestedSessionId ? findActiveSessionStorage(storage, requestedSessionId) : undefined
+    const latestSession = normalizedOptions.continueLatest ? findLatestSession(storage) : undefined
+    const legacyDefaultStorage =
+      (normalizedOptions.continueLatest || requestedSessionId === LEGACY_DEFAULT_SESSION_ID) && !latestSession
+        ? findLegacyDefaultSessionStorage(storage)
+        : undefined
 
-    this.sessionId = requestedSessionId ?? latestSessionId ?? fallbackSessionId ?? createSessionId()
-    this.paths = getSessionPaths(storage, this.sessionId)
+    this.sessionId =
+      requestedSessionId ??
+      latestSession?.sessionId ??
+      (legacyDefaultStorage ? LEGACY_DEFAULT_SESSION_ID : undefined) ??
+      createSessionId()
+    this.paths = getSessionPaths(
+      requestedStorage ?? latestSession?.storage ?? legacyDefaultStorage ?? storage,
+      this.sessionId
+    )
 
     ensureProjectDir(this.paths)
+    ensureDebugProjectSessionLink(storage, this.paths, normalizedOptions)
     migrateLegacyDefaultSession(storage.rootDir, this.paths, this.sessionId)
 
     this.existedBeforeInit = existsSync(this.paths.transcriptPath)
@@ -450,7 +461,7 @@ export function createSessionId(): string {
  */
 export function listProjectSessions(options: Pick<SessionStoreOptions, 'cwd' | 'sessionDir'> = {}): SessionSummary[] {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
-  return listSessionsInProject(storage)
+  return listSessionsForCurrentProject(storage)
 }
 
 /**
@@ -463,44 +474,46 @@ export function listProjectSessionsFast(
   options: Pick<SessionStoreOptions, 'cwd' | 'sessionDir'> = {}
 ): SessionSummary[] {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
-  return listSessionsInProject(storage, { eagerReadTranscript: false })
+  return listSessionsForCurrentProject(storage, { eagerReadTranscript: false })
 }
 
 /** 列出存储根下所有项目的会话。 */
 export function listAllSessions(options: Pick<SessionStoreOptions, 'cwd' | 'sessionDir'> = {}): SessionSummary[] {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
-  const projectsDir = join(storage.rootDir, PROJECTS_DIR)
-  if (!existsSync(projectsDir)) return []
-  return readdirSync(projectsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) =>
-      listSessionsInProject({
-        ...storage,
-        projectKey: entry.name,
-        projectDir: join(projectsDir, entry.name)
-      })
-    )
-    .sort(sortSessionsByUpdatedAt)
+  const projectsDir = getProjectsParentDir(storage)
+  const allSessions = existsSync(projectsDir)
+    ? readdirSync(projectsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .flatMap((entry) =>
+          listSessionsInProject({
+            ...storage,
+            projectKey: entry.name,
+            projectDir: join(projectsDir, entry.name)
+          })
+        )
+    : []
+  return allSessions.sort(sortSessionsByUpdatedAt)
 }
 
 /** 快速列出跨项目会话（避免读取/解析 transcript）。 */
 export function listAllSessionsFast(options: Pick<SessionStoreOptions, 'cwd' | 'sessionDir'> = {}): SessionSummary[] {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
-  const projectsDir = join(storage.rootDir, PROJECTS_DIR)
-  if (!existsSync(projectsDir)) return []
-  return readdirSync(projectsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .flatMap((entry) =>
-      listSessionsInProject(
-        {
-          ...storage,
-          projectKey: entry.name,
-          projectDir: join(projectsDir, entry.name)
-        },
-        { eagerReadTranscript: false }
-      )
-    )
-    .sort(sortSessionsByUpdatedAt)
+  const projectsDir = getProjectsParentDir(storage)
+  const allSessions = existsSync(projectsDir)
+    ? readdirSync(projectsDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .flatMap((entry) =>
+          listSessionsInProject(
+            {
+              ...storage,
+              projectKey: entry.name,
+              projectDir: join(projectsDir, entry.name)
+            },
+            { eagerReadTranscript: false }
+          )
+        )
+    : []
+  return allSessions.sort(sortSessionsByUpdatedAt)
 }
 
 /** 返回单个会话详情，默认不含 trash。 */
@@ -510,7 +523,7 @@ export function getSessionSummary(
 ): SessionSummary | undefined {
   const normalizedSessionId = normalizeSessionId(sessionId)
   if (!normalizedSessionId) return undefined
-  return listSessionsInProject(getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir), {
+  return listSessionsForCurrentProject(getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir), {
     includeTrash: options.includeTrash
   }).find((session) => session.sessionId === normalizedSessionId)
 }
@@ -536,7 +549,8 @@ export function deleteSession(
 ): SessionSummary {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
   const normalizedSessionId = requireSessionId(sessionId)
-  const paths = getSessionPaths(storage, normalizedSessionId)
+  const sessionStorage = findSessionStorage(storage, normalizedSessionId, { includeTrash: options.force }) ?? storage
+  const paths = getSessionPaths(sessionStorage, normalizedSessionId)
   const summary = getSessionSummary(normalizedSessionId, {
     cwd: options.cwd,
     sessionDir: options.sessionDir,
@@ -564,9 +578,10 @@ export function restoreSession(
 ): SessionSummary {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
   const normalizedSessionId = requireSessionId(sessionId)
-  const paths = getSessionPaths(storage, normalizedSessionId)
+  const sessionStorage = findTrashedSessionStorage(storage, normalizedSessionId) ?? storage
+  const paths = getSessionPaths(sessionStorage, normalizedSessionId)
   const trashSessionDir = join(paths.trashDir, normalizedSessionId)
-  const trashedSummary = getTrashedSessionSummary(storage, normalizedSessionId)
+  const trashedSummary = getTrashedSessionSummary(sessionStorage, normalizedSessionId)
   if (!trashedSummary) throw new Error(`Trashed session not found: ${normalizedSessionId}`)
   if (existsSync(paths.transcriptPath)) throw new Error(`Session already exists: ${normalizedSessionId}`)
 
@@ -585,14 +600,16 @@ export function purgeSessions(
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
   const olderThanDays = options.olderThanDays ?? 30
   const threshold = Date.now() - olderThanDays * 24 * 60 * 60 * 1000
-  const candidates = listTrashedSessionsInProject(storage).filter((session) => {
-    const updatedAt = session.updatedAt ? Date.parse(session.updatedAt) : 0
-    return !Number.isFinite(updatedAt) || updatedAt <= threshold
-  })
+  const candidates = listSessionsForCurrentProject(storage, { includeTrash: true })
+    .filter((session) => session.trashed)
+    .filter((session) => {
+      const updatedAt = session.updatedAt ? Date.parse(session.updatedAt) : 0
+      return !Number.isFinite(updatedAt) || updatedAt <= threshold
+    })
   if (!options.confirm) return { candidates, deleted: [] }
 
   for (const session of candidates) {
-    rmSync(join(storage.projectDir, TRASH_DIR, session.sessionId), { recursive: true, force: true })
+    rmSync(dirname(session.transcriptPath), { recursive: true, force: true })
   }
   return { candidates, deleted: candidates }
 }
@@ -607,7 +624,8 @@ export function exportSession(
 ): SessionExportResult {
   const storage = getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir)
   const normalizedSessionId = requireSessionId(sessionId)
-  const paths = getSessionPaths(storage, normalizedSessionId)
+  const sessionStorage = findActiveSessionStorage(storage, normalizedSessionId) ?? storage
+  const paths = getSessionPaths(sessionStorage, normalizedSessionId)
   const entries = readEntriesFromPath(paths.transcriptPath)
   if (entries.length === 0 && !existsSync(paths.transcriptPath)) {
     throw new Error(`Session not found: ${normalizedSessionId}`)
@@ -653,7 +671,7 @@ export function searchSessions(
   if (!needle) return []
   const sessions = options.allProjects
     ? listAllSessions(options)
-    : listSessionsInProject(getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir), {
+    : listSessionsForCurrentProject(getProjectStorageInfo(options.cwd ?? process.cwd(), options.sessionDir), {
         includeTrash: options.includeTrash
       })
   const matches: SessionSearchMatch[] = []
@@ -681,6 +699,47 @@ export function searchSessions(
 
 function normalizeOptions(options: SessionStoreOptions | string): SessionStoreOptions {
   return typeof options === 'string' ? { sessionId: options } : options
+}
+
+function listSessionsForCurrentProject(
+  storage: ProjectStorageInfo,
+  options: { includeTrash?: boolean; eagerReadTranscript?: boolean } = {}
+): SessionSummary[] {
+  return listSessionsInProject(storage, options).sort(sortSessionsByUpdatedAt)
+}
+
+function getProjectsParentDir(storage: ProjectStorageInfo): string {
+  return storage.rootContainsProjectDirs ? storage.rootDir : join(storage.rootDir, PROJECTS_DIR)
+}
+
+function findActiveSessionStorage(storage: ProjectStorageInfo, sessionId: string): ProjectStorageInfo | undefined {
+  return existsSync(getSessionPaths(storage, sessionId).transcriptPath) ? storage : undefined
+}
+
+function findTrashedSessionStorage(storage: ProjectStorageInfo, sessionId: string): ProjectStorageInfo | undefined {
+  return existsSync(join(getSessionPaths(storage, sessionId).trashDir, sessionId)) ? storage : undefined
+}
+
+function findSessionStorage(
+  storage: ProjectStorageInfo,
+  sessionId: string,
+  options: { includeTrash?: boolean } = {}
+): ProjectStorageInfo | undefined {
+  return (
+    findActiveSessionStorage(storage, sessionId) ??
+    (options.includeTrash ? findTrashedSessionStorage(storage, sessionId) : undefined)
+  )
+}
+
+function findLatestSession(
+  storage: ProjectStorageInfo
+): { sessionId: string; storage: ProjectStorageInfo } | undefined {
+  const sessionId = readLatestSessionId(storage.projectDir)
+  return sessionId ? { sessionId, storage } : undefined
+}
+
+function findLegacyDefaultSessionStorage(storage: ProjectStorageInfo): ProjectStorageInfo | undefined {
+  return hasLegacyDefaultSession(storage.rootDir) ? storage : undefined
 }
 
 function listSessionsInProject(
@@ -866,6 +925,33 @@ function ensureProjectDir(paths: SessionPaths): void {
   mkdirSync(paths.projectDir, { recursive: true })
 }
 
+function ensureDebugProjectSessionLink(
+  storage: ProjectStorageInfo,
+  paths: SessionPaths,
+  options: SessionStoreOptions
+): void {
+  if (!isDebugSessionLinkEnabled(options)) return
+  const linkPath = join(storage.cwd, PROJECT_SESSION_LINK_ROOT, PROJECTS_DIR, storage.projectKey)
+  if (existsSync(linkPath)) return
+
+  mkdirSync(dirname(linkPath), { recursive: true })
+  try {
+    symlinkSync(paths.projectDir, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch {
+    // Debug-only convenience mapping: failing to create the link must not block session persistence.
+  }
+}
+
+function isDebugSessionLinkEnabled(options: SessionStoreOptions): boolean {
+  if (options.sessionDir?.trim() || process.env.Q_CODE_SESSION_DIR?.trim()) return false
+  return options.debug === true || isTruthyEnv(process.env.Q_CODE_DEBUG)
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())
+}
+
 function normalizeSessionId(sessionId: string | undefined): string | undefined {
   if (!sessionId) return undefined
   if (!/^[a-zA-Z0-9._-]+$/.test(sessionId) || sessionId === '.' || sessionId === '..') {
@@ -880,8 +966,8 @@ function requireSessionId(sessionId: string): string {
   return normalized
 }
 
-function readLatestSessionId(rootDir: string, projectKey: string): string | null {
-  const latestPath = join(rootDir, PROJECTS_DIR, projectKey, LATEST_FILE)
+function readLatestSessionId(projectDir: string): string | null {
+  const latestPath = join(projectDir, LATEST_FILE)
   if (!existsSync(latestPath)) return null
 
   let sessionId: string | undefined
@@ -894,7 +980,7 @@ function readLatestSessionId(rootDir: string, projectKey: string): string | null
   }
   if (!sessionId) return null
 
-  const transcriptPath = join(rootDir, PROJECTS_DIR, projectKey, `${sessionId}.jsonl`)
+  const transcriptPath = join(projectDir, `${sessionId}.jsonl`)
   return existsSync(transcriptPath) ? sessionId : null
 }
 

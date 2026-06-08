@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSessionModelBoundaryNotice } from '../../src/session/model-boundary'
 import {
@@ -32,6 +32,63 @@ describe('session management', () => {
       sessionId
     })
   }
+
+  it('defaults session storage to user home sessions', () => {
+    const store = new SessionStore({
+      cwd: home.cwd,
+      sessionId: 'global-default'
+    })
+
+    expect(store.paths.rootDir).toBe(join(home.userHome, 'sessions'))
+    expect(store.paths.projectDir).toBe(join(home.userHome, 'sessions', store.projectKey))
+    expect(store.paths.transcriptPath).toBe(join(home.userHome, 'sessions', store.projectKey, 'global-default.jsonl'))
+    expect(existsSync(join(home.cwd, '.sessions'))).toBe(false)
+    expect(listProjectSessions({ cwd: home.cwd }).map((session) => session.sessionId)).toEqual(['global-default'])
+  })
+
+  it('does not read project .sessions as default storage', () => {
+    const legacy = new SessionStore({
+      cwd: home.cwd,
+      sessionDir: '.sessions',
+      sessionId: 'legacy-local'
+    })
+    legacy.append({ role: 'user', content: 'old local history' })
+
+    const global = new SessionStore({
+      cwd: home.cwd,
+      sessionId: 'global-current'
+    })
+    global.append({ role: 'user', content: 'new global history' })
+
+    const otherCwd = join(home.root, 'other-project')
+    mkdirSync(otherCwd, { recursive: true })
+    const other = new SessionStore({
+      cwd: otherCwd,
+      sessionId: 'global-other'
+    })
+    other.append({ role: 'user', content: 'other project history' })
+
+    const sessions = listProjectSessions({ cwd: home.cwd })
+
+    expect(sessions.map((session) => session.sessionId)).toEqual(['global-current'])
+    expect(sessions.find((session) => session.sessionId === 'legacy-local')).toBeUndefined()
+    expect(sessions.find((session) => session.sessionId === 'global-current')?.transcriptPath).toBe(
+      global.paths.transcriptPath
+    )
+  })
+
+  it('maps project .sessions to the user home session directory in debug mode', () => {
+    const store = new SessionStore({
+      cwd: home.cwd,
+      sessionId: 'debug-link',
+      debug: true
+    })
+
+    const mappedProjectDir = join(home.cwd, '.sessions', 'projects', store.projectKey)
+
+    expect(lstatSync(mappedProjectDir).isSymbolicLink()).toBe(true)
+    expect(realpathSync(mappedProjectDir)).toBe(realpathSync(store.paths.projectDir))
+  })
 
   it('writes and backfills session metadata', () => {
     const store = makeStore('oauth-debug')

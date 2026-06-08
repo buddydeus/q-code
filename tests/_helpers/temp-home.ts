@@ -18,27 +18,41 @@ import { join } from 'node:path'
 export interface TempHome {
   root: string
   cwd: string
+  userHome: string
   qcodeHome: string
   dispose: () => void
 }
 
-const ENV_KEYS = ['Q_CODE_HOME', 'Q_CODE_TEAMS', 'Q_CODE_PROJECT_ROOT', 'Q_CODE_SESSION_DIR']
+const ENV_KEYS = [
+  'HOME',
+  'USERPROFILE',
+  'Q_CODE_DEBUG',
+  'Q_CODE_HOME',
+  'Q_CODE_TEAMS',
+  'Q_CODE_PROJECT_ROOT',
+  'Q_CODE_SESSION_DIR'
+]
 
 export function setupTempHome(label = 'q-code-test-'): TempHome {
   const root = mkdtempSync(join(tmpdir(), label))
   const cwd = join(root, 'project')
+  const userHome = join(root, 'home')
   const qcodeHome = join(root, 'qcode-home')
   mkdirSync(cwd, { recursive: true })
+  mkdirSync(userHome, { recursive: true })
   mkdirSync(qcodeHome, { recursive: true })
 
   const previous: Record<string, string | undefined> = {}
   for (const k of ENV_KEYS) previous[k] = process.env[k]
 
+  process.env.HOME = userHome
+  process.env.USERPROFILE = userHome
   process.env.Q_CODE_HOME = qcodeHome
 
   return {
     root,
     cwd,
+    userHome,
     qcodeHome,
     dispose: () => {
       for (const k of ENV_KEYS) {
