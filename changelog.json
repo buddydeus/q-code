@@ -1,7 +1,56 @@
 {
-  "generatedAt": "2026-06-05T06:49:07.953Z",
-  "currentVersion": "1.2.8",
+  "generatedAt": "2026-06-09T07:06:34.179Z",
+  "currentVersion": "1.2.9",
   "releases": [
+    {
+      "version": "1.2.9",
+      "date": "2026-06-09",
+      "changes": [
+        {
+          "hash": "6f603b9",
+          "subject": "fix: preserve markdown fast-path rendering (#92)",
+          "date": "2026-06-09",
+          "type": "fix",
+          "message": "preserve markdown fast-path rendering (#92)"
+        },
+        {
+          "hash": "f6d349c",
+          "subject": "feat(tui): 稳定流式 Markdown 渲染 (#91)",
+          "date": "2026-06-09",
+          "type": "feat",
+          "scope": "tui",
+          "message": "稳定流式 Markdown 渲染 (#91)"
+        },
+        {
+          "hash": "9fc286c",
+          "subject": "feat: store sessions under user home (#90)",
+          "date": "2026-06-09",
+          "type": "feat",
+          "message": "store sessions under user home (#90)"
+        },
+        {
+          "hash": "205a43f",
+          "subject": "feat: add local dashboard (#84)",
+          "date": "2026-06-09",
+          "type": "feat",
+          "message": "add local dashboard (#84)"
+        },
+        {
+          "hash": "e3fda0f",
+          "subject": "feat: 优化 agent prompt 注入管线 (#83)",
+          "date": "2026-06-08",
+          "type": "feat",
+          "message": "优化 agent prompt 注入管线 (#83)"
+        },
+        {
+          "hash": "f3103a1",
+          "subject": "docs: document src public boundaries (#82)",
+          "date": "2026-06-06",
+          "type": "docs",
+          "message": "document src public boundaries (#82)"
+        }
+      ]
+    },
     {
       "version": "1.2.8",
       "date": "2026-06-05",

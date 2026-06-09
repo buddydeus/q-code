@@ -2,7 +2,16 @@
 
 本文件由 CI 根据 git tag 与 conventional commit 自动生成。
 
-当前版本：**1.2.8**
+当前版本：**1.2.9**
+
+## 1.2.9 (2026-06-09)
+
+- 修复: preserve markdown fast-path rendering (#92)
+- 新功能: **tui** 稳定流式 Markdown 渲染 (#91)
+- 新功能: store sessions under user home (#90)
+- 新功能: add local dashboard (#84)
+- 新功能: 优化 agent prompt 注入管线 (#83)
+- 文档: document src public boundaries (#82)
 
 ## 1.2.8 (2026-06-05)
 
