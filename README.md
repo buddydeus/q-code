@@ -144,7 +144,7 @@ cp .env.example .env
 | `Q_CODE_MODEL_REQUEST_TIMEOUT_MS` | ❌ | 单步模型请求总超时，默认不启用；建议 OpenAI-compatible 中转按需设置 |
 | `Q_CODE_PLAN_INTENT`          | ❌   | Plan Mode 语义入口：`auto` / `suggest` / `off`，默认 `auto`；pending plan 自然语言审批始终启用 |
 | `Q_CODE_PLAN_INTENT_MODEL_TIMEOUT_MS` | ❌ | pending plan 本地规则无法判断时的模型兜底超时，默认 3000ms；设为 0 关闭模型兜底 |
-| `Q_CODE_SESSION_DIR`           | ❌   | 会话存储目录，默认 .sessions                                  |
+| `Q_CODE_SESSION_DIR`           | ❌   | 会话存储目录覆盖；默认 `~/sessions`；debug 模式会在项目 `.sessions` 下创建链接映射 |
 | `Q_CODE_HOME`                  | ❌   | q-code 全局配置目录，默认 `~/.q-code`                         |
 | `Q_CODE_DEBUG`                 | ❌   | 设为 1/true/yes/on 显示启动诊断信息（等价于 `--debug`）       |
 | `Q_CODE_CHANGELOG`             | ❌   | 启动时展示版本更新说明，默认开启；设为 0/false/off/no 可关闭 |
@@ -529,7 +529,7 @@ MCP 工具默认 `shouldDefer: true`，只有通过 `tool_search` 激活后才�
 Offload 文件路径：
 
 ```text
-.sessions/projects/<projectKey>/offloads/<sessionId>/tool-result-0001-<hash>.txt
+~/sessions/<projectKey>/offloads/<sessionId>/tool-result-0001-<hash>.txt
 ```
 
 marker 示例：
@@ -538,7 +538,7 @@ marker 示例：
 [tool result offloaded]
 tool: read_file
 original_chars: 24000
-file: /abs/path/.sessions/projects/<projectKey>/offloads/<sessionId>/tool-result-0001-<hash>.txt
+file: ~/sessions/<projectKey>/offloads/<sessionId>/tool-result-0001-<hash>.txt
 restore: 如需完整原始工具结果，使用 read_file 读取上面的 file 路径。
 preview:
 ...
@@ -612,7 +612,7 @@ q-code dashboard --open         # 启动后打开浏览器
 q-code dashboard --audit-dir ~/.q-code/logs
 ```
 
-默认监听 `127.0.0.1:48888`，如果端口被占用会尝试后续端口；`--host` 仅允许 `127.0.0.1`、`localhost` 或 `::1` 这类 loopback 地址。数据源包括 `.sessions/projects/*/*.jsonl` 与 metadata、`<Q_CODE_HOME>/logs/audit-*.ndjson`、`.sessions/projects/*/tasks/**`、`.sessions/projects/*/async-agents/**`、`.sessions/projects/*/agent-artifacts/**` 和 `.q-code/evals/**`。Dashboard 不上传本地数据；页面和 API 默认只展示摘要、哈希、计数、token 与成本，不返回本机绝对路径，也不渲染 prompt、文件内容、shell 输出或工具输入/输出原文。
+默认监听 `127.0.0.1:48888`，如果端口被占用会尝试后续端口；`--host` 仅允许 `127.0.0.1`、`localhost` 或 `::1` 这类 loopback 地址。数据源包括 `~/sessions/<projectKey>/*.jsonl` 与 metadata、`~/sessions/<projectKey>/tasks/**`、`~/sessions/<projectKey>/async-agents/**`、`~/sessions/<projectKey>/agent-artifacts/**`（可用 `Q_CODE_SESSION_DIR` 覆盖存储根）、`<Q_CODE_HOME>/logs/audit-*.ndjson`（审计计数为最近文件采样，非全量）和 `.q-code/evals/**`。Dashboard 不上传本地数据；页面和 API 默认只展示摘要、哈希、计数、token 与成本，不返回本机绝对路径，也不渲染 prompt、文件内容、shell 输出或工具输入/输出原文。
 
 #### Langfuse 观测导出
 
@@ -814,7 +814,7 @@ q-code 支持从两个目录扫描“目录式”自定义工具，并按固定�
 
 Plan Mode 是"只看不动"的规划模式，适合复杂、多文件、需要先确认方案的任务。q-code 不引入权限系统，而是在每次模型请求前动态过滤工具列表：Plan Mode 下只暴露只读工具、`plan_write` 和 `exit_plan_mode`，隐藏 `write_file`、`edit_file`、`f`、`memory_write` 等会修改项目或环境的工具。
 
-计划文件存储在 `.sessions/projects/<projectKey>/plans/<sessionId>.md`。模型完成探索后会写入计划并调用 `exit_plan_mode`，当前 loop 会停住等待用户确认，避免"退出计划后立刻实现一遍、审批后又实现一遍"的问题。
+计划文件存储在 `~/sessions/<projectKey>/plans/<sessionId>.md`。模型完成探索后会写入计划并调用 `exit_plan_mode`，当前 loop 会停住等待用户确认，避免"退出计划后立刻实现一遍、审批后又实现一遍"的问题。
 
 计划待确认时，可以直接回复自然语言：`可以`、`开始吧`、`ok`、`go` 等会批准并执行；`补充测试策略`、`调整风险说明` 等会作为反馈继续规划；`退出计划模式` 或 `取消` 会回到 normal 且不执行。否定语义优先，例如 `不要执行`、`先别开始` 不会误判为批准。本地规则无法判断时，会用当前会话模型做一次短超时 JSON intent judge 兜底；模型失败、超时或低置信度时仍回退到提示，不会猜测执行。
 
@@ -839,7 +839,7 @@ Plan Mode 是"只看不动"的规划模式，适合复杂、多文件、需要�
 存储结构：
 
 ```text
-.sessions/projects/<projectKey>/tasks/<sessionId>/
+~/sessions/<projectKey>/tasks/<sessionId>/
 ├── 1.json
 ├── 2.json
 └── .highwatermark
@@ -1061,7 +1061,7 @@ You are a focused code review sub-agent. Return findings first, then residual ri
 `run_in_background: true` 会让 `Agent` 工具立即返回 `<async_launched>`，其中包含 `agent_id` 和 `.output` 文件路径。后台子 Agent 使用独立 `AbortController` 继续运行，不会阻塞主对话。运行过程中会把进度写入 JSONL：
 
 ```text
-.sessions/projects/<projectKey>/async-agents/<sessionId>/<agentId>.output
+~/sessions/<projectKey>/async-agents/<sessionId>/<agentId>.output
 ```
 
 常见事件包括 `started`、`text`、`tool_use`、`tool_result`、`turn_usage`、`completed`、`failed`。后台任务完成、失败或被终止后，会进入 pending notification 队列；下一轮用户输入开始前，q-code 会把 `<task-notification>` 注入对话，让主 Agent 继续基于结果工作。
@@ -1069,7 +1069,7 @@ You are a focused code review sub-agent. Return findings first, then residual ri
 同步和后台 SubAgent 的长最终产物会写入：
 
 ```text
-.sessions/projects/<projectKey>/agent-artifacts/<sessionId>/<agentId>.final.md
+~/sessions/<projectKey>/agent-artifacts/<sessionId>/<agentId>.final.md
 ```
 
 短结果仍在 `<sub_agent_result>` 或 `<task-notification><result>` 中内联；长结果改为 `<sub_agent_result_preview>` 或 `<result_preview>`，并包含 `artifact_file`、`original_chars`、`result_truncated` 和恢复说明。`subagent_stop` Hook 对短结果继续提供 `finalText`；长结果只提供 `finalTextPreview`、`artifactFile`、`originalChars`、`resultTruncated` 和 `recoveryHint`，避免外部命令或 webhook 被大 payload 撑爆。
@@ -1257,14 +1257,14 @@ prefix = "q-code-kb"
 
 #### 会话持久化
 
-采用 JSONL append-only 格式存储在 `.sessions/projects/<projectKey>/<sessionId>.jsonl`，支持：
+采用 JSONL append-only 格式存储在 `~/sessions/<projectKey>/<sessionId>.jsonl`，支持：
 
 - `--continue` 恢复最近一次会话
 - `--session=<id>` 指定并恢复已有会话；若不存在则用该 ID 创建新会话
 - 崩溃恢复：逐行解析，损坏行跳过
 - 压缩快照全量写入，恢复时从最后快照后加载
 
-每个会话会同步维护 `.sessions/projects/<projectKey>/<sessionId>.meta.json`，记录展示名、创建/更新时间、消息数、tokens、首条用户输入摘要、模型和 tags。老会话没有 meta 时，`/sessions` 首次列表会从 JSONL 自动回填。
+每个会话会同步维护 `~/sessions/<projectKey>/<sessionId>.meta.json`，记录展示名、创建/更新时间、消息数、tokens、首条用户输入摘要、模型和 tags。默认不再把会话保留在当前项目 `.sessions/projects/<projectKey>/`；开启 `Q_CODE_DEBUG=true` 或使用 `--debug` 时，会在项目 `.sessions/projects/<projectKey>` 创建指向 `~/sessions/<projectKey>` 的链接映射，便于本地排查。老会话没有 meta 时，`/sessions` 首次列表会从 JSONL 自动回填。
 
 Session/history 只负责恢复上下文，不决定后续模型。`--continue`、`--session=<id>` 和 TUI `/sessions switch` 之后的新请求都会使用当前 runtime 解析出的模型（或本进程内 `/model` 覆盖值）；历史 metadata 中的模型只用于展示、审计、usage 和排障。如果历史模型与当前模型不同，q-code 会对该会话最多提示一次，并说明后续新请求将使用当前模型。
 
@@ -1272,7 +1272,7 @@ TUI 内可直接使用 `/sessions` 管理会话，不需要重启进程：
 
 | 命令 | 说明 |
 | ---- | ---- |
-| `/sessions` 或 `/sessions list [--all]` | 列出最近会话；TUI 中可用 ↑/↓ 选择并 Enter 切换 |
+| `/sessions` 或 `/sessions list` | 列出当前项目最近会话；TUI 中可用 ↑/↓ 选择并 Enter 切换 |
 | `/sessions info [<id>]` | 查看当前或指定会话详情 |
 | `/sessions switch <id>` | 不重启进程切换到指定会话 |
 | `/sessions new ["<displayName>"]` | 新建会话并立即切换 |
@@ -1280,7 +1280,7 @@ TUI 内可直接使用 `/sessions` 管理会话，不需要重启进程：
 | `/sessions delete <id> [--force]` | 默认软删到 `.trash`；`--force` 物理删除 |
 | `/sessions restore <id>` | 从 `.trash` 恢复 |
 | `/sessions export <id> [--format md|json|html] [--out <path>]` | 导出会话，默认写入 `exports/` |
-| `/sessions search <keyword> [--all]` | 跨会话搜索 user/assistant 文本 |
+| `/sessions search <keyword>` | 在当前项目会话中搜索 user/assistant 文本 |
 | `/sessions purge [--older-than 30d]` | 预览并确认清理过期 trash 会话 |
 
 #### 项目记忆系统
@@ -1290,7 +1290,7 @@ q-code 内置跨对话持久化的项目记忆，让 Agent 能在多次对话间
 存储结构：
 
 ```text
-.sessions/projects/<projectKey>/memory/
+~/sessions/<projectKey>/memory/
 ├── MEMORY.md           # 索引文件（自动维护）
 ├── deploy-rules.md     # 主题记忆文件
 └── api-conventions.md  # 主题记忆文件
@@ -1531,7 +1531,7 @@ System Prompt 由 `PromptBuilder` 按管道顺序拼接，每个 Pipe 可根据�
 ## 数据存储结构
 
 ```text
-.sessions/projects/<projectKey>/
+~/sessions/<projectKey>/
 ├── <sessionId>.jsonl          # 会话持久化 (JSONL)
 ├── async-agents/
 │   └── <sessionId>/

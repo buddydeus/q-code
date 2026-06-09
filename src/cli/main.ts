@@ -69,7 +69,6 @@ import {
   deleteSession,
   exportSession,
   getSessionSummary,
-  listAllSessionsFast,
   listProjectSessionsFast,
   purgeSessions,
   renameSession,
@@ -658,6 +657,7 @@ export async function runMain(options: {
     : new SessionStore({
         continueLatest: isContinue,
         sessionId: requestedSessionId,
+        debug: debugMode,
       });
   const activeStoreRef: { current?: SessionStore } = { current: initialStore };
   let sessionId = initialStore?.sessionId ?? requestedSessionId ?? 'dump';
@@ -3334,7 +3334,7 @@ export async function runMain(options: {
       return;
     }
     const nextStore =
-      options.preopenedStore ?? new SessionStore({ cwd: activeStore.cwd, sessionId: targetId });
+      options.preopenedStore ?? new SessionStore({ cwd: activeStore.cwd, sessionId: targetId, debug: debugMode });
     const nextMessages = nextStore.load();
     const usageRecords = nextStore.getUsageRecords();
 
@@ -3416,13 +3416,9 @@ export async function runMain(options: {
     const parsed = parseSessionArgs(input.args);
     const subcommand = parsed.positional[0]?.toLowerCase() ?? 'list';
     if (subcommand === 'list') {
-      const includeAllProjects = parsed.flags.has('all');
-      const sessions = includeAllProjects
-        ? listAllSessionsFast({ cwd: activeStore.cwd })
-        : listProjectSessionsFast({ cwd: activeStore.cwd });
-      const visible = sessions.slice(0, includeAllProjects ? sessions.length : 20);
-      pendingSessionSelection =
-        !includeAllProjects && visible.length > 0 ? { sessions: visible, selectedIndex: 0 } : undefined;
+      const sessions = listProjectSessionsFast({ cwd: activeStore.cwd });
+      const visible = sessions.slice(0, 20);
+      pendingSessionSelection = visible.length > 0 ? { sessions: visible, selectedIndex: 0 } : undefined;
       if (useTui && pendingSessionSelection) {
         emitTerminal({
           type: 'session_picker',
@@ -3433,7 +3429,7 @@ export async function runMain(options: {
         // TUI 下 session_picker 已提供交互式列表；避免再打印一份纯文本表格导致重复展示。
         return;
       }
-      print('\n' + formatSessionsTable(visible, sessionId, { includeProject: includeAllProjects }));
+      print('\n' + formatSessionsTable(visible, sessionId));
       return;
     }
 
@@ -3460,7 +3456,7 @@ export async function runMain(options: {
 
     if (subcommand === 'new') {
       const displayName = parsed.positional.slice(1).join(' ').trim();
-      const nextStore = new SessionStore({ cwd: activeStore.cwd });
+      const nextStore = new SessionStore({ cwd: activeStore.cwd, debug: debugMode });
       if (displayName) nextStore.updateMetadata({ displayName });
       await switchSession(nextStore.sessionId, {
         clearTranscript: true,
@@ -3535,12 +3531,11 @@ export async function runMain(options: {
     if (subcommand === 'search') {
       const keyword = parsed.positional.slice(1).join(' ').trim();
       if (!keyword) {
-        print('\n  [Sessions] 用法: /sessions search <keyword> [--all]');
+        print('\n  [Sessions] 用法: /sessions search <keyword>');
         return;
       }
       const matches = searchSessions(keyword, {
         cwd: activeStore.cwd,
-        allProjects: parsed.flags.has('all'),
         limit: 50,
       });
       print('\n' + formatSessionSearchMatches(matches));
@@ -3635,19 +3630,15 @@ export async function runMain(options: {
   function formatSessionsTable(
     sessions: SessionSummary[],
     currentSessionId: string,
-    options: { includeProject?: boolean } = {},
   ): string {
     if (sessions.length === 0) return 'Sessions\n\n  当前没有可显示的会话。';
-    const headers = options.includeProject
-      ? [' ', '#', 'Session ID', 'Project', 'Name', 'Msgs', 'Tokens', 'Updated']
-      : [' ', '#', 'Session ID', 'Name', 'Msgs', 'Tokens', 'Updated'];
+    const headers = [' ', '#', 'Session ID', 'Name', 'Msgs', 'Tokens', 'Updated'];
     const rows = sessions.map((session, index) => {
       const base = [
         session.sessionId === currentSessionId ? '*' : session.trashed ? 'T' : ' ',
         String(index + 1),
         shortSessionId(session.sessionId),
       ];
-      if (options.includeProject) base.push(session.projectKey);
       base.push(
         session.displayName ?? '(无名)',
         String(session.messageCount),
@@ -3661,9 +3652,7 @@ export async function runMain(options: {
       '',
       renderPlainTable(headers, rows),
       '',
-      options.includeProject
-        ? '  --all 显示跨项目会话；切换请回到对应项目后使用 /sessions switch <id>。'
-        : '  ↑/↓ 选择后 Enter 可切换；也可用 /sessions switch <id>。',
+      '  ↑/↓ 选择后 Enter 可切换；也可用 /sessions switch <id>。',
       '  /sessions new "<name>" · /sessions delete <id> · /sessions export <id> --format md',
     ].join('\n');
   }
@@ -4246,15 +4235,13 @@ export async function runMain(options: {
     const completedCount = getAllAsyncAgents()
       .filter((entry) => entry.status === 'completed')
       .length;
-    if (agents.length === 0) {
-      print('\nSubAgents (0 loaded)');
-      print('  没有找到 SubAgents。可添加到:');
-      print(`  ${getUserAgentsDir()}/<name>.md`);
-      print(`  ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`);
-      return;
-    }
 
     const lines = [`SubAgents (${agents.length} loaded)`, ''];
+    if (agents.length === 0) {
+      lines.push('  没有找到 SubAgents。可添加到:');
+      lines.push(`  ${getUserAgentsDir()}/<name>.md`);
+      lines.push(`  ${getProjectAgentsDir(activeStore.cwd)}/<name>.md`);
+    }
     for (const agent of agents) {
       const traits = [
         agent.source,

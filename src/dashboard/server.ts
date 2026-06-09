@@ -870,7 +870,7 @@ function renderDashboardHtml(): string {
       document.getElementById('generated').textContent = 'generated ' + shortDate(data.generatedAt);
       document.getElementById('metrics').innerHTML = [
         metric('Sessions', data.summary.sessionCount, 'var(--teal)'),
-        metric('Audit events', data.summary.auditEventCount, 'var(--accent)'),
+        metric('Audit events (sampled)', data.summary.auditEventCount, 'var(--accent)'),
         metric('Tasks', data.summary.taskCount, 'var(--line-strong)'),
         metric('Agents', data.summary.agentArtifactCount, 'var(--ok)'),
         metric('Eval runs', data.summary.evalRunCount, 'var(--danger)'),
@@ -991,7 +991,17 @@ function renderDashboardHtml(): string {
 
     async function loadSession(sessionId) {
       const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
+      if (!response.ok) {
+        document.getElementById('detail-title').textContent = sessionId;
+        document.getElementById('detail').innerHTML = '<div class="empty">无法加载会话详情（' + escapeHtml(String(response.status)) + '）。</div>';
+        return;
+      }
       const detail = await response.json();
+      if (!detail || !detail.session) {
+        document.getElementById('detail-title').textContent = sessionId;
+        document.getElementById('detail').innerHTML = '<div class="empty">会话不存在或数据格式无效。</div>';
+        return;
+      }
       document.getElementById('detail-title').textContent = detail.session.displayName || detail.session.sessionId;
       document.getElementById('detail').innerHTML = [
         '<div><h3>Messages</h3><div class="timeline">' + detail.messages.slice(-20).map(renderMessage).join('') + '</div></div>',
